@@ -1,10 +1,10 @@
 import { useState, type FormEvent } from 'react'
 import { Button, Field, Input, Modal, Select, Textarea, Toggle } from '@/components/ui'
 import { useApi, useStore } from '@/store/hooks'
-import type { ExpenseCategory, PaymentMethod, ProductStatus, UserRole, UserStatus } from '@/types'
+import type { ExpenseCategory, PaymentMethod, ProductStatus, UserStatus } from '@/types'
 import { paymentLabel } from '@/components/ProductMark'
 import { BomModal } from '@/features/manufacturing/BomPages'
-import { MANAGED_ROLES } from '@/features/settings/userPermissions'
+import { assignableRoles, isOwnerRole } from '@/features/settings/permissions'
 
 const methods: PaymentMethod[] = ['cash', 'bank_transfer', 'duitnow', 'card', 'ewallet']
 const expenseCats: ExpenseCategory[] = ['Rent', 'Utilities', 'Salary', 'Transport', 'Packaging', 'Marketing', 'Maintenance', 'Office', 'Other']
@@ -216,8 +216,17 @@ function ExpenseModal({ open, onClose }: { open: boolean; onClose: () => void })
 }
 
 function UserModal({ open, onClose }: { open: boolean; onClose: () => void }) {
+  const state = useStore()
   const api = useApi()
-  const [form, setForm] = useState({ name: '', email: '', role: 'staff' as UserRole, status: 'active' as UserStatus })
+  const roles = assignableRoles(state).filter((role) => !isOwnerRole(role))
+  const departments = state.departments.filter((item) => item.status === 'active')
+  const [form, setForm] = useState({
+    name: '',
+    email: '',
+    roleId: roles[0]?.id ?? '',
+    departmentId: departments[0]?.id ?? '',
+    status: 'active' as UserStatus,
+  })
   return (
     <Modal open={open} onClose={onClose} title="Add User">
       <form
@@ -231,9 +240,16 @@ function UserModal({ open, onClose }: { open: boolean; onClose: () => void }) {
         <Field label="Name"><Input required value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} /></Field>
         <Field label="Email"><Input required type="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} /></Field>
         <Field label="Role">
-          <Select value={form.role} onChange={(e) => setForm({ ...form, role: e.target.value as UserRole })}>
-            {MANAGED_ROLES.filter((role) => role.value !== 'owner').map((role) => (
-              <option key={role.value} value={role.value}>{role.label}</option>
+          <Select value={form.roleId} onChange={(e) => setForm({ ...form, roleId: e.target.value })}>
+            {roles.map((role) => (
+              <option key={role.id} value={role.id}>{role.name}</option>
+            ))}
+          </Select>
+        </Field>
+        <Field label="Department">
+          <Select value={form.departmentId} onChange={(e) => setForm({ ...form, departmentId: e.target.value })}>
+            {departments.map((item) => (
+              <option key={item.id} value={item.id}>{item.name}</option>
             ))}
           </Select>
         </Field>

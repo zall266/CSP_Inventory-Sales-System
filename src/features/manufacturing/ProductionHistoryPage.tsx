@@ -4,20 +4,20 @@ import { Button, Card, ConfirmDialog, Field, FilterRow, Input, Modal, PageHeader
 import { movementLabel } from '@/components/ProductMark'
 import { useApi, useLookups, useStore } from '@/store/hooks'
 import { formatDate, formatDateTime, formatQty } from '@/utils/format'
-import { canEditCompleted, currentUser, sessionTotals } from './sessionPlan'
+import { sessionTotals } from './sessionPlan'
+import { hasPermission } from '@/features/settings/permissions'
 
 export function SessionEditDeniedPage() {
   return (
     <div>
-      <PageHeader title="Permission denied" subtitle="Staff and Supervisor cannot edit a completed production session. Ask an Admin or Owner." />
+      <PageHeader title="Permission Denied" subtitle="You do not have permission to edit completed production." />
     </div>
   )
 }
 
 export function ProductionSessionEditPage() {
   const state = useStore()
-  const user = currentUser(state)
-  if (!canEditCompleted(user.role)) return <SessionEditDeniedPage />
+  if (!hasPermission(state, 'manufacturing.completed.edit')) return <SessionEditDeniedPage />
   return <ProductionSessionDetailPage />
 }
 
@@ -89,11 +89,10 @@ export function ProductionSessionDetailPage() {
   const navigate = useNavigate()
   const { product } = useLookups()
   const session = state.productionSessions.find((item) => item.id === id)
-  const user = currentUser(state)
   const location = useLocation()
   const [edit, setEdit] = useState<{ productId: string; field: 'actualQty' | 'productionBalanceQty' | 'wasteQty'; value: number; reason: string } | null>(null)
   const [confirmEdit, setConfirmEdit] = useState(false)
-  const allowEdit = session?.status === 'completed' && canEditCompleted(user.role)
+  const allowEdit = session?.status === 'completed' && hasPermission(state, 'manufacturing.completed.edit')
 
   useEffect(() => {
     if (!session || !allowEdit || !location.pathname.endsWith('/edit')) return
@@ -122,7 +121,7 @@ export function ProductionSessionDetailPage() {
       />
       {denied && (
         <div className="mb-4 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-600">
-          Completed production is locked for {user.role === 'manager' ? 'Supervisor' : 'Staff'}. Only Admin or Owner can edit.
+          Completed production is locked. You need the Edit Completed Production permission.
         </div>
       )}
       <div className="mb-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">

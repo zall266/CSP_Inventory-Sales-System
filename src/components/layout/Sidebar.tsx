@@ -31,7 +31,7 @@ import { useMemo, useState } from 'react'
 import { brand } from '@/brand'
 import { cn } from '@/utils/format'
 import { useApi, useStore } from '@/store/hooks'
-import { actorUser, canManageUsers } from '@/features/settings/userPermissions'
+import { actorUser, canAccessUsersAndRoles } from '@/features/settings/permissions'
 
 type NavItem = { to: string; label: string; icon: typeof LayoutDashboard }
 type NavGroup = { id: string; label: string; items: NavItem[] }
@@ -138,7 +138,7 @@ export function Sidebar() {
   const state = useStore()
   const ui = state.ui
   const collapsed = ui.sidebarCollapsed
-  const canUsers = canManageUsers(actorUser(state).role)
+  const canUsers = canAccessUsersAndRoles(state, actorUser(state))
 
   const initialOpen = useMemo(() => {
     const open: Record<string, boolean> = {}
@@ -219,7 +219,7 @@ export function MobileSidebar() {
   const state = useStore()
   const open = state.ui.mobileNavOpen
   const location = useLocation()
-  const canUsers = canManageUsers(actorUser(state).role)
+  const canUsers = canAccessUsersAndRoles(state, actorUser(state))
   if (!open) return null
   return (
     <div className="fixed inset-0 z-50 lg:hidden">

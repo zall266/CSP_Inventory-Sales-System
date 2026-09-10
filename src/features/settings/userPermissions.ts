@@ -1,58 +1,102 @@
-import type { AppState, User, UserRole } from '@/types'
+import type { AppState, Role, User } from '@/types'
+import {
+  actorUser,
+  hasPermission,
+  isOwnerRole,
+  isOwnerUser,
+  roleById,
+} from './permissions'
 
-export const MANAGED_ROLES: Array<{ value: UserRole; label: string }> = [
-  { value: 'staff', label: 'Staff' },
-  { value: 'manager', label: 'Supervisor' },
-  { value: 'admin', label: 'Admin' },
-  { value: 'owner', label: 'Owner' },
-]
+export { actorUser, hasPermission, isOwnerRole, isOwnerUser }
 
-export function managedRoleLabel(role: UserRole) {
-  if (role === 'manager') return 'Supervisor'
-  if (role === 'owner') return 'Owner'
-  if (role === 'admin') return 'Admin'
-  if (role === 'staff') return 'Staff'
-  if (role === 'warehouse') return 'Warehouse'
-  if (role === 'cashier') return 'Cashier'
-  return role
+export function canManageUsers(state: AppState, user = actorUser(state)) {
+  return (
+    hasPermission(state, 'users.view', user) ||
+    hasPermission(state, 'users.create', user) ||
+    hasPermission(state, 'users.edit', user) ||
+    hasPermission(state, 'roles.view', user)
+  )
 }
 
-export function actorUser(state: AppState): User {
-  return state.users.find((user) => user.id === state.ui.currentUserId) ?? state.users[0]
+export function canCreateUser(state: AppState, user = actorUser(state)) {
+  return hasPermission(state, 'users.create', user)
 }
 
-export function canManageUsers(role: UserRole) {
-  return role === 'admin' || role === 'owner'
+export function canEditUserRecord(state: AppState, user = actorUser(state)) {
+  return hasPermission(state, 'users.edit', user)
 }
 
-export function canEditCompletedProduction(role: UserRole) {
-  return role === 'admin' || role === 'owner'
+export function canChangeRoles(state: AppState, user = actorUser(state)) {
+  return hasPermission(state, 'users.role.change', user)
 }
 
-export function isManagedRole(role: UserRole) {
-  return role === 'staff' || role === 'manager' || role === 'admin' || role === 'owner'
+export function canDeactivateUsers(state: AppState, user = actorUser(state)) {
+  return hasPermission(state, 'users.deactivate', user)
 }
 
-export function canAssignRole(actor: User, role: UserRole) {
-  if (!canManageUsers(actor.role)) return false
-  if (!isManagedRole(role)) return false
-  if (actor.role === 'admin' && role === 'owner') return false
+export function canCreateRole(state: AppState, user = actorUser(state)) {
+  return hasPermission(state, 'roles.create', user)
+}
+
+export function canEditRoleRecord(state: AppState, user = actorUser(state)) {
+  return hasPermission(state, 'roles.edit', user)
+}
+
+export function canDeactivateRoles(state: AppState, user = actorUser(state)) {
+  return hasPermission(state, 'roles.deactivate', user)
+}
+
+export function canManagePermissions(state: AppState, user = actorUser(state)) {
+  return hasPermission(state, 'roles.permissions.manage', user)
+}
+
+export function canAssignRole(state: AppState, actor: User, role: Role | undefined, currentRoleId?: string) {
+  if (!role) return false
+  const mayChoose =
+    hasPermission(state, 'users.role.change', actor) ||
+    hasPermission(state, 'users.create', actor) ||
+    role.id === currentRoleId
+  if (!mayChoose) return false
+  if (isOwnerRole(role) && !isOwnerUser(state, actor)) return false
+  if (isOwnerRole(role) && currentRoleId !== role.id) return false
+  if (role.status !== 'active' && role.id !== currentRoleId) return false
   return true
 }
 
-export function canChangeUserRole(actor: User, target: User, nextRole: UserRole) {
-  if (!canAssignRole(actor, nextRole)) return false
-  if (target.role === 'owner' && actor.role !== 'owner') return false
-  return true
+export function canChangeUserRole(state: AppState, actor: User, target: User, nextRole: Role | undefined) {
+  if (!nextRole) return false
+  if (isOwnerUser(state, target) && !isOwnerUser(state, actor)) return false
+  if (isOwnerUser(state, target) && nextRole.id !== target.roleId) return false
+  if (target.roleId === nextRole.id) return true
+  if (!hasPermission(state, 'users.role.change', actor)) return false
+  return canAssignRole(state, actor, nextRole, target.roleId)
 }
 
-export function canDeactivateUser(actor: User, target: User, users: User[]) {
-  if (!canManageUsers(actor.role)) return false
+export function canDeactivateUser(state: AppState, actor: User, target: User) {
+  if (!hasPermission(state, 'users.deactivate', actor)) return false
   if (target.id === actor.id) return false
-  if (target.role === 'owner' && actor.role !== 'owner') return false
-  if (target.role === 'owner') {
-    const otherOwners = users.filter((user) => user.id !== target.id && user.role === 'owner' && user.status === 'active')
+  if (isOwnerUser(state, target) && !isOwnerUser(state, actor)) return false
+  if (isOwnerUser(state, target)) {
+    const otherOwners = state.users.filter(
+      (user) => user.id !== target.id && user.status === 'active' && isOwnerUser(state, user),
+    )
     if (!otherOwners.length) return false
   }
   return true
+}
+
+export function canRenameRole(state: AppState, actor: User, role: Role) {
+  if (!hasPermission(state, 'roles.edit', actor)) return false
+  if (isOwnerRole(role)) return false
+  return true
+}
+
+export function canDeactivateRole(state: AppState, actor: User, role: Role) {
+  if (!hasPermission(state, 'roles.deactivate', actor)) return false
+  if (isOwnerRole(role)) return false
+  return true
+}
+
+export function roleForUser(state: AppState, user: User) {
+  return roleById(state, user.roleId)
 }
