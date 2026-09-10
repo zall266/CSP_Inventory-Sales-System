@@ -977,12 +977,12 @@ export const db = {
       return null
     }
     const consumptions = bomLinesForQty(bom, input.plannedQty)
-    const sku = product.sku.replace(/[^A-Z0-9]/gi, '').slice(0, 4).toUpperCase() || 'FG'
+    const sku = (product.sku.match(/[A-Za-z]+/)?.[0] ?? 'FG').slice(0, 4).toUpperCase()
     const stamp = '20260910'
     const seq = String(state.productionOrders.length + 1).padStart(3, '0')
     const order = {
       id: uid('po'),
-      orderNo: nextDocNo(state.productionOrders.map((item) => item.orderNo), 'PO-'),
+      orderNo: nextDocNo(state.productionOrders.map((item) => item.orderNo), 'PO-', 4),
       date: nowIso(),
       productId: input.productId,
       bomId: input.bomId,
