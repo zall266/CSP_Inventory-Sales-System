@@ -76,11 +76,10 @@ export const navGroups: NavGroup[] = [
     label: 'MANUFACTURING',
     items: [
       { to: '/manufacturing', label: 'Manufacturing Dashboard', icon: Factory },
-      { to: '/manufacturing/bom', label: 'Bill of Materials', icon: ClipboardList },
-      { to: '/manufacturing/orders', label: 'Production Orders', icon: PackagePlus },
+      { to: '/manufacturing/today', label: "Today's Production", icon: ClipboardList },
+      { to: '/manufacturing/bom', label: 'Bill of Materials', icon: PackagePlus },
       { to: '/manufacturing/planning', label: 'Production Planning', icon: CalendarDays },
-      { to: '/manufacturing/consumption', label: 'Material Consumption', icon: FlaskConical },
-      { to: '/manufacturing/finished-goods', label: 'Finished Goods', icon: Package },
+      { to: '/manufacturing/picking', label: 'Picking List', icon: FlaskConical },
       { to: '/manufacturing/history', label: 'Production History', icon: History },
     ],
   },
@@ -128,6 +127,7 @@ export const navGroups: NavGroup[] = [
 function pathActive(pathname: string, to: string) {
   if (to === '/') return pathname === '/'
   if (to === '/manufacturing') return pathname === '/manufacturing'
+  if (to === '/manufacturing/today') return pathname === '/manufacturing/today' || pathname.startsWith('/manufacturing/today/')
   return pathname === to || pathname.startsWith(`${to}/`)
 }
 

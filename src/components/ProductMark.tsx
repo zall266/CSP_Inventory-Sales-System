@@ -40,9 +40,11 @@ export function movementLabel(type: string) {
     transfer_out: 'Transfer Out',
     opening_stock: 'Opening Stock',
     stock_count: 'Stock Count',
-    production_in: 'Production In',
+    production_in: 'Finished Goods',
     production_out: 'Material Consumption',
-    production_wastage: 'Production Wastage',
+    production_wastage: 'Waste',
+    production_balance_in: 'Production Balance',
+    production_balance_out: 'Production Balance Used',
   }
   return map[type] ?? type
 }

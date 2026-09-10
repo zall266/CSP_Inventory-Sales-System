@@ -186,12 +186,17 @@ export function StatusBadge({ status }: { status: string }) {
     draft: { label: 'Draft', tone: 'slate' },
     completed: { label: 'Completed', tone: 'emerald' },
     planned: { label: 'Planned', tone: 'indigo' },
+    accepted: { label: 'Accepted', tone: 'sky' },
     in_progress: { label: 'In Progress', tone: 'sky' },
     paused: { label: 'Paused', tone: 'amber' },
     cancelled: { label: 'Cancelled', tone: 'slate' },
     shortage: { label: 'Shortage', tone: 'rose' },
     enough: { label: 'Enough', tone: 'emerald' },
     low: { label: 'Low', tone: 'amber' },
+    to_return: { label: 'To Return', tone: 'amber' },
+    picked: { label: 'Picked', tone: 'emerald' },
+    available: { label: 'Available', tone: 'emerald' },
+    consumed: { label: 'Consumed', tone: 'slate' },
   }
   const item = map[status] ?? { label: status, tone: 'slate' as const }
   return <Badge tone={item.tone}>{item.label}</Badge>

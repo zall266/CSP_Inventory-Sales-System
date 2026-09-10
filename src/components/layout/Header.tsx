@@ -10,10 +10,10 @@ import {
   PanelLeftClose,
   PanelLeftOpen,
 } from 'lucide-react'
-import { CURRENT_USER } from '@/data/seed'
 import { useApi, useStore } from '@/store/hooks'
 import { formatDate, initials, PROTOTYPE_TODAY } from '@/utils/format'
 import { Dropdown, MenuItem } from '@/components/ui'
+import { currentUser, roleLabel } from '@/features/manufacturing/sessionPlan'
 
 export function Header() {
   const state = useStore()
@@ -47,8 +47,9 @@ export function Header() {
       const name = state.products.find((p) => p.id === o.productId)?.name ?? ''
       return `${o.orderNo} ${o.batchNo} ${name}`.toLowerCase().includes(q)
     }).slice(0, 5)
+    const sessions = state.productionSessions.filter((s) => s.reference.toLowerCase().includes(q)).slice(0, 5)
     const batches = state.batches.filter((b) => b.batchNo.toLowerCase().includes(q)).slice(0, 5)
-    return { products, sales, purchases, customers, suppliers, production, batches }
+    return { products, sales, purchases, customers, suppliers, production, batches, sessions }
   }, [query, state])
 
   const unread = state.notifications.filter((n) => !n.read).length
@@ -159,13 +160,22 @@ export function Header() {
                 setQuery('')
               }}
             />
+            <SearchGroup
+              label="Daily production"
+              items={results.sessions.map((s) => ({ id: s.id, title: s.reference, meta: s.status }))}
+              onPick={(id) => {
+                navigate(`/manufacturing/today/${id}`)
+                setQuery('')
+              }}
+            />
             {!results.products.length &&
               !results.sales.length &&
               !results.purchases.length &&
               !results.customers.length &&
               !results.suppliers.length &&
               !results.production.length &&
-              !results.batches.length && (
+              !results.batches.length &&
+              !results.sessions.length && (
                 <div className="px-3 py-6 text-center text-sm text-slate-500">No results for “{query}”</div>
               )}
           </div>
@@ -201,6 +211,7 @@ export function Header() {
         <MenuItem onClick={() => navigate('/stock-adjustment')}>Adjust Stock</MenuItem>
         <MenuItem onClick={() => api.openModal('payment')}>Record Payment</MenuItem>
         <MenuItem onClick={() => api.openModal('bom')}>New BOM</MenuItem>
+        <MenuItem onClick={() => navigate('/manufacturing/today')}>Today's Production</MenuItem>
         <MenuItem onClick={() => navigate('/manufacturing/orders/new')}>New Production Order</MenuItem>
       </Dropdown>
 
@@ -254,16 +265,27 @@ export function Header() {
         Preview mode
       </span>
 
-      <button type="button" className="flex items-center gap-2 rounded-xl py-1 pl-1 pr-2 hover:bg-slate-50">
-        <div className="flex h-8 w-8 items-center justify-center rounded-full bg-indigo-600 text-xs font-semibold text-white">
-          {initials(CURRENT_USER.name)}
-        </div>
-        <div className="hidden text-left sm:block">
-          <div className="text-sm font-medium leading-4 text-slate-800">{CURRENT_USER.name}</div>
-          <div className="text-[11px] text-slate-400">{CURRENT_USER.role}</div>
-        </div>
-        <ChevronDown size={14} className="hidden text-slate-400 sm:block" />
-      </button>
+      <Dropdown
+        trigger={
+          <button type="button" className="flex items-center gap-2 rounded-xl py-1 pl-1 pr-2 hover:bg-slate-50">
+            <div className="flex h-8 w-8 items-center justify-center rounded-full bg-indigo-600 text-xs font-semibold text-white">
+              {initials(currentUser(state).name)}
+            </div>
+            <div className="hidden text-left sm:block">
+              <div className="text-sm font-medium leading-4 text-slate-800">{currentUser(state).name}</div>
+              <div className="text-[11px] text-slate-400">{roleLabel(currentUser(state).role)}</div>
+            </div>
+            <ChevronDown size={14} className="hidden text-slate-400 sm:block" />
+          </button>
+        }
+      >
+        <div className="px-3 py-2 text-[10px] font-semibold uppercase tracking-wide text-slate-400">Switch role (prototype)</div>
+        {state.users.filter((u) => u.status === 'active').map((u) => (
+          <MenuItem key={u.id} onClick={() => api.switchUser(u.id)}>
+            {u.name} · {roleLabel(u.role)}
+          </MenuItem>
+        ))}
+      </Dropdown>
     </header>
   )
 }

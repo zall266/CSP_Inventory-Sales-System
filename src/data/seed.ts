@@ -9,8 +9,10 @@ import type {
   Payment,
   PaymentMethod,
   Product,
+  ProductionBalance,
   ProductionConsumption,
   ProductionOrder,
+  ProductionSession,
   Purchase,
   RoleMatrix,
   Sale,
@@ -34,6 +36,7 @@ const defaultRoleMatrix: RoleMatrix = {
     manage_settings: true,
     manage_users: true,
     create_production: true,
+    edit_completed_production: true,
   },
   admin: {
     dashboard: true,
@@ -47,6 +50,7 @@ const defaultRoleMatrix: RoleMatrix = {
     manage_settings: true,
     manage_users: true,
     create_production: true,
+    edit_completed_production: true,
   },
   manager: {
     dashboard: true,
@@ -60,6 +64,7 @@ const defaultRoleMatrix: RoleMatrix = {
     manage_settings: false,
     manage_users: false,
     create_production: true,
+    edit_completed_production: false,
   },
   staff: {
     dashboard: true,
@@ -72,7 +77,8 @@ const defaultRoleMatrix: RoleMatrix = {
     view_reports: true,
     manage_settings: false,
     manage_users: false,
-    create_production: false,
+    create_production: true,
+    edit_completed_production: false,
   },
   cashier: {
     dashboard: false,
@@ -86,6 +92,7 @@ const defaultRoleMatrix: RoleMatrix = {
     manage_settings: false,
     manage_users: false,
     create_production: false,
+    edit_completed_production: false,
   },
   warehouse: {
     dashboard: true,
@@ -99,6 +106,7 @@ const defaultRoleMatrix: RoleMatrix = {
     manage_settings: false,
     manage_users: false,
     create_production: true,
+    edit_completed_production: false,
   },
 }
 
@@ -160,6 +168,11 @@ export function createSeedData(): AppData {
     { id: 'p-flour', name: 'Flour', sku: 'RW-FL001', barcode: '9550001000346', categoryId: 'cat-ing', unit: 'KG', costPrice: 4.2, sellingPrice: 7, wholesalePrice: 6, reorderLevel: 30, trackBatch: false, trackExpiry: false, status: 'active', accent: '#E8D9B8' },
     { id: 'p-other', name: 'Other Ingredients', sku: 'RW-OT001', barcode: '9550001000353', categoryId: 'cat-ing', unit: 'KG', costPrice: 8, sellingPrice: 12, wholesalePrice: 10, reorderLevel: 15, trackBatch: false, trackExpiry: false, status: 'active', accent: '#78716C' },
     { id: 'p-pouch', name: 'Pouch Packaging', sku: 'PK-PH001', barcode: '9550001000360', categoryId: 'cat-pack', unit: 'pcs', costPrice: 0.35, sellingPrice: 0.8, wholesalePrice: 0.55, reorderLevel: 100, trackBatch: false, trackExpiry: false, status: 'active', accent: '#9A3412' },
+    { id: 'p-pack-mt', name: 'Matcha', sku: 'FG-MT45', barcode: '9550001000407', categoryId: 'cat-ing', unit: 'packs', costPrice: 4.2, sellingPrice: 8.5, wholesalePrice: 7, reorderLevel: 30, trackBatch: true, trackExpiry: true, status: 'active', accent: '#3F6B3A' },
+    { id: 'p-pack-cl', name: 'Chocolate Lava', sku: 'FG-CL45', barcode: '9550001000414', categoryId: 'cat-ing', unit: 'packs', costPrice: 3.8, sellingPrice: 8, wholesalePrice: 6.5, reorderLevel: 30, trackBatch: true, trackExpiry: true, status: 'active', accent: '#7C4A1E' },
+    { id: 'p-pack-st', name: 'Strawberry', sku: 'FG-ST45', barcode: '9550001000421', categoryId: 'cat-ing', unit: 'packs', costPrice: 3.9, sellingPrice: 8, wholesalePrice: 6.5, reorderLevel: 30, trackBatch: true, trackExpiry: true, status: 'active', accent: '#C45C6A' },
+    { id: 'p-pack-mlt', name: 'Milk Tea', sku: 'FG-MLT45', barcode: '9550001000438', categoryId: 'cat-ing', unit: 'packs', costPrice: 3.5, sellingPrice: 7.5, wholesalePrice: 6, reorderLevel: 24, trackBatch: true, trackExpiry: true, status: 'active', accent: '#92400E' },
+    { id: 'p-pack-ch', name: 'Chocolate', sku: 'FG-CH45', barcode: '9550001000445', categoryId: 'cat-ing', unit: 'packs', costPrice: 3.6, sellingPrice: 7.8, wholesalePrice: 6.2, reorderLevel: 24, trackBatch: true, trackExpiry: true, status: 'active', accent: '#5C3317' },
   ]
 
   const byId = Object.fromEntries(products.map((p) => [p.id, p])) as Record<string, Product>
@@ -216,6 +229,11 @@ export function createSeedData(): AppData {
     'p-flour': [180, 30, 15],
     'p-other': [48, 10, 5],
     'p-pouch': [520, 80, 40],
+    'p-pack-mt': [40, 12, 8],
+    'p-pack-cl': [36, 10, 6],
+    'p-pack-st': [38, 10, 6],
+    'p-pack-mlt': [28, 8, 4],
+    'p-pack-ch': [32, 8, 4],
   }
 
   const qtyMap = new Map<string, number>()
@@ -713,6 +731,89 @@ export function createSeedData(): AppData {
         bomItem('bi18', 'p-pp', 4, 'bottle', 0, 'Pandan paste'),
       ],
     },
+    {
+      id: 'bom-pack-mt',
+      name: 'Matcha — 45 packs',
+      productId: 'p-pack-mt',
+      outputQty: 45,
+      outputUnit: 'packs',
+      bulkYieldGrams: 3000,
+      status: 'active',
+      notes: 'Daily pack recipe. Yield 3,000g processed Matcha for 45 packs.',
+      items: [
+        bomItem('bi-mt-s', 'p-sugar', 1, 'KG', 0, ''),
+        bomItem('bi-mt-m', 'p-milkpw', 0.5, 'KG', 0, ''),
+        bomItem('bi-mt-r', 'p-matcha-raw', 0.3, 'KG', 0, ''),
+        bomItem('bi-mt-o', 'p-other', 0.1, 'KG', 0, ''),
+        bomItem('bi-mt-p', 'p-pouch', 45, 'pcs', 0, 'Retail pouches'),
+      ],
+    },
+    {
+      id: 'bom-pack-cl',
+      name: 'Chocolate Lava — 45 packs',
+      productId: 'p-pack-cl',
+      outputQty: 45,
+      outputUnit: 'packs',
+      bulkYieldGrams: 2000,
+      status: 'active',
+      notes: 'Daily pack recipe. Yield 2,000g processed Chocolate Lava for 45 packs.',
+      items: [
+        bomItem('bi-cl-s', 'p-sugar', 1.2, 'KG', 0, ''),
+        bomItem('bi-cl-m', 'p-milkpw', 0.5, 'KG', 0, ''),
+        bomItem('bi-cl-c', 'p-cp', 0.4, 'KG', 0, 'Chocolate powder'),
+        bomItem('bi-cl-o', 'p-other', 0.08, 'KG', 0, ''),
+        bomItem('bi-cl-p', 'p-pouch', 45, 'pcs', 0, ''),
+      ],
+    },
+    {
+      id: 'bom-pack-st',
+      name: 'Strawberry — 45 packs',
+      productId: 'p-pack-st',
+      outputQty: 45,
+      outputUnit: 'packs',
+      bulkYieldGrams: 3000,
+      status: 'active',
+      notes: 'Daily pack recipe. Yield 3,000g processed Strawberry for 45 packs.',
+      items: [
+        bomItem('bi-st-s', 'p-sugar', 0.8, 'KG', 0, ''),
+        bomItem('bi-st-m', 'p-milkpw', 0.5, 'KG', 0, ''),
+        bomItem('bi-st-r', 'p-st', 0.35, 'KG', 0, 'Strawberry powder'),
+        bomItem('bi-st-o', 'p-other', 0.08, 'KG', 0, ''),
+        bomItem('bi-st-p', 'p-pouch', 45, 'pcs', 0, ''),
+      ],
+    },
+    {
+      id: 'bom-pack-mlt',
+      name: 'Milk Tea — 45 packs',
+      productId: 'p-pack-mlt',
+      outputQty: 45,
+      outputUnit: 'packs',
+      bulkYieldGrams: 2800,
+      status: 'active',
+      notes: '',
+      items: [
+        bomItem('bi-mlt-s', 'p-sugar', 0.9, 'KG', 0, ''),
+        bomItem('bi-mlt-m', 'p-milkpw', 0.6, 'KG', 0, ''),
+        bomItem('bi-mlt-t', 'p-cf', 0.25, 'KG', 0, 'Tea/coffee base'),
+        bomItem('bi-mlt-p', 'p-pouch', 45, 'pcs', 0, ''),
+      ],
+    },
+    {
+      id: 'bom-pack-ch',
+      name: 'Chocolate — 45 packs',
+      productId: 'p-pack-ch',
+      outputQty: 45,
+      outputUnit: 'packs',
+      bulkYieldGrams: 2500,
+      status: 'active',
+      notes: '',
+      items: [
+        bomItem('bi-ch-s', 'p-sugar', 1, 'KG', 0, ''),
+        bomItem('bi-ch-m', 'p-milkpw', 0.4, 'KG', 0, ''),
+        bomItem('bi-ch-c', 'p-cocoa', 0.35, 'KG', 0, ''),
+        bomItem('bi-ch-p', 'p-pouch', 45, 'pcs', 0, ''),
+      ],
+    },
   ]
 
   const chocConsumptions: ProductionConsumption[] = [
@@ -973,11 +1074,104 @@ export function createSeedData(): AppData {
     { id: uid('exp'), date: iso(9, 3, 12), category: 'Office', description: 'Stationery and printer ink', amount: 140, paymentMethod: 'card', notes: '' },
   ]
 
+  const productionBalances: ProductionBalance[] = [
+    { id: 'pb-mt-1', productId: 'p-pack-mt', quantity: 100, unit: 'g', location: 'Main Warehouse', container: 'Box 1', warehouseId: 'wh-main', productionDate: iso(9, 8, 16), productionReference: 'PROD-20260908-001', status: 'available' },
+    { id: 'pb-st-1', productId: 'p-pack-st', quantity: 867, unit: 'g', location: 'Main Warehouse', container: 'Box 2', warehouseId: 'wh-main', productionDate: iso(9, 8, 16), productionReference: 'PROD-20260908-001', status: 'available' },
+    { id: 'pb-cl-1', productId: 'p-pack-cl', quantity: 200, unit: 'g', location: 'Main Warehouse', container: 'Box 1', warehouseId: 'wh-main', productionDate: iso(9, 9, 16), productionReference: 'PROD-20260909-001', status: 'available' },
+  ]
+
+  const sessionItem = (
+    id: string,
+    sessionId: string,
+    productId: string,
+    bomId: string,
+    target: number,
+  ): ProductionSession['items'][number] => ({
+    id,
+    sessionId,
+    productId,
+    bomId,
+    originalTargetQty: target,
+    targetQty: target,
+    actualQty: 0,
+    shortProductionQty: 0,
+    shortProductionReason: '',
+    productionBalanceQty: 0,
+    balanceLocation: 'Main Warehouse',
+    balanceContainer: '',
+    wasteQty: 0,
+    wasteReason: '',
+    notes: '',
+  })
+
+  const productionSessions: ProductionSession[] = [
+    {
+      id: 'ps-0908',
+      productionDate: '2026-09-08',
+      reference: 'PROD-20260908-001',
+      status: 'completed',
+      warehouseId: 'wh-main',
+      createdBy: 'Hafiz Malik',
+      createdAt: iso(9, 8, 7),
+      acceptedBy: 'Mei Ling',
+      acceptedAt: iso(9, 8, 8),
+      startedBy: 'Mei Ling',
+      startedAt: iso(9, 8, 9),
+      completedBy: 'Mei Ling',
+      completedAt: iso(9, 8, 16),
+      recipePhoto: '',
+      recipePhotoName: 'recipe-sheet-08sep.jpg',
+      uploadedBy: 'Mei Ling',
+      uploadedAt: iso(9, 8, 9),
+      notes: 'Previous day pack run. Balance retained for reuse.',
+      items: [
+        { ...sessionItem('psi-0801', 'ps-0908', 'p-pack-mt', 'bom-pack-mt', 45), actualQty: 44, productionBalanceQty: 100, balanceContainer: 'Box 1', wasteQty: 120, notes: '' },
+        { ...sessionItem('psi-0802', 'ps-0908', 'p-pack-st', 'bom-pack-st', 45), actualQty: 43, productionBalanceQty: 867, balanceContainer: 'Box 2', wasteQty: 80, shortProductionQty: 2, shortProductionReason: 'Packaging Issue' },
+      ],
+      picking: [],
+      excessReturns: [],
+      targetChanges: [],
+      completedEdits: [],
+      posted: true,
+    },
+    {
+      id: 'ps-0910',
+      productionDate: '2026-09-10',
+      reference: 'PROD-20260910-001',
+      status: 'planned',
+      warehouseId: 'wh-main',
+      createdBy: 'Hafiz Malik',
+      createdAt: iso(9, 10, 7),
+      acceptedBy: '',
+      acceptedAt: '',
+      startedBy: '',
+      startedAt: '',
+      completedBy: '',
+      completedAt: '',
+      recipePhoto: '',
+      recipePhotoName: '',
+      uploadedBy: '',
+      uploadedAt: '',
+      notes: 'Daily pack plan — Matcha, Chocolate Lava, Strawberry.',
+      items: [
+        sessionItem('psi-1001', 'ps-0910', 'p-pack-mt', 'bom-pack-mt', 45),
+        sessionItem('psi-1002', 'ps-0910', 'p-pack-cl', 'bom-pack-cl', 45),
+        sessionItem('psi-1003', 'ps-0910', 'p-pack-st', 'bom-pack-st', 45),
+      ],
+      picking: [],
+      excessReturns: [],
+      targetChanges: [],
+      completedEdits: [],
+      posted: false,
+    },
+  ]
+
   const notifications = [
     { id: uid('nt'), type: 'low_stock' as const, title: 'Low stock', body: 'Matcha Powder is below reorder level.', date: iso(9, 10, 8), read: false, href: '/inventory' },
     { id: uid('nt'), type: 'out_of_stock' as const, title: 'Out of stock', body: 'Waffle Premix is out of stock at Main Warehouse.', date: iso(9, 10, 12), read: false, href: '/inventory' },
     { id: uid('nt'), type: 'payment' as const, title: 'Overdue invoice', body: 'Invoice INV-001231 is overdue.', date: iso(9, 9, 9), read: false, href: '/receivables' },
     { id: uid('nt'), type: 'info' as const, title: 'Stock received', body: 'PUR-1012 was received at Main Warehouse.', date: iso(9, 7, 16), read: true, href: '/purchases' },
+    { id: uid('nt'), type: 'production' as const, title: 'Today\'s production ready', body: 'PROD-20260910-001 — Matcha 45, Chocolate Lava 45, Strawberry 45. Accept to begin.', date: iso(9, 10, 7), read: false, href: '/manufacturing/today' },
     { id: uid('nt'), type: 'production' as const, title: 'Material shortage', body: 'PO-1004 Chocolate Powder is short of Milk Powder.', date: iso(9, 10, 8), read: false, href: '/manufacturing/orders' },
     { id: uid('nt'), type: 'production' as const, title: 'Production completed', body: 'PO-1001 posted 98 KG Chocolate Powder (CP-2026-0905-001).', date: iso(9, 5, 16), read: true, href: '/manufacturing/history' },
   ]
@@ -1001,6 +1195,8 @@ export function createSeedData(): AppData {
     notifications,
     boms,
     productionOrders,
+    productionSessions,
+    productionBalances,
     settings: {
       businessName: 'Cool Slurppy',
       phone: '+60 3-2100 4588',
