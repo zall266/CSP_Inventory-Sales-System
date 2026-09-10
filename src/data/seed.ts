@@ -240,7 +240,7 @@ export function createSeedData(): AppData {
     ]
     for (const [warehouseId, qty] of rows) {
       if (qty > 0) {
-        pushMovement(iso(9, 1, 8), 'Opening Stock', product.id, warehouseId, 'opening_stock', qty, 0, 'Kumar Raj')
+        pushMovement(iso(8, 1, 8), 'Opening Stock', product.id, warehouseId, 'opening_stock', qty, 0, 'Kumar Raj')
       } else {
         qtyMap.set(keyOf(product.id, warehouseId), 0)
       }
