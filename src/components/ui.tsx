@@ -185,7 +185,13 @@ export function StatusBadge({ status }: { status: string }) {
     pending: { label: 'Pending', tone: 'amber' },
     draft: { label: 'Draft', tone: 'slate' },
     completed: { label: 'Completed', tone: 'emerald' },
-    overdue: { label: 'Overdue', tone: 'rose' },
+    planned: { label: 'Planned', tone: 'indigo' },
+    in_progress: { label: 'In Progress', tone: 'sky' },
+    paused: { label: 'Paused', tone: 'amber' },
+    cancelled: { label: 'Cancelled', tone: 'slate' },
+    shortage: { label: 'Shortage', tone: 'rose' },
+    enough: { label: 'Enough', tone: 'emerald' },
+    low: { label: 'Low', tone: 'amber' },
   }
   const item = map[status] ?? { label: status, tone: 'slate' as const }
   return <Badge tone={item.tone}>{item.label}</Badge>

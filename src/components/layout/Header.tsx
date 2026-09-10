@@ -43,7 +43,12 @@ export function Header() {
     const purchases = state.purchases.filter((p) => `${p.purchaseNo} ${p.invoiceNumber}`.toLowerCase().includes(q)).slice(0, 5)
     const customers = state.customers.filter((c) => `${c.name} ${c.phone}`.toLowerCase().includes(q)).slice(0, 5)
     const suppliers = state.suppliers.filter((s) => `${s.name} ${s.contact}`.toLowerCase().includes(q)).slice(0, 5)
-    return { products, sales, purchases, customers, suppliers }
+    const production = state.productionOrders.filter((o) => {
+      const name = state.products.find((p) => p.id === o.productId)?.name ?? ''
+      return `${o.orderNo} ${o.batchNo} ${name}`.toLowerCase().includes(q)
+    }).slice(0, 5)
+    const batches = state.batches.filter((b) => b.batchNo.toLowerCase().includes(q)).slice(0, 5)
+    return { products, sales, purchases, customers, suppliers, production, batches }
   }, [query, state])
 
   const unread = state.notifications.filter((n) => !n.read).length
@@ -76,7 +81,7 @@ export function Header() {
           }}
           onFocus={() => setSearchOpen(true)}
           onBlur={() => window.setTimeout(() => setSearchOpen(false), 180)}
-          placeholder="Search products, invoices, customers..."
+          placeholder="Search products, invoices, production, batches..."
           className="h-10 w-full rounded-xl border border-slate-200 bg-slate-50 pl-9 pr-16 text-sm outline-none placeholder:text-slate-400 focus:border-indigo-400 focus:bg-white focus:ring-4 focus:ring-indigo-50"
         />
         <kbd className="pointer-events-none absolute right-2 top-1/2 hidden -translate-y-1/2 rounded-md border border-slate-200 bg-white px-1.5 py-0.5 text-[10px] text-slate-400 sm:block">
@@ -128,11 +133,39 @@ export function Header() {
                 setQuery('')
               }}
             />
+            <SearchGroup
+              label="Production"
+              items={results.production.map((o) => ({
+                id: o.id,
+                title: o.orderNo,
+                meta: o.batchNo || state.products.find((p) => p.id === o.productId)?.name || '',
+              }))}
+              onPick={(id) => {
+                navigate(`/manufacturing/orders/${id}`)
+                api.openDrawer({ type: 'production', id })
+                setQuery('')
+              }}
+            />
+            <SearchGroup
+              label="Batches"
+              items={results.batches.map((b) => ({
+                id: b.id,
+                title: b.batchNo,
+                meta: state.products.find((p) => p.id === b.productId)?.name || '',
+              }))}
+              onPick={(id) => {
+                const batch = state.batches.find((b) => b.id === id)
+                if (batch) api.openDrawer({ type: 'product', id: batch.productId })
+                setQuery('')
+              }}
+            />
             {!results.products.length &&
               !results.sales.length &&
               !results.purchases.length &&
               !results.customers.length &&
-              !results.suppliers.length && (
+              !results.suppliers.length &&
+              !results.production.length &&
+              !results.batches.length && (
                 <div className="px-3 py-6 text-center text-sm text-slate-500">No results for “{query}”</div>
               )}
           </div>
@@ -167,6 +200,8 @@ export function Header() {
         <MenuItem onClick={() => api.openModal('supplier')}>Add Supplier</MenuItem>
         <MenuItem onClick={() => navigate('/stock-adjustment')}>Adjust Stock</MenuItem>
         <MenuItem onClick={() => api.openModal('payment')}>Record Payment</MenuItem>
+        <MenuItem onClick={() => api.openModal('bom')}>New BOM</MenuItem>
+        <MenuItem onClick={() => navigate('/manufacturing/orders/new')}>New Production Order</MenuItem>
       </Dropdown>
 
       <Dropdown

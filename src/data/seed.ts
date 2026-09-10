@@ -1,6 +1,7 @@
 import type {
   AppData,
   Batch,
+  Bom,
   Expense,
   InventoryRow,
   LineItem,
@@ -8,6 +9,8 @@ import type {
   Payment,
   PaymentMethod,
   Product,
+  ProductionConsumption,
+  ProductionOrder,
   Purchase,
   RoleMatrix,
   Sale,
@@ -30,6 +33,7 @@ const defaultRoleMatrix: RoleMatrix = {
     view_reports: true,
     manage_settings: true,
     manage_users: true,
+    create_production: true,
   },
   admin: {
     dashboard: true,
@@ -42,6 +46,7 @@ const defaultRoleMatrix: RoleMatrix = {
     view_reports: true,
     manage_settings: true,
     manage_users: true,
+    create_production: true,
   },
   manager: {
     dashboard: true,
@@ -54,6 +59,7 @@ const defaultRoleMatrix: RoleMatrix = {
     view_reports: true,
     manage_settings: false,
     manage_users: false,
+    create_production: true,
   },
   staff: {
     dashboard: true,
@@ -66,6 +72,7 @@ const defaultRoleMatrix: RoleMatrix = {
     view_reports: true,
     manage_settings: false,
     manage_users: false,
+    create_production: false,
   },
   cashier: {
     dashboard: false,
@@ -78,6 +85,7 @@ const defaultRoleMatrix: RoleMatrix = {
     view_reports: false,
     manage_settings: false,
     manage_users: false,
+    create_production: false,
   },
   warehouse: {
     dashboard: true,
@@ -90,6 +98,7 @@ const defaultRoleMatrix: RoleMatrix = {
     view_reports: false,
     manage_settings: false,
     manage_users: false,
+    create_production: true,
   },
 }
 
@@ -144,6 +153,13 @@ export function createSeedData(): AppData {
     { id: 'p-sw', name: 'Straw', sku: 'SW001', barcode: '9550001000186', categoryId: 'cat-pack', unit: 'pcs', costPrice: 0.04, sellingPrice: 0.1, wholesalePrice: 0.07, reorderLevel: 800, trackBatch: false, trackExpiry: false, status: 'active', accent: '#0EA5E9' },
     { id: 'p-pp', name: 'Pandan Paste', sku: 'PP001', barcode: '9550001000193', categoryId: 'cat-other', unit: 'bottle', costPrice: 6.5, sellingPrice: 12, wholesalePrice: 10, reorderLevel: 8, trackBatch: false, trackExpiry: true, status: 'active', accent: '#166534' },
     { id: 'p-hn', name: 'Honey', sku: 'HN001', barcode: '9550001000209', categoryId: 'cat-other', unit: 'bottle', costPrice: 11, sellingPrice: 18, wholesalePrice: 15, reorderLevel: 8, trackBatch: false, trackExpiry: true, status: 'active', accent: '#D97706' },
+    { id: 'p-cocoa', name: 'Cocoa Powder', sku: 'RW-CC001', barcode: '9550001000308', categoryId: 'cat-ing', unit: 'KG', costPrice: 18, sellingPrice: 28, wholesalePrice: 24, reorderLevel: 25, trackBatch: true, trackExpiry: false, status: 'active', accent: '#4A2C14' },
+    { id: 'p-milkpw', name: 'Milk Powder', sku: 'RW-MK001', barcode: '9550001000315', categoryId: 'cat-ing', unit: 'KG', costPrice: 16, sellingPrice: 24, wholesalePrice: 21, reorderLevel: 20, trackBatch: true, trackExpiry: true, status: 'active', accent: '#E7E0D0' },
+    { id: 'p-sugar', name: 'Sugar', sku: 'RW-SG001', barcode: '9550001000322', categoryId: 'cat-ing', unit: 'KG', costPrice: 3.5, sellingPrice: 6, wholesalePrice: 5, reorderLevel: 40, trackBatch: false, trackExpiry: false, status: 'active', accent: '#C4B59A' },
+    { id: 'p-matcha-raw', name: 'Matcha', sku: 'RW-MT001', barcode: '9550001000339', categoryId: 'cat-ing', unit: 'KG', costPrice: 42, sellingPrice: 62, wholesalePrice: 54, reorderLevel: 10, trackBatch: true, trackExpiry: false, status: 'active', accent: '#2F5D32' },
+    { id: 'p-flour', name: 'Flour', sku: 'RW-FL001', barcode: '9550001000346', categoryId: 'cat-ing', unit: 'KG', costPrice: 4.2, sellingPrice: 7, wholesalePrice: 6, reorderLevel: 30, trackBatch: false, trackExpiry: false, status: 'active', accent: '#E8D9B8' },
+    { id: 'p-other', name: 'Other Ingredients', sku: 'RW-OT001', barcode: '9550001000353', categoryId: 'cat-ing', unit: 'KG', costPrice: 8, sellingPrice: 12, wholesalePrice: 10, reorderLevel: 15, trackBatch: false, trackExpiry: false, status: 'active', accent: '#78716C' },
+    { id: 'p-pouch', name: 'Pouch Packaging', sku: 'PK-PH001', barcode: '9550001000360', categoryId: 'cat-pack', unit: 'pcs', costPrice: 0.35, sellingPrice: 0.8, wholesalePrice: 0.55, reorderLevel: 100, trackBatch: false, trackExpiry: false, status: 'active', accent: '#9A3412' },
   ]
 
   const byId = Object.fromEntries(products.map((p) => [p.id, p])) as Record<string, Product>
@@ -193,6 +209,13 @@ export function createSeedData(): AppData {
     'p-sw': [20000, 5000, 3000],
     'p-pp': [24, 10, 6],
     'p-hn': [20, 8, 6],
+    'p-cocoa': [100, 12, 6],
+    'p-milkpw': [37, 6, 3],
+    'p-sugar': [250, 40, 20],
+    'p-matcha-raw': [28, 6, 3],
+    'p-flour': [180, 30, 15],
+    'p-other': [48, 10, 5],
+    'p-pouch': [520, 80, 40],
   }
 
   const qtyMap = new Map<string, number>()
@@ -577,6 +600,35 @@ export function createSeedData(): AppData {
     ], { method: 'bank_transfer' })
   }
 
+  const consume = (
+    date: string,
+    reference: string,
+    warehouseId: string,
+    lines: Array<[string, number]>,
+    user: string,
+  ) => {
+    for (const [productId, qty] of lines) {
+      pushMovement(date, reference, productId, warehouseId, 'production_out', 0, qty, user, 'Material consumption')
+    }
+  }
+
+  consume(iso(9, 5, 9), 'PO-1001', 'wh-main', [
+    ['p-cocoa', 20.5],
+    ['p-milkpw', 15],
+    ['p-sugar', 50],
+    ['p-other', 15],
+    ['p-pouch', 10],
+  ], 'Kumar Raj')
+  pushMovement(iso(9, 5, 16), 'PO-1001', 'p-cp', 'wh-main', 'production_in', 98, 0, 'Kumar Raj', 'Finished goods')
+
+  consume(iso(9, 8, 9), 'PO-1002', 'wh-main', [
+    ['p-flour', 50],
+    ['p-sugar', 15],
+    ['p-milkpw', 10],
+    ['p-other', 5],
+  ], 'Mei Ling')
+  pushMovement(iso(9, 8, 15), 'PO-1002', 'p-wf', 'wh-main', 'production_in', 80, 0, 'Mei Ling', 'Finished goods')
+
   for (const [key, qty] of qtyMap) {
     const [productId, warehouseId] = key.split(':')
     inventory.push({ productId, warehouseId, qty })
@@ -590,6 +642,286 @@ export function createSeedData(): AppData {
     { id: 'b5', productId: 'p-ib', warehouseId: 'wh-main', batchNo: 'IB-2506', qty: 40 },
     { id: 'b6', productId: 'p-cs', warehouseId: 'wh-shop', batchNo: 'CS-EXP', qty: 16, expiry: '2027-02-01' },
     { id: 'b7', productId: 'p-vs', warehouseId: 'wh-main', batchNo: 'VS-EXP', qty: 24, expiry: '2027-01-15' },
+    { id: 'b-po1001', productId: 'p-cp', warehouseId: 'wh-main', batchNo: 'CP-2026-0905-001', qty: 98, expiry: '2027-03-05', productionDate: iso(9, 5, 16), productionOrderId: 'po-1001' },
+    { id: 'b-po1002', productId: 'p-wf', warehouseId: 'wh-main', batchNo: 'WF-2026-0908-001', qty: 80, productionDate: iso(9, 8, 15), productionOrderId: 'po-1002' },
+  ]
+
+  const bomItem = (id: string, productId: string, qty: number, unit: string, wastagePct = 0, notes = ''): Bom['items'][number] => ({
+    id, productId, qty, unit, wastagePct, notes,
+  })
+
+  const boms: Bom[] = [
+    {
+      id: 'bom-cp',
+      name: 'Chocolate Powder — 100 KG',
+      productId: 'p-cp',
+      outputQty: 100,
+      outputUnit: 'KG',
+      status: 'active',
+      notes: 'Standard blending recipe for chocolate premix.',
+      items: [
+        bomItem('bi1', 'p-cocoa', 20, 'KG', 2, 'Dutch process cocoa'),
+        bomItem('bi2', 'p-milkpw', 15, 'KG', 0, ''),
+        bomItem('bi3', 'p-sugar', 50, 'KG', 0, ''),
+        bomItem('bi4', 'p-other', 15, 'KG', 1, 'Stabiliser and flavour'),
+        bomItem('bi5', 'p-pouch', 10, 'pcs', 0, '1kg pouches'),
+      ],
+    },
+    {
+      id: 'bom-mt',
+      name: 'Matcha Powder — 50 KG',
+      productId: 'p-mt',
+      outputQty: 50,
+      outputUnit: 'KG',
+      status: 'active',
+      notes: 'Ceremonial blend cut with milk powder for cafe use.',
+      items: [
+        bomItem('bi6', 'p-matcha-raw', 18, 'KG', 1, ''),
+        bomItem('bi7', 'p-sugar', 20, 'KG', 0, ''),
+        bomItem('bi8', 'p-milkpw', 10, 'KG', 0, ''),
+        bomItem('bi9', 'p-other', 2, 'KG', 0, ''),
+        bomItem('bi10', 'p-pouch', 5, 'pcs', 0, ''),
+      ],
+    },
+    {
+      id: 'bom-wf',
+      name: 'Waffle Premix — 80 KG',
+      productId: 'p-wf',
+      outputQty: 80,
+      outputUnit: 'KG',
+      status: 'active',
+      notes: '',
+      items: [
+        bomItem('bi11', 'p-flour', 50, 'KG', 1, ''),
+        bomItem('bi12', 'p-sugar', 15, 'KG', 0, ''),
+        bomItem('bi13', 'p-milkpw', 10, 'KG', 0, ''),
+        bomItem('bi14', 'p-other', 5, 'KG', 2, 'Baking powder mix'),
+      ],
+    },
+    {
+      id: 'bom-pw',
+      name: 'Pandan Waffle Premix — 80 KG',
+      productId: 'p-pw',
+      outputQty: 80,
+      outputUnit: 'KG',
+      status: 'active',
+      notes: 'Pandan paste added at blending.',
+      items: [
+        bomItem('bi15', 'p-flour', 48, 'KG', 1, ''),
+        bomItem('bi16', 'p-sugar', 14, 'KG', 0, ''),
+        bomItem('bi17', 'p-other', 14, 'KG', 0, 'Includes milk solids'),
+        bomItem('bi18', 'p-pp', 4, 'bottle', 0, 'Pandan paste'),
+      ],
+    },
+  ]
+
+  const chocConsumptions: ProductionConsumption[] = [
+    { productId: 'p-cocoa', expectedQty: 20.4, actualQty: 20.5, unit: 'KG', notes: '' },
+    { productId: 'p-milkpw', expectedQty: 15, actualQty: 15, unit: 'KG', notes: '' },
+    { productId: 'p-sugar', expectedQty: 50, actualQty: 50, unit: 'KG', notes: '' },
+    { productId: 'p-other', expectedQty: 15.15, actualQty: 15, unit: 'KG', notes: '' },
+    { productId: 'p-pouch', expectedQty: 10, actualQty: 10, unit: 'pcs', notes: '' },
+  ]
+  const waffleConsumptions: ProductionConsumption[] = [
+    { productId: 'p-flour', expectedQty: 50.5, actualQty: 50, unit: 'KG', notes: '' },
+    { productId: 'p-sugar', expectedQty: 15, actualQty: 15, unit: 'KG', notes: '' },
+    { productId: 'p-milkpw', expectedQty: 10, actualQty: 10, unit: 'KG', notes: '' },
+    { productId: 'p-other', expectedQty: 5.1, actualQty: 5, unit: 'KG', notes: '' },
+  ]
+  const matchaConsumptions: ProductionConsumption[] = [
+    { productId: 'p-matcha-raw', expectedQty: 18.18, actualQty: 18.18, unit: 'KG', notes: '' },
+    { productId: 'p-sugar', expectedQty: 20, actualQty: 20, unit: 'KG', notes: '' },
+    { productId: 'p-milkpw', expectedQty: 10, actualQty: 10, unit: 'KG', notes: '' },
+    { productId: 'p-other', expectedQty: 2, actualQty: 2, unit: 'KG', notes: '' },
+    { productId: 'p-pouch', expectedQty: 5, actualQty: 5, unit: 'pcs', notes: '' },
+  ]
+  const plannedChoc: ProductionConsumption[] = [
+    { productId: 'p-cocoa', expectedQty: 20.4, actualQty: 20.4, unit: 'KG', notes: '' },
+    { productId: 'p-milkpw', expectedQty: 15, actualQty: 15, unit: 'KG', notes: '' },
+    { productId: 'p-sugar', expectedQty: 50, actualQty: 50, unit: 'KG', notes: '' },
+    { productId: 'p-other', expectedQty: 15.15, actualQty: 15.15, unit: 'KG', notes: '' },
+    { productId: 'p-pouch', expectedQty: 10, actualQty: 10, unit: 'pcs', notes: '' },
+  ]
+  const plannedPandan: ProductionConsumption[] = [
+    { productId: 'p-flour', expectedQty: 48.48, actualQty: 48.48, unit: 'KG', notes: '' },
+    { productId: 'p-sugar', expectedQty: 14, actualQty: 14, unit: 'KG', notes: '' },
+    { productId: 'p-other', expectedQty: 14, actualQty: 14, unit: 'KG', notes: '' },
+    { productId: 'p-pp', expectedQty: 4, actualQty: 4, unit: 'bottle', notes: '' },
+  ]
+
+  const productionOrders: ProductionOrder[] = [
+    {
+      id: 'po-1001',
+      orderNo: 'PO-1001',
+      date: iso(9, 4, 9),
+      productId: 'p-cp',
+      bomId: 'bom-cp',
+      warehouseId: 'wh-main',
+      plannedQty: 100,
+      actualQty: 98,
+      unit: 'KG',
+      plannedStart: iso(9, 5, 8),
+      plannedEnd: iso(9, 5, 17),
+      actualStart: iso(9, 5, 9),
+      actualEnd: iso(9, 5, 16),
+      status: 'completed',
+      batchNo: 'CP-2026-0905-001',
+      expiryDate: '2027-03-05',
+      operator: 'Kumar Raj',
+      notes: 'Slight yield loss on mill.',
+      consumptions: chocConsumptions,
+      wastage: [{ id: 'w1', kind: 'yield_variance', productId: 'p-cp', qty: 2, unit: 'KG', reason: 'Process loss', notes: 'Dust extraction' }],
+      consumptionConfirmed: true,
+      posted: true,
+      costEstimate: 20.5 * 18 + 15 * 16 + 50 * 3.5 + 15 * 8 + 10 * 0.35,
+    },
+    {
+      id: 'po-1002',
+      orderNo: 'PO-1002',
+      date: iso(9, 7, 10),
+      productId: 'p-wf',
+      bomId: 'bom-wf',
+      warehouseId: 'wh-main',
+      plannedQty: 80,
+      actualQty: 80,
+      unit: 'KG',
+      plannedStart: iso(9, 8, 8),
+      plannedEnd: iso(9, 8, 16),
+      actualStart: iso(9, 8, 9),
+      actualEnd: iso(9, 8, 15),
+      status: 'completed',
+      batchNo: 'WF-2026-0908-001',
+      operator: 'Mei Ling',
+      notes: '',
+      consumptions: waffleConsumptions,
+      wastage: [],
+      consumptionConfirmed: true,
+      posted: true,
+      costEstimate: 50 * 4.2 + 15 * 3.5 + 10 * 16 + 5 * 8,
+    },
+    {
+      id: 'po-1003',
+      orderNo: 'PO-1003',
+      date: iso(9, 9, 11),
+      productId: 'p-mt',
+      bomId: 'bom-mt',
+      warehouseId: 'wh-main',
+      plannedQty: 50,
+      actualQty: 0,
+      unit: 'KG',
+      plannedStart: iso(9, 10, 8),
+      plannedEnd: iso(9, 10, 17),
+      actualStart: iso(9, 10, 9),
+      status: 'in_progress',
+      batchNo: 'MT-2026-0910-001',
+      expiryDate: '2027-03-10',
+      operator: 'Kumar Raj',
+      notes: 'Started this morning. Confirm consumption before completing.',
+      consumptions: matchaConsumptions,
+      wastage: [],
+      consumptionConfirmed: false,
+      posted: false,
+      costEstimate: 18.18 * 42 + 20 * 3.5 + 10 * 16 + 2 * 8 + 5 * 0.35,
+    },
+    {
+      id: 'po-1004',
+      orderNo: 'PO-1004',
+      date: iso(9, 10, 8),
+      productId: 'p-cp',
+      bomId: 'bom-cp',
+      warehouseId: 'wh-main',
+      plannedQty: 100,
+      actualQty: 0,
+      unit: 'KG',
+      plannedStart: iso(9, 11, 8),
+      plannedEnd: iso(9, 11, 17),
+      status: 'planned',
+      batchNo: 'CP-2026-0911-001',
+      expiryDate: '2027-03-11',
+      operator: 'Hafiz Malik',
+      notes: 'Hold — milk powder shortage.',
+      consumptions: plannedChoc,
+      wastage: [],
+      consumptionConfirmed: false,
+      posted: false,
+      costEstimate: 20.4 * 18 + 15 * 16 + 50 * 3.5 + 15.15 * 8 + 10 * 0.35,
+    },
+    {
+      id: 'po-1005',
+      orderNo: 'PO-1005',
+      date: iso(9, 10, 9),
+      productId: 'p-pw',
+      bomId: 'bom-pw',
+      warehouseId: 'wh-main',
+      plannedQty: 80,
+      actualQty: 0,
+      unit: 'KG',
+      plannedStart: iso(9, 12, 8),
+      plannedEnd: iso(9, 12, 16),
+      status: 'draft',
+      batchNo: 'PW-2026-0912-001',
+      operator: 'Mei Ling',
+      notes: '',
+      consumptions: plannedPandan,
+      wastage: [],
+      consumptionConfirmed: false,
+      posted: false,
+      costEstimate: 48.48 * 4.2 + 14 * 3.5 + 14 * 8 + 4 * 6.5,
+    },
+    {
+      id: 'po-1006',
+      orderNo: 'PO-1006',
+      date: iso(9, 3, 14),
+      productId: 'p-wf',
+      bomId: 'bom-wf',
+      warehouseId: 'wh-shop',
+      plannedQty: 40,
+      actualQty: 0,
+      unit: 'KG',
+      plannedStart: iso(9, 4, 8),
+      plannedEnd: iso(9, 4, 15),
+      status: 'cancelled',
+      batchNo: '',
+      operator: 'Hafiz Malik',
+      notes: 'Moved to Main Warehouse run PO-1002.',
+      consumptions: [
+        { productId: 'p-flour', expectedQty: 25.25, actualQty: 25.25, unit: 'KG', notes: '' },
+        { productId: 'p-sugar', expectedQty: 7.5, actualQty: 7.5, unit: 'KG', notes: '' },
+        { productId: 'p-milkpw', expectedQty: 5, actualQty: 5, unit: 'KG', notes: '' },
+        { productId: 'p-other', expectedQty: 2.55, actualQty: 2.55, unit: 'KG', notes: '' },
+      ],
+      wastage: [],
+      consumptionConfirmed: false,
+      posted: false,
+      costEstimate: 0,
+    },
+    {
+      id: 'po-1007',
+      orderNo: 'PO-1007',
+      date: iso(9, 10, 10),
+      productId: 'p-wf',
+      bomId: 'bom-wf',
+      warehouseId: 'wh-main',
+      plannedQty: 40,
+      actualQty: 0,
+      unit: 'KG',
+      plannedStart: iso(9, 10, 13),
+      plannedEnd: iso(9, 10, 18),
+      status: 'planned',
+      batchNo: 'WF-2026-0910-002',
+      operator: 'Kumar Raj',
+      notes: 'Afternoon top-up batch.',
+      consumptions: [
+        { productId: 'p-flour', expectedQty: 25.25, actualQty: 25.25, unit: 'KG', notes: '' },
+        { productId: 'p-sugar', expectedQty: 7.5, actualQty: 7.5, unit: 'KG', notes: '' },
+        { productId: 'p-milkpw', expectedQty: 5, actualQty: 5, unit: 'KG', notes: '' },
+        { productId: 'p-other', expectedQty: 2.55, actualQty: 2.55, unit: 'KG', notes: '' },
+      ],
+      wastage: [],
+      consumptionConfirmed: false,
+      posted: false,
+      costEstimate: 25.25 * 4.2 + 7.5 * 3.5 + 5 * 16 + 2.55 * 8,
+    },
   ]
 
   const payments: Payment[] = []
@@ -646,6 +978,8 @@ export function createSeedData(): AppData {
     { id: uid('nt'), type: 'out_of_stock' as const, title: 'Out of stock', body: 'Waffle Premix is out of stock at Main Warehouse.', date: iso(9, 10, 12), read: false, href: '/inventory' },
     { id: uid('nt'), type: 'payment' as const, title: 'Overdue invoice', body: 'Invoice INV-001231 is overdue.', date: iso(9, 9, 9), read: false, href: '/receivables' },
     { id: uid('nt'), type: 'info' as const, title: 'Stock received', body: 'PUR-1012 was received at Main Warehouse.', date: iso(9, 7, 16), read: true, href: '/purchases' },
+    { id: uid('nt'), type: 'production' as const, title: 'Material shortage', body: 'PO-1004 Chocolate Powder is short of Milk Powder.', date: iso(9, 10, 8), read: false, href: '/manufacturing/orders' },
+    { id: uid('nt'), type: 'production' as const, title: 'Production completed', body: 'PO-1001 posted 98 KG Chocolate Powder (CP-2026-0905-001).', date: iso(9, 5, 16), read: true, href: '/manufacturing/history' },
   ]
 
   return {
@@ -665,6 +999,8 @@ export function createSeedData(): AppData {
     expenses,
     users,
     notifications,
+    boms,
+    productionOrders,
     settings: {
       businessName: 'Cool Slurppy',
       phone: '+60 3-2100 4588',

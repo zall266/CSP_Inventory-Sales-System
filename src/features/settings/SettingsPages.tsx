@@ -10,6 +10,7 @@ const permissionLabels: Record<PermissionKey, string> = {
   create_sale: 'Create sale',
   void_sale: 'Void sale',
   create_purchase: 'Create purchase',
+  create_production: 'Create production',
   adjust_stock: 'Adjust stock',
   transfer_stock: 'Transfer stock',
   view_reports: 'View reports',

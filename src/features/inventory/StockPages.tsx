@@ -30,7 +30,7 @@ export function StockMovementsPage() {
         <Input placeholder="Search product or reference" value={query} onChange={(e) => setQuery(e.target.value)} />
         <Select value={type} onChange={(e) => setType(e.target.value)}>
           <option value="all">All movement types</option>
-          {['purchase','sale','sales_return','purchase_return','adjustment','transfer_in','transfer_out','opening_stock','stock_count'].map((t) => (
+          {['purchase','sale','sales_return','purchase_return','adjustment','transfer_in','transfer_out','opening_stock','stock_count','production_in','production_out','production_wastage'].map((t) => (
             <option key={t} value={t}>{movementLabel(t)}</option>
           ))}
         </Select>

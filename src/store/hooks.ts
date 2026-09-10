@@ -120,4 +120,14 @@ export function filteredExpenses(state: AppState) {
   return state.expenses.filter((expense) => inRange(expense.date, from, to))
 }
 
+export function filteredProductionOrders(state: AppState) {
+  const { from, to } = dateRangeFromState(state)
+  const warehouse = state.ui.warehouseFilter
+  return state.productionOrders.filter((order) => {
+    if (!inRange(order.date, from, to)) return false
+    if (warehouse !== 'all' && order.warehouseId !== warehouse) return false
+    return true
+  })
+}
+
 export { inRange }

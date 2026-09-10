@@ -1,8 +1,10 @@
 import { createSeedData, CURRENT_USER } from '@/data/seed'
+import { bomLinesForQty, consumptionCost, hasShortage, materialAvailability } from '@/features/manufacturing/helpers'
 import type {
   AppData,
   AppState,
   AdjustmentType,
+  BomInput,
   DrawerState,
   Expense,
   ExpenseCategory,
@@ -11,6 +13,8 @@ import type {
   MovementType,
   PaymentMethod,
   ProductInput,
+  ProductionInput,
+  ProductionWastage,
   PurchaseInput,
   PurchaseStatus,
   QuickModal,
@@ -20,10 +24,11 @@ import type {
   StockStatus,
   ToastTone,
   UiState,
+  WastageKind,
 } from '@/types'
 import { nextDocNo, PROTOTYPE_TODAY, round2, stockStatus, uid } from '@/utils/format'
 
-const STORAGE_KEY = 'stockflow-prototype-v3'
+const STORAGE_KEY = 'stockflow-prototype-v4'
 
 const defaultUi = (): UiState => ({
   toasts: [],
@@ -895,6 +900,380 @@ export const db = {
     setData({ expenses: [expense, ...state.expenses] })
     toast('Expense added', input.description)
     return expense
+  },
+
+  createBom(input: BomInput) {
+    if (!input.productId || !input.items.length) {
+      toast('Add components', 'A BOM needs a finished product and at least one material.', 'warning')
+      return null
+    }
+    const product = productById(input.productId)
+    const bom = {
+      id: uid('bom'),
+      name: input.name || `${product?.name ?? 'Product'} BOM`,
+      productId: input.productId,
+      outputQty: input.outputQty,
+      outputUnit: input.outputUnit || product?.unit || 'KG',
+      status: 'active' as const,
+      notes: input.notes,
+      items: input.items.filter((item) => item.qty > 0).map((item) => ({
+        id: uid('bi'),
+        productId: item.productId,
+        qty: item.qty,
+        unit: item.unit,
+        wastagePct: item.wastagePct,
+        notes: item.notes,
+      })),
+    }
+    setData({ boms: [bom, ...state.boms] })
+    toast('BOM created', bom.name)
+    return bom
+  },
+
+  updateBom(id: string, input: BomInput) {
+    const existing = state.boms.find((bom) => bom.id === id)
+    if (!existing) return
+    setData({
+      boms: state.boms.map((bom) =>
+        bom.id === id
+          ? {
+              ...bom,
+              name: input.name,
+              productId: input.productId,
+              outputQty: input.outputQty,
+              outputUnit: input.outputUnit,
+              notes: input.notes,
+              items: input.items.filter((item) => item.qty > 0).map((item) => ({
+                id: uid('bi'),
+                productId: item.productId,
+                qty: item.qty,
+                unit: item.unit,
+                wastagePct: item.wastagePct,
+                notes: item.notes,
+              })),
+            }
+          : bom,
+      ),
+    })
+    toast('BOM updated')
+  },
+
+  setBomStatus(id: string, status: 'active' | 'inactive') {
+    setData({
+      boms: state.boms.map((bom) => (bom.id === id ? { ...bom, status } : bom)),
+    })
+    toast(status === 'inactive' ? 'BOM deactivated' : 'BOM activated')
+  },
+
+  createProductionOrder(input: ProductionInput) {
+    const bom = state.boms.find((item) => item.id === input.bomId)
+    const product = productById(input.productId)
+    if (!bom || !product) {
+      toast('Select product and BOM', undefined, 'warning')
+      return null
+    }
+    if (input.plannedQty <= 0) {
+      toast('Enter a planned quantity', undefined, 'warning')
+      return null
+    }
+    const consumptions = bomLinesForQty(bom, input.plannedQty)
+    const sku = product.sku.replace(/[^A-Z0-9]/gi, '').slice(0, 4).toUpperCase() || 'FG'
+    const stamp = '20260910'
+    const seq = String(state.productionOrders.length + 1).padStart(3, '0')
+    const order = {
+      id: uid('po'),
+      orderNo: nextDocNo(state.productionOrders.map((item) => item.orderNo), 'PO-'),
+      date: nowIso(),
+      productId: input.productId,
+      bomId: input.bomId,
+      warehouseId: input.warehouseId,
+      plannedQty: input.plannedQty,
+      actualQty: 0,
+      unit: product.unit,
+      plannedStart: input.plannedStart,
+      plannedEnd: input.plannedEnd,
+      status: input.status ?? 'planned',
+      batchNo: `${sku}-2026-${stamp.slice(4)}-${seq}`,
+      expiryDate: '2027-03-10',
+      operator: input.operator || CURRENT_USER.name,
+      notes: input.notes,
+      consumptions,
+      wastage: [],
+      consumptionConfirmed: false,
+      posted: false,
+      costEstimate: consumptionCost(state, consumptions),
+    }
+    setData({ productionOrders: [order, ...state.productionOrders] })
+    toast('Production order created', order.orderNo)
+    return order
+  },
+
+  updateProductionOrder(id: string, patch: Partial<ProductionInput> & { plannedQty?: number; bomId?: string }) {
+    const order = state.productionOrders.find((item) => item.id === id)
+    if (!order || order.posted || order.status === 'completed' || order.status === 'cancelled') {
+      toast('This order can no longer be edited', undefined, 'warning')
+      return
+    }
+    const bomId = patch.bomId ?? order.bomId
+    const plannedQty = patch.plannedQty ?? order.plannedQty
+    const bom = state.boms.find((item) => item.id === bomId)
+    const consumptions = bom ? bomLinesForQty(bom, plannedQty) : order.consumptions
+    setData({
+      productionOrders: state.productionOrders.map((item) =>
+        item.id === id
+          ? {
+              ...item,
+              productId: patch.productId ?? item.productId,
+              bomId,
+              warehouseId: patch.warehouseId ?? item.warehouseId,
+              plannedQty,
+              plannedStart: patch.plannedStart ?? item.plannedStart,
+              plannedEnd: patch.plannedEnd ?? item.plannedEnd,
+              operator: patch.operator ?? item.operator,
+              notes: patch.notes ?? item.notes,
+              unit: productById(patch.productId ?? item.productId)?.unit ?? item.unit,
+              consumptions,
+              consumptionConfirmed: false,
+              costEstimate: consumptionCost(state, consumptions),
+            }
+          : item,
+      ),
+    })
+    toast('Production order updated')
+  },
+
+  startProduction(id: string, options?: { ignoreShortage?: boolean }) {
+    const order = state.productionOrders.find((item) => item.id === id)
+    if (!order || order.posted) return false
+    if (order.status === 'cancelled' || order.status === 'completed') return false
+    const rows = materialAvailability(state, order.warehouseId, order.consumptions)
+    if (hasShortage(rows) && !options?.ignoreShortage) {
+      toast('Material shortage', 'Resolve shortages or create a purchase request before starting.', 'danger')
+      return false
+    }
+    if (hasShortage(rows) && options?.ignoreShortage) {
+      toast('Started with shortage', 'Prototype allowed start despite missing materials.', 'warning')
+    }
+    setData({
+      productionOrders: state.productionOrders.map((item) =>
+        item.id === id
+          ? { ...item, status: 'in_progress' as const, actualStart: item.actualStart ?? nowIso() }
+          : item,
+      ),
+    })
+    toast('Production started', order.orderNo)
+    return true
+  },
+
+  pauseProduction(id: string) {
+    const order = state.productionOrders.find((item) => item.id === id)
+    if (!order || order.status !== 'in_progress') {
+      toast('Only in-progress orders can be paused', undefined, 'info')
+      return
+    }
+    setData({
+      productionOrders: state.productionOrders.map((item) => (item.id === id ? { ...item, status: 'paused' as const } : item)),
+    })
+    toast('Production paused', order.orderNo, 'info')
+  },
+
+  resumeProduction(id: string) {
+    const order = state.productionOrders.find((item) => item.id === id)
+    if (!order || order.status !== 'paused') return
+    setData({
+      productionOrders: state.productionOrders.map((item) => (item.id === id ? { ...item, status: 'in_progress' as const } : item)),
+    })
+    toast('Production resumed', order.orderNo)
+  },
+
+  cancelProduction(id: string) {
+    const order = state.productionOrders.find((item) => item.id === id)
+    if (!order || order.posted || order.status === 'completed') {
+      toast('Completed orders cannot be cancelled', undefined, 'warning')
+      return
+    }
+    setData({
+      productionOrders: state.productionOrders.map((item) => (item.id === id ? { ...item, status: 'cancelled' as const } : item)),
+    })
+    toast('Production cancelled', order.orderNo, 'warning')
+  },
+
+  updateConsumption(id: string, lines: Array<{ productId: string; actualQty: number; notes?: string }>) {
+    const order = state.productionOrders.find((item) => item.id === id)
+    if (!order || order.posted) return
+    const consumptions = order.consumptions.map((line) => {
+      const next = lines.find((item) => item.productId === line.productId)
+      return next ? { ...line, actualQty: next.actualQty, notes: next.notes ?? line.notes } : line
+    })
+    setData({
+      productionOrders: state.productionOrders.map((item) =>
+        item.id === id
+          ? { ...item, consumptions, consumptionConfirmed: false, costEstimate: consumptionCost(state, consumptions) }
+          : item,
+      ),
+    })
+  },
+
+  addConsumptionLine(id: string, productId: string, qty: number) {
+    const order = state.productionOrders.find((item) => item.id === id)
+    const product = productById(productId)
+    if (!order || !product || order.posted) return
+    if (order.consumptions.some((line) => line.productId === productId)) {
+      toast('Material already on this order', undefined, 'info')
+      return
+    }
+    const consumptions = [
+      ...order.consumptions,
+      { productId, expectedQty: 0, actualQty: qty, unit: product.unit, notes: 'Extra material' },
+    ]
+    setData({
+      productionOrders: state.productionOrders.map((item) =>
+        item.id === id ? { ...item, consumptions, consumptionConfirmed: false, costEstimate: consumptionCost(state, consumptions) } : item,
+      ),
+    })
+    toast('Extra material added', product.name)
+  },
+
+  confirmConsumption(id: string) {
+    const order = state.productionOrders.find((item) => item.id === id)
+    if (!order || order.posted) return
+    setData({
+      productionOrders: state.productionOrders.map((item) => (item.id === id ? { ...item, consumptionConfirmed: true } : item)),
+    })
+    toast('Consumption confirmed', order.orderNo)
+  },
+
+  recordWastage(id: string, input: { kind: WastageKind; productId?: string; qty: number; unit: string; reason: string; notes: string }) {
+    const order = state.productionOrders.find((item) => item.id === id)
+    if (!order || order.status === 'cancelled') return
+    if (input.qty <= 0) {
+      toast('Enter a wastage quantity', undefined, 'warning')
+      return
+    }
+    const row: ProductionWastage = { id: uid('wst'), ...input }
+    setData({
+      productionOrders: state.productionOrders.map((item) => (item.id === id ? { ...item, wastage: [...item.wastage, row] } : item)),
+    })
+    toast('Wastage recorded')
+  },
+
+  completeProduction(id: string, input: { actualQty: number; batchNo: string; expiryDate?: string }) {
+    const order = state.productionOrders.find((item) => item.id === id)
+    if (!order) return false
+    if (order.posted || order.status === 'completed') {
+      toast('Already posted', undefined, 'info')
+      return false
+    }
+    if (order.status !== 'in_progress' && order.status !== 'paused') {
+      toast('Start production first', undefined, 'warning')
+      return false
+    }
+    if (input.actualQty <= 0) {
+      toast('Enter actual quantity', undefined, 'warning')
+      return false
+    }
+    if (!state.settings.allowNegativeStock) {
+      for (const line of order.consumptions) {
+        const available = getQty(line.productId, order.warehouseId)
+        if (line.actualQty > available) {
+          const product = productById(line.productId)
+          toast('Insufficient material', `${product?.name ?? 'Item'} has ${available} ${line.unit}.`, 'danger')
+          return false
+        }
+      }
+    }
+    const date = nowIso()
+    let inventory = state.inventory
+    let movements = state.stockMovements
+    for (const line of order.consumptions) {
+      if (line.actualQty <= 0) continue
+      const applied = addMovement(movements, inventory, {
+        date,
+        reference: order.orderNo,
+        productId: line.productId,
+        warehouseId: order.warehouseId,
+        type: 'production_out',
+        stockIn: 0,
+        stockOut: line.actualQty,
+        notes: 'Material consumption',
+      })
+      inventory = applied.inventory
+      movements = applied.movements
+    }
+    const fgIn = addMovement(movements, inventory, {
+      date,
+      reference: order.orderNo,
+      productId: order.productId,
+      warehouseId: order.warehouseId,
+      type: 'production_in',
+      stockIn: input.actualQty,
+      stockOut: 0,
+      notes: 'Finished goods',
+    })
+    inventory = fgIn.inventory
+    movements = fgIn.movements
+    const yieldLoss = round2(Math.max(0, order.plannedQty - input.actualQty))
+    const batchNo = input.batchNo || order.batchNo
+    const batches = [
+      {
+        id: uid('bch'),
+        productId: order.productId,
+        warehouseId: order.warehouseId,
+        batchNo,
+        qty: input.actualQty,
+        expiry: input.expiryDate,
+        productionDate: date,
+        productionOrderId: order.id,
+      },
+      ...state.batches,
+    ]
+    const wastage = yieldLoss > 0 && !order.wastage.some((row) => row.kind === 'yield_variance')
+      ? [...order.wastage, { id: uid('wst'), kind: 'yield_variance' as const, productId: order.productId, qty: yieldLoss, unit: order.unit, reason: 'Yield variance', notes: '' }]
+      : order.wastage
+    setData({
+      inventory,
+      stockMovements: movements,
+      batches,
+      productionOrders: state.productionOrders.map((item) =>
+        item.id === id
+          ? {
+              ...item,
+              status: 'completed' as const,
+              posted: true,
+              consumptionConfirmed: true,
+              actualQty: input.actualQty,
+              actualEnd: date,
+              batchNo,
+              expiryDate: input.expiryDate,
+              wastage,
+              costEstimate: consumptionCost(state, item.consumptions),
+            }
+          : item,
+      ),
+    })
+    notify('production', 'Production completed', `${order.orderNo} posted ${input.actualQty} ${order.unit} (${batchNo}).`, '/manufacturing/history')
+    for (const line of order.consumptions) {
+      const qty = inventory.find((row) => row.productId === line.productId && row.warehouseId === order.warehouseId)?.qty ?? 0
+      maybeStockAlerts(line.productId, order.warehouseId, qty)
+    }
+    emit()
+    toast('Production completed', `${order.orderNo} · ${batchNo}`)
+    return true
+  },
+
+  createPurchaseRequest(orderId: string) {
+    const order = state.productionOrders.find((item) => item.id === orderId)
+    if (!order) return
+    const rows = materialAvailability(state, order.warehouseId, order.consumptions).filter((row) => row.shortage > 0)
+    if (!rows.length) {
+      toast('No shortages', 'All materials are available.', 'info')
+      return
+    }
+    const names = rows
+      .map((row) => `${productById(row.productId)?.name ?? 'Material'} ${row.shortage} ${row.unit}`)
+      .join(', ')
+    notify('production', 'Purchase request (preview)', `PRQ created for ${order.orderNo}: ${names}`, '/purchases/new')
+    toast('Purchase request created', 'Preview only — not sent to Purchases yet.', 'info')
   },
 }
 

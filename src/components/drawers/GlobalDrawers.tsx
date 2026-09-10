@@ -4,6 +4,8 @@ import { Drawer, StatusBadge, Tabs, Button, Badge } from '@/components/ui'
 import { ProductMark, movementLabel, paymentLabel } from '@/components/ProductMark'
 import { useApi, useLookups, useStore, customerOutstanding, customerSalesTotal, supplierOutstanding, supplierPurchaseTotal } from '@/store/hooks'
 import { formatDate, formatMoney, formatQty } from '@/utils/format'
+import { BomDetail } from '@/features/manufacturing/BomPages'
+import { ProductionOrderDetail } from '@/features/manufacturing/ProductionOrdersPage'
 
 export function GlobalDrawers() {
   const drawer = useStore().ui.drawer
@@ -16,11 +18,14 @@ export function GlobalDrawers() {
   if (drawer.type === 'customer') return <CustomerDrawer id={drawer.id} onClose={close} />
   if (drawer.type === 'supplier') return <SupplierDrawer id={drawer.id} onClose={close} />
   if (drawer.type === 'movement') return <MovementDrawer id={drawer.id} onClose={close} />
+  if (drawer.type === 'bom') return <BomDrawer id={drawer.id} onClose={close} />
+  if (drawer.type === 'production') return <ProductionDrawer id={drawer.id} onClose={close} />
   return null
 }
 
 function ProductDrawer({ id, onClose }: { id: string; onClose: () => void }) {
   const { state, categoryName, warehouseName, product } = useLookups()
+  const api = useApi()
   const item = product(id)
   const [tab, setTab] = useState('overview')
   if (!item) return null
@@ -34,6 +39,7 @@ function ProductDrawer({ id, onClose }: { id: string; onClose: () => void }) {
   const sales = state.sales.filter((s) => s.items.some((line) => line.productId === id))
   const purchases = state.purchases.filter((p) => p.items.some((line) => line.productId === id))
   const batches = state.batches.filter((b) => b.productId === id)
+  const productions = state.productionOrders.filter((o) => o.productId === id)
 
   return (
     <Drawer open onClose={onClose} width="max-w-2xl" title={item.name} subtitle={`${item.sku} · ${item.barcode}`}>
@@ -57,6 +63,7 @@ function ProductDrawer({ id, onClose }: { id: string; onClose: () => void }) {
             { id: 'overview', label: 'Overview' },
             { id: 'card', label: 'Stock Card' },
             { id: 'batches', label: 'Batches' },
+            { id: 'production', label: 'Production' },
             { id: 'sales', label: 'Sales' },
             { id: 'purchases', label: 'Purchases' },
           ]}
@@ -126,6 +133,7 @@ function ProductDrawer({ id, onClose }: { id: string; onClose: () => void }) {
                     <th>Batch</th>
                     <th>Warehouse</th>
                     <th>Qty</th>
+                    <th>Production date</th>
                     <th>Expiry</th>
                   </tr>
                 </thead>
@@ -135,6 +143,7 @@ function ProductDrawer({ id, onClose }: { id: string; onClose: () => void }) {
                       <td>{batch.batchNo}</td>
                       <td>{warehouseName(batch.warehouseId)}</td>
                       <td>{formatQty(batch.qty)}</td>
+                      <td>{batch.productionDate ? formatDate(batch.productionDate) : '—'}</td>
                       <td>{batch.expiry ? formatDate(batch.expiry) : '—'}</td>
                     </tr>
                   ))}
@@ -143,6 +152,36 @@ function ProductDrawer({ id, onClose }: { id: string; onClose: () => void }) {
             </div>
           ) : (
             <div className="text-sm text-slate-500">No batch records for this product in the prototype data.</div>
+          )
+        )}
+        {tab === 'production' && (
+          productions.length ? (
+            <div className="sf-table-wrap rounded-xl border border-slate-100">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Order</th>
+                    <th>Date</th>
+                    <th>Qty</th>
+                    <th>Batch</th>
+                    <th>Status</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {productions.map((order) => (
+                    <tr key={order.id} onClick={() => api.openDrawer({ type: 'production', id: order.id })}>
+                      <td className="font-medium text-indigo-700">{order.orderNo}</td>
+                      <td>{formatDate(order.date)}</td>
+                      <td className="tabular">{formatQty(order.actualQty || order.plannedQty)} {order.unit}</td>
+                      <td>{order.batchNo || '—'}</td>
+                      <td><StatusBadge status={order.status} /></td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : (
+            <div className="text-sm text-slate-500">No production orders for this product.</div>
           )
         )}
         {tab === 'sales' && <DocList rows={sales.map((s) => ({ id: s.id, no: s.invoiceNo, date: s.date, total: s.total, status: s.status }))} />}
@@ -443,6 +482,28 @@ function MovementDrawer({ id, onClose }: { id: string; onClose: () => void }) {
         <Row label="User" value={movement.user} />
         {movement.notes && <div className="rounded-xl bg-slate-50 p-3 text-slate-600">{movement.notes}</div>}
       </div>
+    </Drawer>
+  )
+}
+
+function BomDrawer({ id, onClose }: { id: string; onClose: () => void }) {
+  const state = useStore()
+  const bom = state.boms.find((item) => item.id === id)
+  if (!bom) return null
+  return (
+    <Drawer open onClose={onClose} width="max-w-2xl" title={bom.name} subtitle="Bill of materials">
+      <BomDetail id={id} />
+    </Drawer>
+  )
+}
+
+function ProductionDrawer({ id, onClose }: { id: string; onClose: () => void }) {
+  const state = useStore()
+  const order = state.productionOrders.find((item) => item.id === id)
+  if (!order) return null
+  return (
+    <Drawer open onClose={onClose} width="max-w-2xl" title={order.orderNo} subtitle="Production order">
+      <ProductionOrderDetail id={id} />
     </Drawer>
   )
 }
