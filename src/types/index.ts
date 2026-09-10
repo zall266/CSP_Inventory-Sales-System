@@ -15,6 +15,11 @@ export type MovementType =
   | 'transfer_out'
   | 'opening_stock'
   | 'stock_count'
+  | 'production_in'
+  | 'production_out'
+  | 'production_wastage'
+export type ProductionStatus = 'draft' | 'planned' | 'in_progress' | 'paused' | 'completed' | 'cancelled'
+export type WastageKind = 'material' | 'process_loss' | 'damaged_fg' | 'yield_variance'
 export type UserRole = 'owner' | 'admin' | 'manager' | 'staff' | 'cashier' | 'warehouse'
 export type UserStatus = 'active' | 'inactive'
 export type ExpenseCategory =
@@ -72,6 +77,8 @@ export type Batch = {
   batchNo: string
   qty: number
   expiry?: string
+  productionDate?: string
+  productionOrderId?: string
 }
 
 export type Customer = {
@@ -199,6 +206,70 @@ export type Expense = {
   notes: string
 }
 
+export type BomItem = {
+  id: string
+  productId: string
+  qty: number
+  unit: string
+  wastagePct: number
+  notes: string
+}
+
+export type Bom = {
+  id: string
+  name: string
+  productId: string
+  outputQty: number
+  outputUnit: string
+  status: 'active' | 'inactive'
+  notes: string
+  items: BomItem[]
+}
+
+export type ProductionConsumption = {
+  productId: string
+  expectedQty: number
+  actualQty: number
+  unit: string
+  notes: string
+}
+
+export type ProductionWastage = {
+  id: string
+  kind: WastageKind
+  productId?: string
+  qty: number
+  unit: string
+  reason: string
+  notes: string
+}
+
+export type ProductionOrder = {
+  id: string
+  orderNo: string
+  date: string
+  productId: string
+  bomId: string
+  warehouseId: string
+  plannedQty: number
+  actualQty: number
+  unit: string
+  plannedStart: string
+  plannedEnd: string
+  actualStart?: string
+  actualEnd?: string
+  status: ProductionStatus
+  batchNo: string
+  expiryDate?: string
+  operator: string
+  notes: string
+  consumptions: ProductionConsumption[]
+  wastage: ProductionWastage[]
+  consumptionConfirmed: boolean
+  posted: boolean
+  costEstimate: number
+}
+
 export type User = {
   id: string
   name: string
@@ -210,7 +281,7 @@ export type User = {
 
 export type AppNotification = {
   id: string
-  type: 'low_stock' | 'out_of_stock' | 'payment' | 'info'
+  type: 'low_stock' | 'out_of_stock' | 'payment' | 'info' | 'production'
   title: string
   body: string
   date: string
@@ -229,6 +300,7 @@ export type PermissionKey =
   | 'view_reports'
   | 'manage_settings'
   | 'manage_users'
+  | 'create_production'
 
 export type RoleMatrix = Record<UserRole, Record<PermissionKey, boolean>>
 
@@ -264,6 +336,8 @@ export type DrawerState =
   | { type: 'customer'; id: string }
   | { type: 'supplier'; id: string }
   | { type: 'movement'; id: string }
+  | { type: 'bom'; id: string }
+  | { type: 'production'; id: string }
   | null
 
 export type QuickModal =
@@ -273,6 +347,8 @@ export type QuickModal =
   | 'expense'
   | 'user'
   | 'payment'
+  | 'bom'
+  | 'production-order'
   | null
 
 export type UiState = {
@@ -305,6 +381,8 @@ export type AppData = {
   users: User[]
   notifications: AppNotification[]
   settings: Settings
+  boms: Bom[]
+  productionOrders: ProductionOrder[]
 }
 
 export type AppState = AppData & {
@@ -337,6 +415,27 @@ export type SaleInput = {
   paidAmount?: number
   notes?: string
   date?: string
+}
+
+export type BomInput = {
+  name: string
+  productId: string
+  outputQty: number
+  outputUnit: string
+  notes: string
+  items: Array<{ productId: string; qty: number; unit: string; wastagePct: number; notes: string }>
+}
+
+export type ProductionInput = {
+  productId: string
+  bomId: string
+  warehouseId: string
+  plannedQty: number
+  plannedStart: string
+  plannedEnd: string
+  operator: string
+  notes: string
+  status?: 'draft' | 'planned'
 }
 
 export type PurchaseInput = {

@@ -12,6 +12,14 @@ import { PurchaseReturnsPage, SalesReturnsPage } from '@/features/returns/Return
 import { ExpensesPage, PayablesPage, PaymentsPage, ReceivablesPage } from '@/features/finance/FinancePages'
 import { InventoryReportPage, ProfitReportPage, PurchaseReportPage, SalesReportPage } from '@/features/reports/ReportsPages'
 import { BusinessSettingsPage, InventorySettingsPage, SalesSettingsPage, UsersSettingsPage } from '@/features/settings/SettingsPages'
+import { ManufacturingDashboardPage } from '@/features/manufacturing/ManufacturingDashboardPage'
+import { BomListPage } from '@/features/manufacturing/BomPages'
+import { NewProductionOrderPage, ProductionOrderDetailPage, ProductionOrdersPage } from '@/features/manufacturing/ProductionOrdersPage'
+import { ProductionPlanningPage } from '@/features/manufacturing/ProductionPlanningPage'
+import { MaterialConsumptionPage } from '@/features/manufacturing/MaterialConsumptionPage'
+import { FinishedGoodsPage } from '@/features/manufacturing/FinishedGoodsPage'
+import { ProductionHistoryPage } from '@/features/manufacturing/ProductionHistoryPage'
+import { ManufacturingReportPage } from '@/features/manufacturing/ManufacturingReportsPages'
 
 export default function App() {
   return (
@@ -34,10 +42,20 @@ export default function App() {
           <Route path="/stock-count" element={<StockCountPage />} />
           <Route path="/products" element={<ProductsPage />} />
           <Route path="/categories" element={<CategoriesPage />} />
+          <Route path="/manufacturing" element={<ManufacturingDashboardPage />} />
+          <Route path="/manufacturing/bom" element={<BomListPage />} />
+          <Route path="/manufacturing/orders" element={<ProductionOrdersPage />} />
+          <Route path="/manufacturing/orders/new" element={<NewProductionOrderPage />} />
+          <Route path="/manufacturing/orders/:id" element={<ProductionOrderDetailPage />} />
+          <Route path="/manufacturing/planning" element={<ProductionPlanningPage />} />
+          <Route path="/manufacturing/consumption" element={<MaterialConsumptionPage />} />
+          <Route path="/manufacturing/finished-goods" element={<FinishedGoodsPage />} />
+          <Route path="/manufacturing/history" element={<ProductionHistoryPage />} />
           <Route path="/reports/sales" element={<SalesReportPage />} />
           <Route path="/reports/purchases" element={<PurchaseReportPage />} />
           <Route path="/reports/inventory" element={<InventoryReportPage />} />
           <Route path="/reports/profit" element={<ProfitReportPage />} />
+          <Route path="/reports/manufacturing" element={<ManufacturingReportPage />} />
           <Route path="/payments" element={<PaymentsPage />} />
           <Route path="/receivables" element={<ReceivablesPage />} />
           <Route path="/payables" element={<PayablesPage />} />

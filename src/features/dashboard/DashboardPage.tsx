@@ -118,6 +118,15 @@ export function DashboardPage() {
       amount: p.amount,
       onClick: () => {},
     })),
+    ...state.productionOrders.slice(0, 4).map((o) => ({
+      id: o.id,
+      type: 'Production',
+      ref: o.orderNo,
+      party: product(o.productId)?.name ?? o.batchNo,
+      date: o.date,
+      amount: o.costEstimate,
+      onClick: () => api.openDrawer({ type: 'production', id: o.id }),
+    })),
     ...state.stockMovements
       .filter((m) => m.type === 'adjustment' || m.type === 'stock_count')
       .slice(0, 3)
@@ -287,7 +296,7 @@ export function DashboardPage() {
       <Card className="mt-4">
         <div className="flex items-center justify-between px-5 py-4">
           <div className="text-sm font-semibold text-slate-900">Recent transactions</div>
-          <div className="text-xs text-slate-400">Sales · Purchases · Payments · Adjustments</div>
+          <div className="text-xs text-slate-400">Sales · Purchases · Production · Payments</div>
         </div>
         <div className="sf-table-wrap">
           <table>

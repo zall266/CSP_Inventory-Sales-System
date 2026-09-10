@@ -3,6 +3,7 @@ import { Button, Field, Input, Modal, Select, Textarea, Toggle } from '@/compone
 import { useApi, useStore } from '@/store/hooks'
 import type { ExpenseCategory, PaymentMethod, ProductStatus, UserRole } from '@/types'
 import { paymentLabel } from '@/components/ProductMark'
+import { BomModal } from '@/features/manufacturing/BomPages'
 
 const methods: PaymentMethod[] = ['cash', 'bank_transfer', 'duitnow', 'card', 'ewallet']
 const expenseCats: ExpenseCategory[] = ['Rent', 'Utilities', 'Salary', 'Transport', 'Packaging', 'Marketing', 'Maintenance', 'Office', 'Other']
@@ -20,6 +21,7 @@ export function GlobalModals() {
       <ExpenseModal open={modal === 'expense'} onClose={close} />
       <UserModal open={modal === 'user'} onClose={close} />
       <PaymentModal open={modal === 'payment'} onClose={close} />
+      <BomModal open={modal === 'bom'} onClose={close} />
     </>
   )
 }

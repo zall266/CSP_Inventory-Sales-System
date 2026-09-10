@@ -6,7 +6,10 @@ import {
   Boxes,
   ClipboardList,
   CreditCard,
+  Factory,
   FileText,
+  FlaskConical,
+  History,
   LayoutDashboard,
   Package,
   PackageMinus,
@@ -21,6 +24,7 @@ import {
   Users,
   Wallet,
   Warehouse,
+  CalendarDays,
   ChevronDown,
 } from 'lucide-react'
 import { useMemo, useState } from 'react'
@@ -68,6 +72,19 @@ export const navGroups: NavGroup[] = [
     ],
   },
   {
+    id: 'manufacturing',
+    label: 'MANUFACTURING',
+    items: [
+      { to: '/manufacturing', label: 'Manufacturing Dashboard', icon: Factory },
+      { to: '/manufacturing/bom', label: 'Bill of Materials', icon: ClipboardList },
+      { to: '/manufacturing/orders', label: 'Production Orders', icon: PackagePlus },
+      { to: '/manufacturing/planning', label: 'Production Planning', icon: CalendarDays },
+      { to: '/manufacturing/consumption', label: 'Material Consumption', icon: FlaskConical },
+      { to: '/manufacturing/finished-goods', label: 'Finished Goods', icon: Package },
+      { to: '/manufacturing/history', label: 'Production History', icon: History },
+    ],
+  },
+  {
     id: 'products',
     label: 'PRODUCTS',
     items: [
@@ -83,6 +100,7 @@ export const navGroups: NavGroup[] = [
       { to: '/reports/purchases', label: 'Purchase Reports', icon: FileText },
       { to: '/reports/inventory', label: 'Inventory Reports', icon: Boxes },
       { to: '/reports/profit', label: 'Profit Reports', icon: Wallet },
+      { to: '/reports/manufacturing', label: 'Manufacturing Reports', icon: Factory },
     ],
   },
   {
@@ -109,6 +127,7 @@ export const navGroups: NavGroup[] = [
 
 function pathActive(pathname: string, to: string) {
   if (to === '/') return pathname === '/'
+  if (to === '/manufacturing') return pathname === '/manufacturing'
   return pathname === to || pathname.startsWith(`${to}/`)
 }
 
