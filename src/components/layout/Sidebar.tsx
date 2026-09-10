@@ -31,6 +31,7 @@ import { useMemo, useState } from 'react'
 import { brand } from '@/brand'
 import { cn } from '@/utils/format'
 import { useApi, useStore } from '@/store/hooks'
+import { actorUser, canManageUsers } from '@/features/settings/userPermissions'
 
 type NavItem = { to: string; label: string; icon: typeof LayoutDashboard }
 type NavGroup = { id: string; label: string; items: NavItem[] }
@@ -134,8 +135,10 @@ function pathActive(pathname: string, to: string) {
 export function Sidebar() {
   const location = useLocation()
   const api = useApi()
-  const ui = useStore().ui
+  const state = useStore()
+  const ui = state.ui
   const collapsed = ui.sidebarCollapsed
+  const canUsers = canManageUsers(actorUser(state).role)
 
   const initialOpen = useMemo(() => {
     const open: Record<string, boolean> = {}
@@ -181,7 +184,9 @@ export function Sidebar() {
                 </button>
               )}
               {isOpen &&
-                group.items.map((item) => {
+                group.items
+                  .filter((item) => item.to !== '/settings/users' || canUsers)
+                  .map((item) => {
                   const Icon = item.icon
                   const active = pathActive(location.pathname, item.to)
                   return (
@@ -211,8 +216,10 @@ export function Sidebar() {
 
 export function MobileSidebar() {
   const api = useApi()
-  const open = useStore().ui.mobileNavOpen
+  const state = useStore()
+  const open = state.ui.mobileNavOpen
   const location = useLocation()
+  const canUsers = canManageUsers(actorUser(state).role)
   if (!open) return null
   return (
     <div className="fixed inset-0 z-50 lg:hidden">
@@ -230,7 +237,9 @@ export function MobileSidebar() {
         {navGroups.map((group) => (
           <div key={group.id} className="mb-3">
             <div className="px-2 py-1 text-[10px] font-semibold tracking-[0.14em] text-slate-400">{group.label}</div>
-            {group.items.map((item) => {
+            {group.items
+              .filter((item) => item.to !== '/settings/users' || canUsers)
+              .map((item) => {
               const Icon = item.icon
               const active = pathActive(location.pathname, item.to)
               return (

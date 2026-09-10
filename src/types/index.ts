@@ -397,6 +397,22 @@ export type User = {
   role: UserRole
   status: UserStatus
   lastLogin: string
+  createdAt: string
+  updatedAt: string
+}
+
+export type UserAuditAction = 'user_created' | 'user_updated' | 'role_changed' | 'user_deactivated' | 'user_reactivated'
+
+export type UserAuditLog = {
+  id: string
+  action: UserAuditAction
+  userId: string
+  userName: string
+  field: string
+  oldValue: string
+  newValue: string
+  changedBy: string
+  changedAt: string
 }
 
 export type AppNotification = {
@@ -502,6 +518,7 @@ export type AppData = {
   payments: Payment[]
   expenses: Expense[]
   users: User[]
+  userAuditLogs: UserAuditLog[]
   notifications: AppNotification[]
   settings: Settings
   boms: Bom[]

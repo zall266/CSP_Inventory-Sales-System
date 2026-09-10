@@ -1,13 +1,13 @@
 import { useState, type FormEvent } from 'react'
 import { Button, Field, Input, Modal, Select, Textarea, Toggle } from '@/components/ui'
 import { useApi, useStore } from '@/store/hooks'
-import type { ExpenseCategory, PaymentMethod, ProductStatus, UserRole } from '@/types'
+import type { ExpenseCategory, PaymentMethod, ProductStatus, UserRole, UserStatus } from '@/types'
 import { paymentLabel } from '@/components/ProductMark'
 import { BomModal } from '@/features/manufacturing/BomPages'
+import { MANAGED_ROLES } from '@/features/settings/userPermissions'
 
 const methods: PaymentMethod[] = ['cash', 'bank_transfer', 'duitnow', 'card', 'ewallet']
 const expenseCats: ExpenseCategory[] = ['Rent', 'Utilities', 'Salary', 'Transport', 'Packaging', 'Marketing', 'Maintenance', 'Office', 'Other']
-const roles: UserRole[] = ['owner', 'admin', 'manager', 'staff', 'cashier', 'warehouse']
 
 export function GlobalModals() {
   const modal = useStore().ui.quickModal
@@ -217,27 +217,35 @@ function ExpenseModal({ open, onClose }: { open: boolean; onClose: () => void })
 
 function UserModal({ open, onClose }: { open: boolean; onClose: () => void }) {
   const api = useApi()
-  const [form, setForm] = useState({ name: '', email: '', role: 'staff' as UserRole })
+  const [form, setForm] = useState({ name: '', email: '', role: 'staff' as UserRole, status: 'active' as UserStatus })
   return (
-    <Modal open={open} onClose={onClose} title="Create user">
+    <Modal open={open} onClose={onClose} title="Add User">
       <form
         className="space-y-4"
         onSubmit={(event) => {
           event.preventDefault()
-          api.createUser(form)
-          onClose()
+          const created = api.createUser(form)
+          if (created) onClose()
         }}
       >
         <Field label="Name"><Input required value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} /></Field>
         <Field label="Email"><Input required type="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} /></Field>
         <Field label="Role">
           <Select value={form.role} onChange={(e) => setForm({ ...form, role: e.target.value as UserRole })}>
-            {roles.map((role) => <option key={role} value={role}>{role}</option>)}
+            {MANAGED_ROLES.filter((role) => role.value !== 'owner').map((role) => (
+              <option key={role.value} value={role.value}>{role.label}</option>
+            ))}
+          </Select>
+        </Field>
+        <Field label="Status">
+          <Select value={form.status} onChange={(e) => setForm({ ...form, status: e.target.value as UserStatus })}>
+            <option value="active">Active</option>
+            <option value="inactive">Inactive</option>
           </Select>
         </Field>
         <div className="flex justify-end gap-2">
           <Button type="button" variant="secondary" onClick={onClose}>Cancel</Button>
-          <Button type="submit">Create user</Button>
+          <Button type="submit">Add User</Button>
         </div>
       </form>
     </Modal>

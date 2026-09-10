@@ -17,6 +17,7 @@ import type {
   RoleMatrix,
   Sale,
   StockMovement,
+  UserAuditLog,
 } from '@/types'
 import { PROTOTYPE_TODAY, round2, uid } from '@/utils/format'
 
@@ -193,13 +194,14 @@ export function createSeedData(): AppData {
   ]
 
   const users = [
-    { id: 'u-aina', name: 'Aina Rahman', email: 'aina@coolslurppy.my', role: 'owner' as const, status: 'active' as const, lastLogin: iso(9, 10, 8) },
-    { id: 'u-admin', name: 'Admin', email: 'admin@coolslurppy.my', role: 'admin' as const, status: 'active' as const, lastLogin: iso(9, 10, 9) },
-    { id: 'u-hafiz', name: 'Hafiz Malik', email: 'hafiz@coolslurppy.my', role: 'manager' as const, status: 'active' as const, lastLogin: iso(9, 9, 18) },
-    { id: 'u-siti', name: 'Siti Nurhaliza', email: 'siti@coolslurppy.my', role: 'cashier' as const, status: 'active' as const, lastLogin: iso(9, 10, 11) },
-    { id: 'u-kumar', name: 'Kumar Raj', email: 'kumar@coolslurppy.my', role: 'warehouse' as const, status: 'active' as const, lastLogin: iso(9, 8, 16) },
-    { id: 'u-mei', name: 'Mei Ling', email: 'mei@coolslurppy.my', role: 'staff' as const, status: 'active' as const, lastLogin: iso(9, 7, 14) },
+    { id: 'u-aina', name: 'Aina Rahman', email: 'aina@coolslurppy.my', role: 'owner' as const, status: 'active' as const, lastLogin: iso(9, 10, 8), createdAt: iso(8, 1, 9), updatedAt: iso(9, 10, 8) },
+    { id: 'u-admin', name: 'Admin', email: 'admin@coolslurppy.my', role: 'admin' as const, status: 'active' as const, lastLogin: iso(9, 10, 9), createdAt: iso(8, 1, 9), updatedAt: iso(9, 10, 9) },
+    { id: 'u-hafiz', name: 'Hafiz Malik', email: 'hafiz@coolslurppy.my', role: 'manager' as const, status: 'active' as const, lastLogin: iso(9, 9, 18), createdAt: iso(8, 15, 9), updatedAt: iso(9, 9, 18) },
+    { id: 'u-siti', name: 'Siti Nurhaliza', email: 'siti@coolslurppy.my', role: 'cashier' as const, status: 'active' as const, lastLogin: iso(9, 10, 11), createdAt: iso(8, 20, 9), updatedAt: iso(9, 10, 11) },
+    { id: 'u-kumar', name: 'Kumar Raj', email: 'kumar@coolslurppy.my', role: 'warehouse' as const, status: 'active' as const, lastLogin: iso(9, 8, 16), createdAt: iso(8, 20, 9), updatedAt: iso(9, 8, 16) },
+    { id: 'u-mei', name: 'Mei Ling', email: 'mei@coolslurppy.my', role: 'staff' as const, status: 'active' as const, lastLogin: iso(9, 7, 14), createdAt: iso(8, 22, 9), updatedAt: iso(9, 7, 14) },
   ]
+  const userAuditLogs: UserAuditLog[] = []
 
   const opening: Record<string, [number, number, number]> = {
     'p-cp': [400, 90, 48],
@@ -1192,6 +1194,7 @@ export function createSeedData(): AppData {
     payments,
     expenses,
     users,
+    userAuditLogs,
     notifications,
     boms,
     productionOrders,

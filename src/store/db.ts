@@ -1,6 +1,7 @@
 import { createSeedData, CURRENT_USER } from '@/data/seed'
 import { bomLinesForQty, consumptionCost, hasShortage, materialAvailability } from '@/features/manufacturing/helpers'
 import { buildSessionPlan, canEditCompleted, canEditSession, currentUser, mergePicking } from '@/features/manufacturing/sessionPlan'
+import { canAssignRole, canChangeUserRole, canDeactivateUser, canManageUsers, isManagedRole } from '@/features/settings/userPermissions'
 import type {
   AppData,
   AppState,
@@ -25,11 +26,15 @@ import type {
   StockStatus,
   ToastTone,
   UiState,
+  User,
+  UserAuditLog,
+  UserRole,
+  UserStatus,
   WastageKind,
 } from '@/types'
 import { nextDocNo, PROTOTYPE_TODAY, round2, stockStatus, uid } from '@/utils/format'
 
-const STORAGE_KEY = 'stockflow-prototype-v5'
+const STORAGE_KEY = 'stockflow-prototype-v6'
 
 const defaultUi = (): UiState => ({
   toasts: [],
@@ -236,6 +241,10 @@ export const db = {
   switchUser(currentUserId: string) {
     const user = state.users.find((item) => item.id === currentUserId)
     if (!user) return
+    if (user.status !== 'active') {
+      toast('User is inactive', 'Inactive users cannot be used in the prototype switcher.', 'warning')
+      return
+    }
     setUi({ currentUserId })
     toast('Viewing as ' + user.name, user.role === 'manager' ? 'Supervisor' : user.role, 'info')
   },
@@ -336,18 +345,115 @@ export const db = {
     return supplier
   },
 
-  createUser(input: { name: string; email: string; role: AppState['users'][number]['role'] }) {
-    const user = {
-      id: uid('usr'),
-      name: input.name,
-      email: input.email,
-      role: input.role,
-      status: 'active' as const,
-      lastLogin: 'Never',
+  createUser(input: { name: string; email: string; role: UserRole; status?: UserStatus }) {
+    const actor = currentUser(state)
+    if (!canManageUsers(actor.role)) {
+      toast('Permission denied', 'Only Admin or Owner can add users.', 'danger')
+      return null
     }
-    setData({ users: [user, ...state.users] })
-    toast('User created', input.name)
+    const name = input.name.trim()
+    const email = input.email.trim().toLowerCase()
+    if (!name || !email) {
+      toast('Name and email are required', undefined, 'warning')
+      return null
+    }
+    if (!isManagedRole(input.role) || !canAssignRole(actor, input.role)) {
+      toast('Permission denied', 'You cannot assign that role.', 'danger')
+      return null
+    }
+    if (state.users.some((item) => item.email.trim().toLowerCase() === email)) {
+      toast('Email already in use', email, 'warning')
+      return null
+    }
+    const stamp = nowIso()
+    const user: User = {
+      id: uid('usr'),
+      name,
+      email,
+      role: input.role,
+      status: input.status ?? 'active',
+      lastLogin: 'Never',
+      createdAt: stamp,
+      updatedAt: stamp,
+    }
+    const log: UserAuditLog = {
+      id: uid('ual'),
+      action: 'user_created',
+      userId: user.id,
+      userName: user.name,
+      field: 'user',
+      oldValue: '',
+      newValue: `${user.name} · ${user.role} · ${user.status}`,
+      changedBy: actor.name,
+      changedAt: stamp,
+    }
+    setData({ users: [user, ...state.users], userAuditLogs: [log, ...(state.userAuditLogs ?? [])] })
+    toast('User created', user.name)
     return user
+  },
+
+  updateUser(id: string, patch: { name?: string; email?: string; role?: UserRole; status?: UserStatus }) {
+    const actor = currentUser(state)
+    const target = state.users.find((item) => item.id === id)
+    if (!target) return false
+    if (!canManageUsers(actor.role)) {
+      toast('Permission denied', 'Only Admin or Owner can edit users.', 'danger')
+      return false
+    }
+    const nextName = patch.name?.trim() ?? target.name
+    const nextEmail = (patch.email ?? target.email).trim().toLowerCase()
+    const nextRole = patch.role ?? target.role
+    const nextStatus = patch.status ?? target.status
+    if (!nextName || !nextEmail) {
+      toast('Name and email are required', undefined, 'warning')
+      return false
+    }
+    if (state.users.some((item) => item.id !== id && item.email.trim().toLowerCase() === nextEmail)) {
+      toast('Email already in use', nextEmail, 'warning')
+      return false
+    }
+    if (nextRole !== target.role && !canChangeUserRole(actor, target, nextRole)) {
+      toast('Permission denied', 'You cannot change that user\'s role.', 'danger')
+      return false
+    }
+    if (nextStatus !== target.status && nextStatus === 'inactive' && !canDeactivateUser(actor, target, state.users)) {
+      toast('Permission denied', 'You cannot deactivate this user.', 'danger')
+      return false
+    }
+    if (nextStatus === 'inactive' && target.role === 'owner' && actor.role !== 'owner') {
+      toast('Permission denied', 'Admin cannot deactivate Owner.', 'danger')
+      return false
+    }
+    const stamp = nowIso()
+    const logs: UserAuditLog[] = []
+    const push = (action: UserAuditLog['action'], field: string, oldValue: string, newValue: string) => {
+      logs.push({
+        id: uid('ual'),
+        action,
+        userId: target.id,
+        userName: nextName,
+        field,
+        oldValue,
+        newValue,
+        changedBy: actor.name,
+        changedAt: stamp,
+      })
+    }
+    if (nextRole !== target.role) push('role_changed', 'role', target.role, nextRole)
+    if (nextStatus !== target.status) push(nextStatus === 'inactive' ? 'user_deactivated' : 'user_reactivated', 'status', target.status, nextStatus)
+    if (nextName !== target.name) push('user_updated', 'name', target.name, nextName)
+    if (nextEmail !== target.email) push('user_updated', 'email', target.email, nextEmail)
+    if (!logs.length) return true
+    setData({
+      users: state.users.map((item) =>
+        item.id === id
+          ? { ...item, name: nextName, email: nextEmail, role: nextRole, status: nextStatus, updatedAt: stamp }
+          : item,
+      ),
+      userAuditLogs: [...logs, ...(state.userAuditLogs ?? [])],
+    })
+    toast('User updated', nextName)
+    return true
   },
 
   updateSettings(patch: Partial<Settings>) {
@@ -355,6 +461,11 @@ export const db = {
   },
 
   updateRoleMatrix(matrix: Settings['roleMatrix']) {
+    const actor = currentUser(state)
+    if (!canManageUsers(actor.role)) {
+      toast('Permission denied', 'Only Admin or Owner can change the permission matrix.', 'danger')
+      return
+    }
     setData({ settings: { ...state.settings, roleMatrix: matrix } })
   },
 
