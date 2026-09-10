@@ -267,7 +267,7 @@ export function Header() {
 
       <Dropdown
         trigger={
-          <button type="button" className="flex items-center gap-2 rounded-xl py-1 pl-1 pr-2 hover:bg-slate-50">
+          <button type="button" aria-label="Switch prototype role" className="flex items-center gap-2 rounded-xl py-1 pl-1 pr-2 hover:bg-slate-50">
             <div className="flex h-8 w-8 items-center justify-center rounded-full bg-indigo-600 text-xs font-semibold text-white">
               {initials(currentUser(state).name)}
             </div>

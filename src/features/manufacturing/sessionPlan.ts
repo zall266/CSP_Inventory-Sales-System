@@ -253,6 +253,7 @@ export function mergePicking(previous: PickingLine[], next: PickingLine[]): { pi
   const excess: Array<{ productId: string; qty: number; unit: string }> = []
   for (const old of previous) {
     if (!old.picked) continue
+    if (old.id.startsWith('fresh-bulk-')) continue
     const updated = picking.find((line) => line.id === old.id)
     const newQty = updated?.qtyToPick ?? 0
     const extra = round2(old.qtyToPick - newQty)

@@ -48,13 +48,14 @@ function cloneData(data: AppData): AppData {
   return structuredClone(data)
 }
 
-function loadPersisted(): AppData | null {
+function loadPersisted(): { data: AppData; currentUserId?: string } | null {
   try {
     const raw = localStorage.getItem(STORAGE_KEY)
     if (!raw) return null
-    const parsed = JSON.parse(raw) as { version?: number; data?: AppData }
+    const parsed = JSON.parse(raw) as { version?: number; data?: AppData & { ui?: UiState }; currentUserId?: string }
     if (parsed.version !== 1 || !parsed.data?.products) return null
-    return parsed.data
+    const { ui: _ignored, ...data } = parsed.data
+    return { data: data as AppData, currentUserId: parsed.currentUserId ?? parsed.data.ui?.currentUserId }
   } catch {
     return null
   }
@@ -62,16 +63,26 @@ function loadPersisted(): AppData | null {
 
 function persist(data: AppData) {
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify({ version: 1, data }))
+    const { ui: _ignored, ...rest } = data as AppData & { ui?: UiState }
+    localStorage.setItem(
+      STORAGE_KEY,
+      JSON.stringify({ version: 1, data: rest, currentUserId: state.ui.currentUserId }),
+    )
   } catch {
     /* ignore quota */
   }
 }
 
 let seed = createSeedData()
+const loaded = loadPersisted()
 let state: AppState = {
-  ...(loadPersisted() ?? cloneData(seed)),
-  ui: defaultUi(),
+  ...(loaded?.data ?? cloneData(seed)),
+  ui: {
+    ...defaultUi(),
+    currentUserId: loaded?.currentUserId && (loaded.data.users ?? seed.users).some((user) => user.id === loaded.currentUserId)
+      ? loaded.currentUserId
+      : 'u-admin',
+  },
 }
 
 const listeners = new Set<() => void>()
@@ -88,6 +99,7 @@ function setData(patch: Partial<AppData>) {
 
 function setUi(patch: Partial<UiState>) {
   state = { ...state, ui: { ...state.ui, ...patch } }
+  if ('currentUserId' in patch) persist(state)
   listeners.forEach((listener) => listener())
 }
 
