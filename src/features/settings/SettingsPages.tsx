@@ -29,6 +29,13 @@ const permissionLabels: Record<PermissionKey, string> = {
 const matrixRoles: UserRole[] = ['staff', 'manager', 'admin', 'owner']
 const permissions = Object.keys(permissionLabels) as PermissionKey[]
 
+function prettyAuditValue(field: string, value: string) {
+  if (field === 'role') return managedRoleLabel(value as UserRole)
+  if (field === 'status' && value === 'active') return 'Active'
+  if (field === 'status' && value === 'inactive') return 'Inactive'
+  return value
+}
+
 const auditActionLabel: Record<string, string> = {
   user_created: 'User Created',
   user_updated: 'User Updated',
@@ -172,7 +179,7 @@ export function UsersSettingsPage() {
               <div key={row.id}>
                 <span className="font-medium">{auditActionLabel[row.action] ?? row.action}</span>
                 {' · '}{row.userName}
-                {row.oldValue ? ` · ${row.oldValue} → ${row.newValue}` : ` · ${row.newValue}`}
+                {row.oldValue ? ` · ${prettyAuditValue(row.field, row.oldValue)} → ${prettyAuditValue(row.field, row.newValue)}` : ` · ${prettyAuditValue(row.field, row.newValue)}`}
                 {' · '}{row.changedBy}
                 {' · '}{formatDateTime(row.changedAt)}
               </div>
