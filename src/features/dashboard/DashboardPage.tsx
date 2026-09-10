@@ -25,8 +25,8 @@ import {
   useLookups,
   useStore,
 } from '@/store/hooks'
+import { currentUser } from '@/features/manufacturing/sessionPlan'
 import { formatDate, formatMoney, formatQty, greeting, round2, startOfDay } from '@/utils/format'
-import { CURRENT_USER } from '@/data/seed'
 
 export function DashboardPage() {
   const state = useStore()
@@ -148,7 +148,7 @@ export function DashboardPage() {
   return (
     <div>
       <PageHeader
-        title={`${greeting()}, ${CURRENT_USER.name}`}
+        title={`${greeting()}, ${currentUser(state).name}`}
         subtitle="Here's what's happening with your business today."
         actions={
           <Segmented

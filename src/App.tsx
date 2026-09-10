@@ -16,10 +16,12 @@ import { ManufacturingDashboardPage } from '@/features/manufacturing/Manufacturi
 import { BomListPage } from '@/features/manufacturing/BomPages'
 import { NewProductionOrderPage, ProductionOrderDetailPage, ProductionOrdersPage } from '@/features/manufacturing/ProductionOrdersPage'
 import { ProductionPlanningPage } from '@/features/manufacturing/ProductionPlanningPage'
-import { MaterialConsumptionPage } from '@/features/manufacturing/MaterialConsumptionPage'
-import { FinishedGoodsPage } from '@/features/manufacturing/FinishedGoodsPage'
-import { ProductionHistoryPage } from '@/features/manufacturing/ProductionHistoryPage'
+import { FinishedGoodsPage, MaterialConsumptionPage } from '@/features/manufacturing/SessionRecordPages'
+import { ProductionHistoryPage, ProductionSessionDetailPage, ProductionSessionEditPage } from '@/features/manufacturing/ProductionHistoryPage'
 import { ManufacturingReportPage } from '@/features/manufacturing/ManufacturingReportsPages'
+import { TodaysProductionPage } from '@/features/manufacturing/TodaysProductionPage'
+import { CompleteProductionPage } from '@/features/manufacturing/CompleteProductionPage'
+import { PickingListPage } from '@/features/manufacturing/PickingListPage'
 
 export default function App() {
   return (
@@ -43,14 +45,21 @@ export default function App() {
           <Route path="/products" element={<ProductsPage />} />
           <Route path="/categories" element={<CategoriesPage />} />
           <Route path="/manufacturing" element={<ManufacturingDashboardPage />} />
+          <Route path="/manufacturing/today" element={<TodaysProductionPage />} />
+          <Route path="/manufacturing/today/:id" element={<TodaysProductionPage />} />
+          <Route path="/manufacturing/complete/:id" element={<CompleteProductionPage />} />
+          <Route path="/manufacturing/complete" element={<CompleteProductionPage />} />
           <Route path="/manufacturing/bom" element={<BomListPage />} />
           <Route path="/manufacturing/orders" element={<ProductionOrdersPage />} />
           <Route path="/manufacturing/orders/new" element={<NewProductionOrderPage />} />
           <Route path="/manufacturing/orders/:id" element={<ProductionOrderDetailPage />} />
           <Route path="/manufacturing/planning" element={<ProductionPlanningPage />} />
+          <Route path="/manufacturing/picking" element={<PickingListPage />} />
           <Route path="/manufacturing/consumption" element={<MaterialConsumptionPage />} />
           <Route path="/manufacturing/finished-goods" element={<FinishedGoodsPage />} />
           <Route path="/manufacturing/history" element={<ProductionHistoryPage />} />
+          <Route path="/manufacturing/history/:id/edit" element={<ProductionSessionEditPage />} />
+          <Route path="/manufacturing/history/:id" element={<ProductionSessionDetailPage />} />
           <Route path="/reports/sales" element={<SalesReportPage />} />
           <Route path="/reports/purchases" element={<PurchaseReportPage />} />
           <Route path="/reports/inventory" element={<InventoryReportPage />} />

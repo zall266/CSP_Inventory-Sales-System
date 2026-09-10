@@ -18,7 +18,18 @@ export type MovementType =
   | 'production_in'
   | 'production_out'
   | 'production_wastage'
+  | 'production_balance_in'
+  | 'production_balance_out'
 export type ProductionStatus = 'draft' | 'planned' | 'in_progress' | 'paused' | 'completed' | 'cancelled'
+export type ProductionSessionStatus = 'planned' | 'accepted' | 'in_progress' | 'completed'
+export type ShortProductionReason =
+  | 'Material Shortage'
+  | 'Production Loss'
+  | 'Machine Issue'
+  | 'Quality Issue'
+  | 'Packaging Issue'
+  | 'Other'
+export type PickingKind = 'raw' | 'balance'
 export type WastageKind = 'material' | 'process_loss' | 'damaged_fg' | 'yield_variance'
 export type UserRole = 'owner' | 'admin' | 'manager' | 'staff' | 'cashier' | 'warehouse'
 export type UserStatus = 'active' | 'inactive'
@@ -221,6 +232,7 @@ export type Bom = {
   productId: string
   outputQty: number
   outputUnit: string
+  bulkYieldGrams?: number
   status: 'active' | 'inactive'
   notes: string
   items: BomItem[]
@@ -270,6 +282,114 @@ export type ProductionOrder = {
   costEstimate: number
 }
 
+export type ProductionBalance = {
+  id: string
+  productId: string
+  quantity: number
+  unit: string
+  location: string
+  container: string
+  warehouseId: string
+  productionDate: string
+  productionReference: string
+  status: 'available' | 'consumed'
+}
+
+export type TargetChangeLog = {
+  id: string
+  sessionId: string
+  productId: string
+  originalTarget: number
+  newTarget: number
+  reason: string
+  changedBy: string
+  changedAt: string
+}
+
+export type CompletedEditLog = {
+  id: string
+  sessionId: string
+  productId: string
+  field: string
+  originalValue: string
+  newValue: string
+  reason: string
+  editedBy: string
+  editedAt: string
+}
+
+export type PickingLine = {
+  id: string
+  kind: PickingKind
+  productId: string
+  label: string
+  requiredQty: number
+  existingBalanceQty: number
+  freshQty: number
+  qtyToPick: number
+  unit: string
+  source: string
+  location: string
+  container: string
+  balanceId?: string
+  picked: boolean
+  previousPickedQty?: number
+}
+
+export type ExcessReturn = {
+  id: string
+  productId: string
+  qty: number
+  unit: string
+  status: 'to_return' | 'returned'
+  notes: string
+}
+
+export type ProductionSessionItem = {
+  id: string
+  sessionId: string
+  productId: string
+  bomId: string
+  originalTargetQty: number
+  targetQty: number
+  actualQty: number
+  shortProductionQty: number
+  shortProductionReason: string
+  productionBalanceQty: number
+  balanceLocation: string
+  balanceContainer: string
+  wasteQty: number
+  wasteReason: string
+  notes: string
+}
+
+export type ProductionSession = {
+  id: string
+  productionDate: string
+  reference: string
+  status: ProductionSessionStatus
+  warehouseId: string
+  createdBy: string
+  createdAt: string
+  acceptedBy: string
+  acceptedAt: string
+  startedBy: string
+  startedAt: string
+  completedBy: string
+  completedAt: string
+  recipePhoto: string
+  recipePhotoName: string
+  uploadedBy: string
+  uploadedAt: string
+  notes: string
+  items: ProductionSessionItem[]
+  picking: PickingLine[]
+  excessReturns: ExcessReturn[]
+  targetChanges: TargetChangeLog[]
+  completedEdits: CompletedEditLog[]
+  posted: boolean
+}
+
 export type User = {
   id: string
   name: string
@@ -277,6 +397,22 @@ export type User = {
   role: UserRole
   status: UserStatus
   lastLogin: string
+  createdAt: string
+  updatedAt: string
+}
+
+export type UserAuditAction = 'user_created' | 'user_updated' | 'role_changed' | 'user_deactivated' | 'user_reactivated'
+
+export type UserAuditLog = {
+  id: string
+  action: UserAuditAction
+  userId: string
+  userName: string
+  field: string
+  oldValue: string
+  newValue: string
+  changedBy: string
+  changedAt: string
 }
 
 export type AppNotification = {
@@ -301,6 +437,7 @@ export type PermissionKey =
   | 'manage_settings'
   | 'manage_users'
   | 'create_production'
+  | 'edit_completed_production'
 
 export type RoleMatrix = Record<UserRole, Record<PermissionKey, boolean>>
 
@@ -338,6 +475,7 @@ export type DrawerState =
   | { type: 'movement'; id: string }
   | { type: 'bom'; id: string }
   | { type: 'production'; id: string }
+  | { type: 'session'; id: string }
   | null
 
 export type QuickModal =
@@ -361,6 +499,7 @@ export type UiState = {
   datePreset: DatePreset
   customFrom: string
   customTo: string
+  currentUserId: string
 }
 
 export type AppData = {
@@ -379,10 +518,13 @@ export type AppData = {
   payments: Payment[]
   expenses: Expense[]
   users: User[]
+  userAuditLogs: UserAuditLog[]
   notifications: AppNotification[]
   settings: Settings
   boms: Bom[]
   productionOrders: ProductionOrder[]
+  productionSessions: ProductionSession[]
+  productionBalances: ProductionBalance[]
 }
 
 export type AppState = AppData & {
@@ -422,6 +564,7 @@ export type BomInput = {
   productId: string
   outputQty: number
   outputUnit: string
+  bulkYieldGrams?: number
   notes: string
   items: Array<{ productId: string; qty: number; unit: string; wastagePct: number; notes: string }>
 }

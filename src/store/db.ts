@@ -1,5 +1,7 @@
 import { createSeedData, CURRENT_USER } from '@/data/seed'
 import { bomLinesForQty, consumptionCost, hasShortage, materialAvailability } from '@/features/manufacturing/helpers'
+import { buildSessionPlan, canEditCompleted, canEditSession, currentUser, mergePicking } from '@/features/manufacturing/sessionPlan'
+import { canAssignRole, canChangeUserRole, canDeactivateUser, canManageUsers, isManagedRole } from '@/features/settings/userPermissions'
 import type {
   AppData,
   AppState,
@@ -24,11 +26,15 @@ import type {
   StockStatus,
   ToastTone,
   UiState,
+  User,
+  UserAuditLog,
+  UserRole,
+  UserStatus,
   WastageKind,
 } from '@/types'
 import { nextDocNo, PROTOTYPE_TODAY, round2, stockStatus, uid } from '@/utils/format'
 
-const STORAGE_KEY = 'stockflow-prototype-v4'
+const STORAGE_KEY = 'stockflow-prototype-v6'
 
 const defaultUi = (): UiState => ({
   toasts: [],
@@ -40,19 +46,21 @@ const defaultUi = (): UiState => ({
   datePreset: '30d',
   customFrom: '2026-08-12',
   customTo: '2026-09-10',
+  currentUserId: 'u-admin',
 })
 
 function cloneData(data: AppData): AppData {
   return structuredClone(data)
 }
 
-function loadPersisted(): AppData | null {
+function loadPersisted(): { data: AppData; currentUserId?: string } | null {
   try {
     const raw = localStorage.getItem(STORAGE_KEY)
     if (!raw) return null
-    const parsed = JSON.parse(raw) as { version?: number; data?: AppData }
+    const parsed = JSON.parse(raw) as { version?: number; data?: AppData & { ui?: UiState }; currentUserId?: string }
     if (parsed.version !== 1 || !parsed.data?.products) return null
-    return parsed.data
+    const { ui: _ignored, ...data } = parsed.data
+    return { data: data as AppData, currentUserId: parsed.currentUserId ?? parsed.data.ui?.currentUserId }
   } catch {
     return null
   }
@@ -60,16 +68,26 @@ function loadPersisted(): AppData | null {
 
 function persist(data: AppData) {
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify({ version: 1, data }))
+    const { ui: _ignored, ...rest } = data as AppData & { ui?: UiState }
+    localStorage.setItem(
+      STORAGE_KEY,
+      JSON.stringify({ version: 1, data: rest, currentUserId: state.ui.currentUserId }),
+    )
   } catch {
     /* ignore quota */
   }
 }
 
 let seed = createSeedData()
+const loaded = loadPersisted()
 let state: AppState = {
-  ...(loadPersisted() ?? cloneData(seed)),
-  ui: defaultUi(),
+  ...(loaded?.data ?? cloneData(seed)),
+  ui: {
+    ...defaultUi(),
+    currentUserId: loaded?.currentUserId && (loaded.data.users ?? seed.users).some((user) => user.id === loaded.currentUserId)
+      ? loaded.currentUserId
+      : 'u-admin',
+  },
 }
 
 const listeners = new Set<() => void>()
@@ -86,6 +104,7 @@ function setData(patch: Partial<AppData>) {
 
 function setUi(patch: Partial<UiState>) {
   state = { ...state, ui: { ...state.ui, ...patch } }
+  if ('currentUserId' in patch) persist(state)
   listeners.forEach((listener) => listener())
 }
 
@@ -113,15 +132,19 @@ function addMovement(
     stockIn: number
     stockOut: number
     notes?: string
+    skipInventory?: boolean
   },
 ) {
   const current = inventory.find((row) => row.productId === input.productId && row.warehouseId === input.warehouseId)?.qty ?? 0
-  const balance = round2(current + input.stockIn - input.stockOut)
-  const nextInventory = inventory.some((row) => row.productId === input.productId && row.warehouseId === input.warehouseId)
-    ? inventory.map((row) =>
-        row.productId === input.productId && row.warehouseId === input.warehouseId ? { ...row, qty: balance } : row,
-      )
-    : [...inventory, { productId: input.productId, warehouseId: input.warehouseId, qty: balance }]
+  const balance = input.skipInventory ? current : round2(current + input.stockIn - input.stockOut)
+  const nextInventory = input.skipInventory
+    ? inventory
+    : inventory.some((row) => row.productId === input.productId && row.warehouseId === input.warehouseId)
+      ? inventory.map((row) =>
+          row.productId === input.productId && row.warehouseId === input.warehouseId ? { ...row, qty: balance } : row,
+        )
+      : [...inventory, { productId: input.productId, warehouseId: input.warehouseId, qty: balance }]
+  const actor = state.users.find((user) => user.id === state.ui.currentUserId)?.name ?? CURRENT_USER.name
   const movement = {
     id: uid('mv'),
     date: input.date,
@@ -132,7 +155,7 @@ function addMovement(
     stockIn: input.stockIn,
     stockOut: input.stockOut,
     balance,
-    user: CURRENT_USER.name,
+    user: actor,
     notes: input.notes,
   }
   return { inventory: nextInventory, movements: [movement, ...movements] }
@@ -214,6 +237,16 @@ export const db = {
   },
   setMobileNavOpen(mobileNavOpen: boolean) {
     setUi({ mobileNavOpen })
+  },
+  switchUser(currentUserId: string) {
+    const user = state.users.find((item) => item.id === currentUserId)
+    if (!user) return
+    if (user.status !== 'active') {
+      toast('User is inactive', 'Inactive users cannot be used in the prototype switcher.', 'warning')
+      return
+    }
+    setUi({ currentUserId })
+    toast('Viewing as ' + user.name, user.role === 'manager' ? 'Supervisor' : user.role, 'info')
   },
   setDatePreset(datePreset: UiState['datePreset'], customFrom?: string, customTo?: string) {
     setUi({
@@ -312,18 +345,115 @@ export const db = {
     return supplier
   },
 
-  createUser(input: { name: string; email: string; role: AppState['users'][number]['role'] }) {
-    const user = {
-      id: uid('usr'),
-      name: input.name,
-      email: input.email,
-      role: input.role,
-      status: 'active' as const,
-      lastLogin: 'Never',
+  createUser(input: { name: string; email: string; role: UserRole; status?: UserStatus }) {
+    const actor = currentUser(state)
+    if (!canManageUsers(actor.role)) {
+      toast('Permission denied', 'Only Admin or Owner can add users.', 'danger')
+      return null
     }
-    setData({ users: [user, ...state.users] })
-    toast('User created', input.name)
+    const name = input.name.trim()
+    const email = input.email.trim().toLowerCase()
+    if (!name || !email) {
+      toast('Name and email are required', undefined, 'warning')
+      return null
+    }
+    if (!isManagedRole(input.role) || !canAssignRole(actor, input.role)) {
+      toast('Permission denied', 'You cannot assign that role.', 'danger')
+      return null
+    }
+    if (state.users.some((item) => item.email.trim().toLowerCase() === email)) {
+      toast('Email already in use', email, 'warning')
+      return null
+    }
+    const stamp = nowIso()
+    const user: User = {
+      id: uid('usr'),
+      name,
+      email,
+      role: input.role,
+      status: input.status ?? 'active',
+      lastLogin: 'Never',
+      createdAt: stamp,
+      updatedAt: stamp,
+    }
+    const log: UserAuditLog = {
+      id: uid('ual'),
+      action: 'user_created',
+      userId: user.id,
+      userName: user.name,
+      field: 'user',
+      oldValue: '',
+      newValue: `${user.name} · ${user.role} · ${user.status}`,
+      changedBy: actor.name,
+      changedAt: stamp,
+    }
+    setData({ users: [user, ...state.users], userAuditLogs: [log, ...(state.userAuditLogs ?? [])] })
+    toast('User created', user.name)
     return user
+  },
+
+  updateUser(id: string, patch: { name?: string; email?: string; role?: UserRole; status?: UserStatus }) {
+    const actor = currentUser(state)
+    const target = state.users.find((item) => item.id === id)
+    if (!target) return false
+    if (!canManageUsers(actor.role)) {
+      toast('Permission denied', 'Only Admin or Owner can edit users.', 'danger')
+      return false
+    }
+    const nextName = patch.name?.trim() ?? target.name
+    const nextEmail = (patch.email ?? target.email).trim().toLowerCase()
+    const nextRole = patch.role ?? target.role
+    const nextStatus = patch.status ?? target.status
+    if (!nextName || !nextEmail) {
+      toast('Name and email are required', undefined, 'warning')
+      return false
+    }
+    if (state.users.some((item) => item.id !== id && item.email.trim().toLowerCase() === nextEmail)) {
+      toast('Email already in use', nextEmail, 'warning')
+      return false
+    }
+    if (nextRole !== target.role && !canChangeUserRole(actor, target, nextRole)) {
+      toast('Permission denied', 'You cannot change that user\'s role.', 'danger')
+      return false
+    }
+    if (nextStatus !== target.status && nextStatus === 'inactive' && !canDeactivateUser(actor, target, state.users)) {
+      toast('Permission denied', 'You cannot deactivate this user.', 'danger')
+      return false
+    }
+    if (nextStatus === 'inactive' && target.role === 'owner' && actor.role !== 'owner') {
+      toast('Permission denied', 'Admin cannot deactivate Owner.', 'danger')
+      return false
+    }
+    const stamp = nowIso()
+    const logs: UserAuditLog[] = []
+    const push = (action: UserAuditLog['action'], field: string, oldValue: string, newValue: string) => {
+      logs.push({
+        id: uid('ual'),
+        action,
+        userId: target.id,
+        userName: nextName,
+        field,
+        oldValue,
+        newValue,
+        changedBy: actor.name,
+        changedAt: stamp,
+      })
+    }
+    if (nextRole !== target.role) push('role_changed', 'role', target.role, nextRole)
+    if (nextStatus !== target.status) push(nextStatus === 'inactive' ? 'user_deactivated' : 'user_reactivated', 'status', target.status, nextStatus)
+    if (nextName !== target.name) push('user_updated', 'name', target.name, nextName)
+    if (nextEmail !== target.email) push('user_updated', 'email', target.email, nextEmail)
+    if (!logs.length) return true
+    setData({
+      users: state.users.map((item) =>
+        item.id === id
+          ? { ...item, name: nextName, email: nextEmail, role: nextRole, status: nextStatus, updatedAt: stamp }
+          : item,
+      ),
+      userAuditLogs: [...logs, ...(state.userAuditLogs ?? [])],
+    })
+    toast('User updated', nextName)
+    return true
   },
 
   updateSettings(patch: Partial<Settings>) {
@@ -331,6 +461,11 @@ export const db = {
   },
 
   updateRoleMatrix(matrix: Settings['roleMatrix']) {
+    const actor = currentUser(state)
+    if (!canManageUsers(actor.role)) {
+      toast('Permission denied', 'Only Admin or Owner can change the permission matrix.', 'danger')
+      return
+    }
     setData({ settings: { ...state.settings, roleMatrix: matrix } })
   },
 
@@ -914,6 +1049,7 @@ export const db = {
       productId: input.productId,
       outputQty: input.outputQty,
       outputUnit: input.outputUnit || product?.unit || 'KG',
+      bulkYieldGrams: input.bulkYieldGrams,
       status: 'active' as const,
       notes: input.notes,
       items: input.items.filter((item) => item.qty > 0).map((item) => ({
@@ -942,6 +1078,7 @@ export const db = {
               productId: input.productId,
               outputQty: input.outputQty,
               outputUnit: input.outputUnit,
+              bulkYieldGrams: input.bulkYieldGrams ?? bom.bulkYieldGrams,
               notes: input.notes,
               items: input.items.filter((item) => item.qty > 0).map((item) => ({
                 id: uid('bi'),
@@ -1274,6 +1411,520 @@ export const db = {
       .join(', ')
     notify('production', 'Purchase request (preview)', `PRQ created for ${order.orderNo}: ${names}`, '/purchases/new')
     toast('Purchase request created', 'Preview only — not sent to Purchases yet.', 'info')
+  },
+
+  acceptSession(id: string) {
+    const session = state.productionSessions.find((item) => item.id === id)
+    const user = currentUser(state)
+    if (!session || session.status !== 'planned') {
+      toast('Only a planned session can be accepted', undefined, 'warning')
+      return
+    }
+    if (!canEditSession(user.role, session.status)) {
+      toast('Permission denied', undefined, 'danger')
+      return
+    }
+    setData({
+      productionSessions: state.productionSessions.map((item) =>
+        item.id === id ? { ...item, status: 'accepted' as const, acceptedBy: user.name, acceptedAt: nowIso() } : item,
+      ),
+    })
+    toast('Production accepted', session.reference)
+  },
+
+  startSession(id: string, input: { recipePhoto: string; recipePhotoName: string }) {
+    const session = state.productionSessions.find((item) => item.id === id)
+    const user = currentUser(state)
+    if (!session || (session.status !== 'accepted' && session.status !== 'planned')) {
+      toast('Accept production before starting', undefined, 'warning')
+      return false
+    }
+    if (session.status === 'planned') {
+      toast('Accept production first', undefined, 'warning')
+      return false
+    }
+    if (!canEditSession(user.role, session.status)) {
+      toast('Permission denied', undefined, 'danger')
+      return false
+    }
+    if (!input.recipePhoto) {
+      toast('Upload recipe photo', 'Photograph the process-room recipe sheet. It is evidence only — BOM stays the source of requirements.', 'warning')
+      return false
+    }
+    const plan = buildSessionPlan(state, session)
+    setData({
+      productionSessions: state.productionSessions.map((item) =>
+        item.id === id
+          ? {
+              ...item,
+              status: 'in_progress' as const,
+              startedBy: user.name,
+              startedAt: nowIso(),
+              recipePhoto: input.recipePhoto,
+              recipePhotoName: input.recipePhotoName,
+              uploadedBy: user.name,
+              uploadedAt: nowIso(),
+              picking: plan.picking,
+            }
+          : item,
+      ),
+    })
+    toast('Production started', 'Picking list is ready.')
+    return true
+  },
+
+  changeSessionTarget(id: string, productId: string, newTarget: number, reason: string) {
+    const session = state.productionSessions.find((item) => item.id === id)
+    const user = currentUser(state)
+    if (!session) return
+    if (session.status === 'completed') {
+      toast('Completed sessions cannot change target here', 'Admin can edit completed records separately.', 'warning')
+      return
+    }
+    if (!canEditSession(user.role, session.status)) {
+      toast('Permission denied', undefined, 'danger')
+      return
+    }
+    if (!reason.trim()) {
+      toast('Enter a reason', 'Target changes must be explained.', 'warning')
+      return
+    }
+    if (newTarget <= 0) {
+      toast('Target must be greater than zero', undefined, 'warning')
+      return
+    }
+    const line = session.items.find((item) => item.productId === productId)
+    if (!line || line.targetQty === newTarget) return
+    const updatedItems = session.items.map((item) =>
+      item.productId === productId ? { ...item, targetQty: newTarget } : item,
+    )
+    const nextSession = { ...session, items: updatedItems }
+    const plan = buildSessionPlan(state, nextSession)
+    const merged = mergePicking(session.picking, plan.picking)
+    const log = {
+      id: uid('tcl'),
+      sessionId: id,
+      productId,
+      originalTarget: line.targetQty,
+      newTarget,
+      reason: reason.trim(),
+      changedBy: user.name,
+      changedAt: nowIso(),
+    }
+    setData({
+      productionSessions: state.productionSessions.map((item) =>
+        item.id === id
+          ? {
+              ...item,
+              items: updatedItems,
+              picking: merged.picking,
+              targetChanges: [...item.targetChanges, log],
+              excessReturns: [
+                ...item.excessReturns,
+                ...merged.excess.map((row) => ({
+                  id: uid('ex'),
+                  productId: row.productId,
+                  qty: row.qty,
+                  unit: row.unit,
+                  status: 'to_return' as const,
+                  notes: `Target change ${line.targetQty} → ${newTarget}`,
+                })),
+              ],
+            }
+          : item,
+      ),
+    })
+    toast('Target updated', `${productById(productId)?.name}: ${line.targetQty} → ${newTarget}`)
+  },
+
+  togglePickingLine(id: string, lineId: string, picked?: boolean) {
+    const session = state.productionSessions.find((item) => item.id === id)
+    if (!session || session.status !== 'in_progress') {
+      toast('Picking is only for in-progress sessions', undefined, 'info')
+      return
+    }
+    setData({
+      productionSessions: state.productionSessions.map((item) =>
+        item.id === id
+          ? {
+              ...item,
+              picking: item.picking.map((line) =>
+                line.id === lineId ? { ...line, picked: picked ?? !line.picked } : line,
+              ),
+            }
+          : item,
+      ),
+    })
+  },
+
+  completeSession(
+    id: string,
+    results: Array<{
+      productId: string
+      actualQty: number
+      productionBalanceQty: number
+      balanceLocation: string
+      balanceContainer: string
+      wasteQty: number
+      shortProductionReason: string
+      notes: string
+    }>,
+  ) {
+    const session = state.productionSessions.find((item) => item.id === id)
+    const user = currentUser(state)
+    if (!session || session.status !== 'in_progress') {
+      toast('Start production first', undefined, 'warning')
+      return false
+    }
+    if (!canEditSession(user.role, session.status)) {
+      toast('Permission denied', undefined, 'danger')
+      return false
+    }
+    if (session.posted) {
+      toast('Already posted', undefined, 'info')
+      return false
+    }
+    for (const item of session.items) {
+      const result = results.find((row) => row.productId === item.productId)
+      if (!result || result.actualQty < 0) {
+        toast('Enter actual quantity for every product', undefined, 'warning')
+        return false
+      }
+      if (result.productionBalanceQty > 0 && (!result.balanceLocation || !result.balanceContainer)) {
+        toast('Storage and box required', 'Production balance must have a location and container.', 'warning')
+        return false
+      }
+      if (result.actualQty < item.targetQty && !result.shortProductionReason) {
+        toast('Select a reason', `${productById(item.productId)?.name} is below target.`, 'warning')
+        return false
+      }
+    }
+    const items = session.items.map((item) => {
+      const result = results.find((row) => row.productId === item.productId)!
+      return {
+        ...item,
+        actualQty: result.actualQty,
+        productionBalanceQty: result.productionBalanceQty,
+        balanceLocation: result.balanceLocation,
+        balanceContainer: result.balanceContainer,
+        wasteQty: result.wasteQty,
+        shortProductionQty: Math.max(0, item.targetQty - result.actualQty),
+        shortProductionReason: result.shortProductionReason,
+        notes: result.notes,
+      }
+    })
+    const working = { ...session, items }
+    const plan = buildSessionPlan(state, working)
+    const date = nowIso()
+    let inventory = state.inventory
+    let movements = state.stockMovements
+    let balances = state.productionBalances
+    const apply = (input: Parameters<typeof addMovement>[2]) => {
+      const next = addMovement(movements, inventory, input)
+      inventory = next.inventory
+      movements = next.movements
+    }
+
+    for (const req of plan.products) {
+      for (const alloc of req.balanceUsed) {
+        balances = balances.map((row) => {
+          if (row.id !== alloc.balanceId) return row
+          const qty = round2(row.quantity - alloc.qty)
+          return { ...row, quantity: Math.max(0, qty), status: qty <= 0.001 ? 'consumed' as const : row.status }
+        })
+        apply({
+          date,
+          reference: session.reference,
+          productId: req.productId,
+          warehouseId: session.warehouseId,
+          type: 'production_balance_out',
+          stockIn: 0,
+          stockOut: alloc.qty,
+          notes: `Use production balance ${alloc.container}`,
+          skipInventory: true,
+        })
+      }
+    }
+
+    for (const raw of plan.consolidatedRaw) {
+      if (raw.qty <= 0) continue
+      apply({
+        date,
+        reference: session.reference,
+        productId: raw.productId,
+        warehouseId: session.warehouseId,
+        type: 'production_out',
+        stockIn: 0,
+        stockOut: raw.qty,
+        notes: 'Consolidated material consumption',
+      })
+    }
+
+    for (const item of items) {
+      if (item.actualQty > 0) {
+        apply({
+          date,
+          reference: session.reference,
+          productId: item.productId,
+          warehouseId: session.warehouseId,
+          type: 'production_in',
+          stockIn: item.actualQty,
+          stockOut: 0,
+          notes: 'Finished goods packs',
+        })
+      }
+      if (item.productionBalanceQty > 0) {
+        balances = [
+          {
+            id: uid('pb'),
+            productId: item.productId,
+            quantity: item.productionBalanceQty,
+            unit: 'g',
+            location: item.balanceLocation,
+            container: item.balanceContainer,
+            warehouseId: session.warehouseId,
+            productionDate: date,
+            productionReference: session.reference,
+            status: 'available' as const,
+          },
+          ...balances,
+        ]
+        apply({
+          date,
+          reference: session.reference,
+          productId: item.productId,
+          warehouseId: session.warehouseId,
+          type: 'production_balance_in',
+          stockIn: item.productionBalanceQty,
+          stockOut: 0,
+          notes: `Production balance ${item.balanceContainer}`,
+          skipInventory: true,
+        })
+      }
+      if (item.wasteQty > 0) {
+        apply({
+          date,
+          reference: session.reference,
+          productId: 'p-pouch',
+          warehouseId: session.warehouseId,
+          type: 'production_wastage',
+          stockIn: 0,
+          stockOut: 0,
+          notes: `Packaging waste ${item.wasteQty}g · ${productById(item.productId)?.name}`,
+          skipInventory: true,
+        })
+      }
+    }
+
+    setData({
+      inventory,
+      stockMovements: movements,
+      productionBalances: balances,
+      productionSessions: state.productionSessions.map((item) =>
+        item.id === id
+          ? {
+              ...item,
+              items,
+              status: 'completed' as const,
+              posted: true,
+              completedBy: user.name,
+              completedAt: date,
+              picking: plan.picking.map((line) => ({ ...line, picked: true })),
+            }
+          : item,
+      ),
+    })
+    notify('production', 'Production completed', `${session.reference} posted.`, '/manufacturing/history')
+    emit()
+    toast('Production completed', session.reference)
+    return true
+  },
+
+  editCompletedSession(
+    id: string,
+    productId: string,
+    field: 'actualQty' | 'productionBalanceQty' | 'wasteQty',
+    newValue: number,
+    reason: string,
+  ) {
+    const session = state.productionSessions.find((item) => item.id === id)
+    const user = currentUser(state)
+    if (!session || session.status !== 'completed') {
+      toast('Only completed sessions use this edit', undefined, 'warning')
+      return false
+    }
+    if (!canEditCompleted(user.role)) {
+      toast('Permission denied', 'Only Admin or Owner can edit completed production.', 'danger')
+      return false
+    }
+    if (!reason.trim()) {
+      toast('Reason is required', undefined, 'warning')
+      return false
+    }
+    const item = session.items.find((row) => row.productId === productId)
+    if (!item) return false
+    const original = item[field]
+    if (original === newValue) return false
+    const date = nowIso()
+    let inventory = state.inventory
+    let movements = state.stockMovements
+    let balances = state.productionBalances
+    const apply = (input: Parameters<typeof addMovement>[2]) => {
+      const next = addMovement(movements, inventory, input)
+      inventory = next.inventory
+      movements = next.movements
+    }
+    const diff = round2(newValue - original)
+    if (field === 'actualQty' && diff !== 0) {
+      apply({
+        date,
+        reference: `${session.reference} adj`,
+        productId,
+        warehouseId: session.warehouseId,
+        type: 'adjustment',
+        stockIn: diff > 0 ? diff : 0,
+        stockOut: diff < 0 ? -diff : 0,
+        notes: `Completed production edit · ${reason.trim()}`,
+      })
+    }
+    if (field === 'productionBalanceQty') {
+      const existing = balances.find((row) => row.productionReference === session.reference && row.productId === productId && row.status === 'available')
+      if (existing) {
+        const qty = round2(existing.quantity + diff)
+        balances = balances.map((row) => (row.id === existing.id ? { ...row, quantity: Math.max(0, qty), status: qty <= 0 ? 'consumed' as const : 'available' as const } : row))
+      } else if (newValue > 0) {
+        balances = [
+          {
+            id: uid('pb'),
+            productId,
+            quantity: newValue,
+            unit: 'g',
+            location: item.balanceLocation || 'Main Warehouse',
+            container: item.balanceContainer || 'Box 1',
+            warehouseId: session.warehouseId,
+            productionDate: date,
+            productionReference: session.reference,
+            status: 'available' as const,
+          },
+          ...balances,
+        ]
+      }
+      apply({
+        date,
+        reference: `${session.reference} adj`,
+        productId,
+        warehouseId: session.warehouseId,
+        type: diff >= 0 ? 'production_balance_in' : 'production_balance_out',
+        stockIn: diff > 0 ? diff : 0,
+        stockOut: diff < 0 ? -diff : 0,
+        notes: `Balance edit · ${reason.trim()}`,
+        skipInventory: true,
+      })
+    }
+    if (field === 'wasteQty' && diff !== 0) {
+      apply({
+        date,
+        reference: `${session.reference} adj`,
+        productId: 'p-pouch',
+        warehouseId: session.warehouseId,
+        type: 'production_wastage',
+        stockIn: 0,
+        stockOut: 0,
+        notes: `Waste edit ${original}g → ${newValue}g · ${productById(productId)?.name} · ${reason.trim()}`,
+        skipInventory: true,
+      })
+    }
+    const log = {
+      id: uid('cel'),
+      sessionId: id,
+      productId,
+      field,
+      originalValue: String(original),
+      newValue: String(newValue),
+      reason: reason.trim(),
+      editedBy: user.name,
+      editedAt: date,
+    }
+    setData({
+      inventory,
+      stockMovements: movements,
+      productionBalances: balances,
+      productionSessions: state.productionSessions.map((row) =>
+        row.id === id
+          ? {
+              ...row,
+              items: row.items.map((line) => {
+                if (line.productId !== productId) return line
+                const next = { ...line, [field]: newValue }
+                if (field === 'actualQty') next.shortProductionQty = Math.max(0, line.targetQty - newValue)
+                return next
+              }),
+              completedEdits: [...row.completedEdits, log],
+            }
+          : row,
+      ),
+    })
+    toast('Completed production updated', 'Audit log recorded.')
+    return true
+  },
+
+  createDailySession(input: { productionDate: string; items: Array<{ productId: string; targetQty: number }>; notes?: string }) {
+    if (!input.items.length) {
+      toast('Add products to the daily plan', undefined, 'warning')
+      return null
+    }
+    const user = currentUser(state)
+    const stamp = input.productionDate.replaceAll('-', '')
+    const seq = String(state.productionSessions.filter((item) => item.productionDate === input.productionDate).length + 1).padStart(3, '0')
+    const id = uid('ps')
+    const session = {
+      id,
+      productionDate: input.productionDate,
+      reference: `PROD-${stamp}-${seq}`,
+      status: 'planned' as const,
+      warehouseId: state.settings.defaultWarehouseId,
+      createdBy: user.name,
+      createdAt: nowIso(),
+      acceptedBy: '',
+      acceptedAt: '',
+      startedBy: '',
+      startedAt: '',
+      completedBy: '',
+      completedAt: '',
+      recipePhoto: '',
+      recipePhotoName: '',
+      uploadedBy: '',
+      uploadedAt: '',
+      notes: input.notes ?? '',
+      items: input.items.map((row) => {
+        const bom = state.boms.find((item) => item.productId === row.productId && item.status === 'active')
+        return {
+          id: uid('psi'),
+          sessionId: id,
+          productId: row.productId,
+          bomId: bom?.id ?? '',
+          originalTargetQty: row.targetQty,
+          targetQty: row.targetQty,
+          actualQty: 0,
+          shortProductionQty: 0,
+          shortProductionReason: '',
+          productionBalanceQty: 0,
+          balanceLocation: 'Main Warehouse',
+          balanceContainer: '',
+          wasteQty: 0,
+          wasteReason: '',
+          notes: '',
+        }
+      }),
+      picking: [],
+      excessReturns: [],
+      targetChanges: [],
+      completedEdits: [],
+      posted: false,
+    }
+    setData({ productionSessions: [session, ...state.productionSessions] })
+    toast('Daily production created', session.reference)
+    return session
   },
 }
 

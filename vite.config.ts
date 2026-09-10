@@ -13,9 +13,13 @@ export default defineConfig({
   server: {
     host: true,
     port: 5173,
+    strictPort: true,
+    // Cloud Preview / reverse proxies send Host: app (and similar), which Vite 7 blocks by default.
+    allowedHosts: true,
   },
   preview: {
     host: true,
     port: 4173,
+    allowedHosts: true,
   },
 })

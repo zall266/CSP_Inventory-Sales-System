@@ -90,6 +90,7 @@ export function productionStatusLabel(status: string) {
   const map: Record<string, string> = {
     draft: 'Draft',
     planned: 'Planned',
+    accepted: 'Accepted',
     in_progress: 'In Progress',
     paused: 'Paused',
     completed: 'Completed',

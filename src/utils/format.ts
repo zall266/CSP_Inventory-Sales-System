@@ -29,15 +29,23 @@ export function formatQty(value: number) {
 
 export function formatDate(iso: string, options?: { short?: boolean }) {
   const d = new Date(iso)
-  if (options?.short) {
-    return d.toLocaleDateString('en-GB', { day: '2-digit', month: 'short' })
+  const opts: Intl.DateTimeFormatOptions = {
+    day: '2-digit',
+    month: 'short',
+    timeZone: 'Asia/Kuala_Lumpur',
   }
-  return d.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })
+  if (!options?.short) opts.year = 'numeric'
+  return d.toLocaleDateString('en-GB', opts)
 }
 
 export function formatDateTime(iso: string) {
   const d = new Date(iso)
-  return `${formatDate(iso)} · ${d.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })}`
+  const time = d.toLocaleTimeString('en-GB', {
+    hour: '2-digit',
+    minute: '2-digit',
+    timeZone: 'Asia/Kuala_Lumpur',
+  })
+  return `${formatDate(iso)} · ${time}`
 }
 
 export function toIsoDate(date: Date) {

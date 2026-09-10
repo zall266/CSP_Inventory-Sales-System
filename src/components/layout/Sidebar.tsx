@@ -31,6 +31,7 @@ import { useMemo, useState } from 'react'
 import { brand } from '@/brand'
 import { cn } from '@/utils/format'
 import { useApi, useStore } from '@/store/hooks'
+import { actorUser, canManageUsers } from '@/features/settings/userPermissions'
 
 type NavItem = { to: string; label: string; icon: typeof LayoutDashboard }
 type NavGroup = { id: string; label: string; items: NavItem[] }
@@ -76,11 +77,10 @@ export const navGroups: NavGroup[] = [
     label: 'MANUFACTURING',
     items: [
       { to: '/manufacturing', label: 'Manufacturing Dashboard', icon: Factory },
-      { to: '/manufacturing/bom', label: 'Bill of Materials', icon: ClipboardList },
-      { to: '/manufacturing/orders', label: 'Production Orders', icon: PackagePlus },
+      { to: '/manufacturing/today', label: "Today's Production", icon: ClipboardList },
+      { to: '/manufacturing/bom', label: 'Bill of Materials', icon: PackagePlus },
       { to: '/manufacturing/planning', label: 'Production Planning', icon: CalendarDays },
-      { to: '/manufacturing/consumption', label: 'Material Consumption', icon: FlaskConical },
-      { to: '/manufacturing/finished-goods', label: 'Finished Goods', icon: Package },
+      { to: '/manufacturing/picking', label: 'Picking List', icon: FlaskConical },
       { to: '/manufacturing/history', label: 'Production History', icon: History },
     ],
   },
@@ -128,14 +128,17 @@ export const navGroups: NavGroup[] = [
 function pathActive(pathname: string, to: string) {
   if (to === '/') return pathname === '/'
   if (to === '/manufacturing') return pathname === '/manufacturing'
+  if (to === '/manufacturing/today') return pathname === '/manufacturing/today' || pathname.startsWith('/manufacturing/today/')
   return pathname === to || pathname.startsWith(`${to}/`)
 }
 
 export function Sidebar() {
   const location = useLocation()
   const api = useApi()
-  const ui = useStore().ui
+  const state = useStore()
+  const ui = state.ui
   const collapsed = ui.sidebarCollapsed
+  const canUsers = canManageUsers(actorUser(state).role)
 
   const initialOpen = useMemo(() => {
     const open: Record<string, boolean> = {}
@@ -181,7 +184,9 @@ export function Sidebar() {
                 </button>
               )}
               {isOpen &&
-                group.items.map((item) => {
+                group.items
+                  .filter((item) => item.to !== '/settings/users' || canUsers)
+                  .map((item) => {
                   const Icon = item.icon
                   const active = pathActive(location.pathname, item.to)
                   return (
@@ -211,8 +216,10 @@ export function Sidebar() {
 
 export function MobileSidebar() {
   const api = useApi()
-  const open = useStore().ui.mobileNavOpen
+  const state = useStore()
+  const open = state.ui.mobileNavOpen
   const location = useLocation()
+  const canUsers = canManageUsers(actorUser(state).role)
   if (!open) return null
   return (
     <div className="fixed inset-0 z-50 lg:hidden">
@@ -230,7 +237,9 @@ export function MobileSidebar() {
         {navGroups.map((group) => (
           <div key={group.id} className="mb-3">
             <div className="px-2 py-1 text-[10px] font-semibold tracking-[0.14em] text-slate-400">{group.label}</div>
-            {group.items.map((item) => {
+            {group.items
+              .filter((item) => item.to !== '/settings/users' || canUsers)
+              .map((item) => {
               const Icon = item.icon
               const active = pathActive(location.pathname, item.to)
               return (
