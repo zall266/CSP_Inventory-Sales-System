@@ -80,13 +80,13 @@ export function DashboardPage() {
     const map = new Map<string, number>()
     for (const sale of sales) {
       for (const item of sale.items) {
-        map.set(item.productId, (map.get(item.productId) ?? 0) + item.qty)
+        map.set(item.productId, (map.get(item.productId) ?? 0) + item.total)
       }
     }
     return [...map.entries()]
       .sort((a, b) => b[1] - a[1])
       .slice(0, 5)
-      .map(([id, qty]) => ({ product: product(id), qty }))
+      .map(([id, total]) => ({ product: product(id), total }))
       .filter((row) => row.product)
   }, [sales, product])
 
@@ -227,7 +227,7 @@ export function DashboardPage() {
                     <div className="truncate text-sm font-medium text-slate-800">{row.product.name}</div>
                     <div className="text-xs text-slate-400">{row.product.sku}</div>
                   </div>
-                  <div className="text-sm tabular text-slate-600">{formatQty(row.qty)}</div>
+                  <div className="text-sm tabular text-slate-600">{formatMoney(row.total, { compact: true })}</div>
                 </button>
               ) : null,
             )}

@@ -23,7 +23,7 @@ import type {
 } from '@/types'
 import { nextDocNo, PROTOTYPE_TODAY, round2, stockStatus, uid } from '@/utils/format'
 
-const STORAGE_KEY = 'stockflow-prototype-v1'
+const STORAGE_KEY = 'stockflow-prototype-v2'
 
 const defaultUi = (): UiState => ({
   toasts: [],

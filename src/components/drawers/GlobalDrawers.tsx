@@ -27,7 +27,10 @@ function ProductDrawer({ id, onClose }: { id: string; onClose: () => void }) {
   const rows = state.inventory.filter((row) => row.productId === id)
   const qty = rows.reduce((sum, row) => sum + row.qty, 0)
   const value = qty * item.costPrice
-  const movements = state.stockMovements.filter((m) => m.productId === id)
+  const movements = state.stockMovements
+    .filter((m) => m.productId === id)
+    .slice()
+    .sort((a, b) => a.date.localeCompare(b.date) || a.id.localeCompare(b.id))
   const sales = state.sales.filter((s) => s.items.some((line) => line.productId === id))
   const purchases = state.purchases.filter((p) => p.items.some((line) => line.productId === id))
   const batches = state.batches.filter((b) => b.productId === id)
@@ -92,6 +95,7 @@ function ProductDrawer({ id, onClose }: { id: string; onClose: () => void }) {
                   <th>Date</th>
                   <th>Reference</th>
                   <th>Type</th>
+                  <th>Warehouse</th>
                   <th>In</th>
                   <th>Out</th>
                   <th>Balance</th>
@@ -103,6 +107,7 @@ function ProductDrawer({ id, onClose }: { id: string; onClose: () => void }) {
                     <td>{formatDate(m.date, { short: true })}</td>
                     <td>{m.reference}</td>
                     <td>{movementLabel(m.type)}</td>
+                    <td>{warehouseName(m.warehouseId)}</td>
                     <td className="tabular text-emerald-600">{m.stockIn ? `+${formatQty(m.stockIn)}` : '—'}</td>
                     <td className="tabular text-rose-600">{m.stockOut ? `-${formatQty(m.stockOut)}` : '—'}</td>
                     <td className="tabular">{formatQty(m.balance)}</td>
