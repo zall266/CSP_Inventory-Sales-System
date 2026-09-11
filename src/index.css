@@ -139,6 +139,10 @@ body {
     break-inside: avoid;
     page-break-inside: avoid;
   }
+  .a4-company-logo {
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
 }
 
 .a4-page {
@@ -177,4 +181,17 @@ body {
   min-height: 48px;
   border-bottom: 1px solid #94a3b8;
   margin-bottom: 6px;
+}
+
+.a4-company-logo {
+  width: 42mm;
+  max-width: 42mm;
+  height: 22mm;
+  max-height: 22mm;
+  object-fit: contain;
+  object-position: left center;
+  flex-shrink: 0;
+  display: block;
+  -webkit-print-color-adjust: exact;
+  print-color-adjust: exact;
 }

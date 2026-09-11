@@ -9,6 +9,7 @@ export function companyProfile(settings: Settings) {
   return {
     name: settings.businessName || demoBusiness.name,
     legalName: settings.legalName || demoBusiness.legalName,
+    logoUrl: settings.logoUrl || '',
     address: settings.address || 'Address not set',
     phone: settings.phone || '—',
     email: settings.email || '—',

@@ -23,9 +23,13 @@ export function CompanyHeader({ settings }: { settings: Settings }) {
     .join('')
   return (
     <div className="flex gap-4 border-b-2 border-slate-800 pb-3">
-      <div className="flex h-14 w-14 shrink-0 items-center justify-center bg-slate-800 text-sm font-bold tracking-wide text-white">
-        {initials || 'CS'}
-      </div>
+      {company.logoUrl ? (
+        <img src={company.logoUrl} alt="" className="a4-company-logo" />
+      ) : (
+        <div className="flex h-14 w-14 shrink-0 items-center justify-center bg-slate-800 text-sm font-bold tracking-wide text-white">
+          {initials || 'CS'}
+        </div>
+      )}
       <div className="min-w-0">
         <div className="text-lg font-bold uppercase tracking-[0.08em] text-slate-900">{company.name}</div>
         {company.legalName && <div className="text-[11px] font-medium uppercase tracking-[0.12em] text-slate-600">{company.legalName}</div>}
