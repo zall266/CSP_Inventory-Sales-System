@@ -5,7 +5,7 @@ export function ToastViewport() {
   const toasts = useStore().ui.toasts
   const api = useApi()
   return (
-    <div className="pointer-events-none fixed bottom-4 right-4 z-[80] flex w-[min(100%-2rem,360px)] flex-col gap-2">
+    <div className="sf-toast pointer-events-none no-print fixed bottom-4 right-4 z-[80] flex w-[min(100%-2rem,360px)] flex-col gap-2">
       {toasts.map((toast) => (
         <button
           key={toast.id}

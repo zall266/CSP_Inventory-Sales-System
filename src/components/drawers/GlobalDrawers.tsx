@@ -6,6 +6,7 @@ import { useApi, useLookups, useStore, customerOutstanding, customerSalesTotal, 
 import { formatDate, formatMoney, formatQty } from '@/utils/format'
 import { BomDetail } from '@/features/manufacturing/BomPages'
 import { ProductionOrderDetail } from '@/features/manufacturing/ProductionOrdersPage'
+import { hasPermission } from '@/features/settings/permissions'
 
 export function GlobalDrawers() {
   const drawer = useStore().ui.drawer
@@ -295,11 +296,17 @@ function SaleDrawer({ id, onClose }: { id: string; onClose: () => void }) {
         </div>
         <div className="space-y-2 border-t border-slate-100 bg-slate-50 p-4 lg:border-l lg:border-t-0">
           <div className="mb-3 text-xs font-semibold uppercase tracking-wide text-slate-400">Actions</div>
-          <Button className="w-full" variant="secondary" onClick={() => window.print()}>Print</Button>
+          <Button className="w-full" variant="secondary" onClick={() => { onClose(); navigate(`/sales/invoices/${sale.id}`) }}>Official invoice</Button>
+          {hasPermission(state, 'sales.invoice.print') || hasPermission(state, 'sales.invoice.view') || hasPermission(state, 'sales.view') ? (
+            <Button className="w-full" variant="secondary" onClick={() => { onClose(); navigate(`/print/invoice/${sale.id}`) }}>Preview / Print</Button>
+          ) : null}
           <Button className="w-full" variant="secondary" onClick={() => { onClose(); navigate(`/sales-returns?invoice=${sale.invoiceNo}`) }}>Return</Button>
           <Button className="w-full" variant="danger" disabled={sale.status === 'voided'} onClick={() => { api.voidSale(sale.id); onClose() }}>Void</Button>
           {sale.balance > 0 && sale.status !== 'voided' && (
-            <Button className="w-full" onClick={() => api.openModal('payment')}>Record Payment</Button>
+            <Button className="w-full" onClick={() => api.openPaymentForSale(sale.id)}>Record Payment</Button>
+          )}
+          {hasPermission(state, 'sales.delivery.create') && sale.status !== 'voided' && (
+            <Button className="w-full" variant="secondary" onClick={() => { onClose(); navigate(`/sales/delivery-orders/new?invoice=${sale.id}`) }}>Create DO</Button>
           )}
         </div>
       </div>

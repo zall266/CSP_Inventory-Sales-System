@@ -23,13 +23,29 @@ import { TodaysProductionPage } from '@/features/manufacturing/TodaysProductionP
 import { CompleteProductionPage } from '@/features/manufacturing/CompleteProductionPage'
 import { PickingListPage } from '@/features/manufacturing/PickingListPage'
 
+import { QuotationsPage, QuotationEditorPage, QuotationDetailPage, QuotationPrintPage } from '@/features/documents/QuotationPages'
+import { InvoiceDetailPage, InvoicePrintPage } from '@/features/documents/InvoicePages'
+import { DeliveryOrdersPage, DeliveryEditorPage, DeliveryDetailPage, DeliveryPrintPage } from '@/features/documents/DeliveryPages'
+
 export default function App() {
   return (
     <BrowserRouter>
       <Routes>
+        <Route path="/print/quotation/:id" element={<QuotationPrintPage />} />
+        <Route path="/print/invoice/:id" element={<InvoicePrintPage />} />
+        <Route path="/print/delivery/:id" element={<DeliveryPrintPage />} />
         <Route element={<AppLayout />}>
           <Route path="/" element={<DashboardPage />} />
           <Route path="/sales" element={<SalesPage />} />
+          <Route path="/sales/quotations" element={<QuotationsPage />} />
+          <Route path="/sales/quotations/new" element={<QuotationEditorPage />} />
+          <Route path="/sales/quotations/:id/edit" element={<QuotationEditorPage />} />
+          <Route path="/sales/quotations/:id" element={<QuotationDetailPage />} />
+          <Route path="/sales/invoices/:id" element={<InvoiceDetailPage />} />
+          <Route path="/sales/delivery-orders" element={<DeliveryOrdersPage />} />
+          <Route path="/sales/delivery-orders/new" element={<DeliveryEditorPage />} />
+          <Route path="/sales/delivery-orders/:id/edit" element={<DeliveryEditorPage />} />
+          <Route path="/sales/delivery-orders/:id" element={<DeliveryDetailPage />} />
           <Route path="/pos" element={<PosPage />} />
           <Route path="/sales-returns" element={<SalesReturnsPage />} />
           <Route path="/customers" element={<CustomersPage />} />

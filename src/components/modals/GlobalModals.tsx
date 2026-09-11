@@ -1,4 +1,4 @@
-import { useState, type FormEvent } from 'react'
+import { useEffect, useState, type FormEvent } from 'react'
 import { Button, Field, Input, Modal, Select, Textarea, Toggle } from '@/components/ui'
 import { useApi, useStore } from '@/store/hooks'
 import type { ExpenseCategory, PaymentMethod, ProductStatus, UserStatus } from '@/types'
@@ -121,7 +121,7 @@ export function ProductModal({ open, onClose }: { open: boolean; onClose: () => 
 
 function CustomerModal({ open, onClose }: { open: boolean; onClose: () => void }) {
   const api = useApi()
-  const [form, setForm] = useState({ name: '', phone: '', email: '' })
+  const [form, setForm] = useState({ name: '', phone: '', email: '', address: '' })
   return (
     <Modal open={open} onClose={onClose} title="Add Customer">
       <form
@@ -129,13 +129,14 @@ function CustomerModal({ open, onClose }: { open: boolean; onClose: () => void }
         onSubmit={(event) => {
           event.preventDefault()
           api.createCustomer(form)
-          setForm({ name: '', phone: '', email: '' })
+          setForm({ name: '', phone: '', email: '', address: '' })
           onClose()
         }}
       >
         <Field label="Name"><Input required value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} /></Field>
         <Field label="Phone"><Input value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} /></Field>
         <Field label="Email"><Input type="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} /></Field>
+        <Field label="Address"><Input value={form.address} onChange={(e) => setForm({ ...form, address: e.target.value })} /></Field>
         <div className="flex justify-end gap-2">
           <Button type="button" variant="secondary" onClick={onClose}>Cancel</Button>
           <Button type="submit">Save customer</Button>
@@ -277,6 +278,13 @@ function PaymentModal({ open, onClose }: { open: boolean; onClose: () => void })
   const [invoiceId, setInvoiceId] = useState(receivables[0]?.id ?? '')
   const [method, setMethod] = useState<PaymentMethod>('cash')
   const [amount, setAmount] = useState(0)
+  useEffect(() => {
+    if (!open) return
+    if (state.ui.payInvoiceId) {
+      setKind('customer')
+      setInvoiceId(state.ui.payInvoiceId)
+    }
+  }, [open, state.ui.payInvoiceId])
   const options = kind === 'customer' ? receivables : payables
   const selected = kind === 'customer'
     ? receivables.find((s) => s.id === invoiceId)

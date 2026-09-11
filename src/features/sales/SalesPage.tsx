@@ -35,7 +35,7 @@ export function SalesPage() {
     <div>
       <PageHeader
         title="Sales"
-        subtitle="Invoices, payments and outstanding balances."
+        subtitle="Invoices, payments and outstanding balances. Use Preview for the official A4 invoice."
         actions={<Button onClick={() => navigate('/pos')}><Plus size={16} /> New sale</Button>}
       />
       <div className="mb-5 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
@@ -80,7 +80,7 @@ export function SalesPage() {
             <tbody>
               {rows.map((sale) => (
                 <tr key={sale.id} onClick={() => api.openDrawer({ type: 'sale', id: sale.id })}>
-                  <td className="font-medium text-indigo-700">{sale.invoiceNo}</td>
+                  <td className="font-medium text-indigo-700" onClick={(e) => { e.stopPropagation(); navigate(`/sales/invoices/${sale.id}`) }}>{sale.invoiceNo}</td>
                   <td>{formatDate(sale.date)}</td>
                   <td>{customerName(sale.customerId)}</td>
                   <td>{sale.items.reduce((s, i) => s + i.qty, 0)}</td>

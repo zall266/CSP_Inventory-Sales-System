@@ -6,6 +6,24 @@ export const PERMISSION_KEYS: PermissionKey[] = [
   'sales.create',
   'sales.edit',
   'sales.void',
+  'sales.quotation.view',
+  'sales.quotation.create',
+  'sales.quotation.edit',
+  'sales.quotation.issue',
+  'sales.quotation.cancel',
+  'sales.quotation.print',
+  'sales.invoice.view',
+  'sales.invoice.create',
+  'sales.invoice.edit',
+  'sales.invoice.issue',
+  'sales.invoice.cancel',
+  'sales.invoice.print',
+  'sales.delivery.view',
+  'sales.delivery.create',
+  'sales.delivery.edit',
+  'sales.delivery.issue',
+  'sales.delivery.cancel',
+  'sales.delivery.print',
   'purchases.view',
   'purchases.create',
   'purchases.edit',
@@ -44,7 +62,34 @@ export const PERMISSION_KEYS: PermissionKey[] = [
 
 export const PERMISSION_GROUPS: Array<{ id: string; label: string; keys: PermissionKey[] }> = [
   { id: 'dashboard', label: 'Dashboard', keys: ['dashboard.view'] },
-  { id: 'sales', label: 'Sales', keys: ['sales.view', 'sales.create', 'sales.edit', 'sales.void'] },
+  {
+    id: 'sales',
+    label: 'Sales',
+    keys: [
+      'sales.view',
+      'sales.create',
+      'sales.edit',
+      'sales.void',
+      'sales.quotation.view',
+      'sales.quotation.create',
+      'sales.quotation.edit',
+      'sales.quotation.issue',
+      'sales.quotation.cancel',
+      'sales.quotation.print',
+      'sales.invoice.view',
+      'sales.invoice.create',
+      'sales.invoice.edit',
+      'sales.invoice.issue',
+      'sales.invoice.cancel',
+      'sales.invoice.print',
+      'sales.delivery.view',
+      'sales.delivery.create',
+      'sales.delivery.edit',
+      'sales.delivery.issue',
+      'sales.delivery.cancel',
+      'sales.delivery.print',
+    ],
+  },
   { id: 'purchases', label: 'Purchases', keys: ['purchases.view', 'purchases.create', 'purchases.edit', 'purchases.delete'] },
   { id: 'inventory', label: 'Inventory', keys: ['inventory.view', 'inventory.adjust', 'inventory.transfer', 'inventory.count'] },
   {
@@ -73,6 +118,24 @@ export const PERMISSION_LABELS: Record<PermissionKey, string> = {
   'sales.create': 'Create Sale',
   'sales.edit': 'Edit Sale',
   'sales.void': 'Void Sale',
+  'sales.quotation.view': 'View Quotations',
+  'sales.quotation.create': 'Create Quotation',
+  'sales.quotation.edit': 'Edit Quotation',
+  'sales.quotation.issue': 'Issue Quotation',
+  'sales.quotation.cancel': 'Cancel Quotation',
+  'sales.quotation.print': 'Print Quotation',
+  'sales.invoice.view': 'View Invoices',
+  'sales.invoice.create': 'Create Invoice',
+  'sales.invoice.edit': 'Edit Invoice',
+  'sales.invoice.issue': 'Issue Invoice',
+  'sales.invoice.cancel': 'Cancel Invoice',
+  'sales.invoice.print': 'Print Invoice',
+  'sales.delivery.view': 'View Delivery Orders',
+  'sales.delivery.create': 'Create Delivery Order',
+  'sales.delivery.edit': 'Edit Delivery Order',
+  'sales.delivery.issue': 'Issue Delivery Order',
+  'sales.delivery.cancel': 'Cancel Delivery Order',
+  'sales.delivery.print': 'Print Delivery Order',
   'purchases.view': 'View Purchases',
   'purchases.create': 'Create Purchase',
   'purchases.edit': 'Edit Purchase',
@@ -124,6 +187,26 @@ function withKeys(keys: PermissionKey[]): RolePermissions {
 }
 
 const SALES_CORE: PermissionKey[] = ['sales.view', 'sales.create', 'sales.edit']
+const DOCUMENT_KEYS: PermissionKey[] = [
+  'sales.quotation.view',
+  'sales.quotation.create',
+  'sales.quotation.edit',
+  'sales.quotation.issue',
+  'sales.quotation.cancel',
+  'sales.quotation.print',
+  'sales.invoice.view',
+  'sales.invoice.create',
+  'sales.invoice.edit',
+  'sales.invoice.issue',
+  'sales.invoice.cancel',
+  'sales.invoice.print',
+  'sales.delivery.view',
+  'sales.delivery.create',
+  'sales.delivery.edit',
+  'sales.delivery.issue',
+  'sales.delivery.cancel',
+  'sales.delivery.print',
+]
 const PURCHASES_ALL: PermissionKey[] = ['purchases.view', 'purchases.create', 'purchases.edit', 'purchases.delete']
 const INVENTORY_ALL: PermissionKey[] = ['inventory.view', 'inventory.adjust', 'inventory.transfer', 'inventory.count']
 const MFG_RUN: PermissionKey[] = [
@@ -143,6 +226,7 @@ export function defaultPermissionsForLegacy(role: UserRole): RolePermissions {
       'dashboard.view',
       ...SALES_CORE,
       'sales.void',
+      ...DOCUMENT_KEYS,
       ...PURCHASES_ALL,
       ...INVENTORY_ALL,
       ...MFG_RUN,
@@ -155,19 +239,31 @@ export function defaultPermissionsForLegacy(role: UserRole): RolePermissions {
     return withKeys([
       'dashboard.view',
       ...SALES_CORE,
+      ...DOCUMENT_KEYS,
       'inventory.view',
       ...MFG_RUN,
       'reports.view',
     ])
   }
   if (role === 'cashier') {
-    return withKeys([...SALES_CORE])
+    return withKeys([
+      ...SALES_CORE,
+      'sales.invoice.view',
+      'sales.invoice.print',
+      'sales.quotation.view',
+      'sales.quotation.print',
+    ])
   }
   return withKeys([
     'dashboard.view',
     ...PURCHASES_ALL,
     ...INVENTORY_ALL,
     ...MFG_RUN,
+    'sales.delivery.view',
+    'sales.delivery.create',
+    'sales.delivery.edit',
+    'sales.delivery.issue',
+    'sales.delivery.print',
   ])
 }
 

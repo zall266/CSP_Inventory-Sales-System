@@ -97,6 +97,7 @@ export type Customer = {
   name: string
   phone: string
   email: string
+  address?: string
   status: PartyStatus
 }
 
@@ -118,6 +119,7 @@ export type LineItem = {
   returnedQty: number
   batchNo?: string
   expiry?: string
+  description?: string
 }
 
 export type Sale = {
@@ -137,6 +139,99 @@ export type Sale = {
   status: SaleStatus
   paymentMethod?: PaymentMethod
   notes?: string
+  reference?: string
+  quotationId?: string
+  quotationNo?: string
+  dueDate?: string
+  paymentTerms?: string
+}
+
+export type QuotationStatus = 'draft' | 'sent' | 'accepted' | 'rejected' | 'expired' | 'cancelled'
+export type DeliveryOrderStatus = 'draft' | 'issued' | 'delivered' | 'cancelled'
+
+export type DocumentLine = {
+  productId: string
+  description: string
+  qty: number
+  unit: string
+  price: number
+  discount: number
+  total: number
+}
+
+export type Quotation = {
+  id: string
+  quotationNo: string
+  date: string
+  validUntil: string
+  customerId: string
+  salesperson: string
+  reference: string
+  notes: string
+  terms: string
+  items: DocumentLine[]
+  subtotal: number
+  discount: number
+  tax: number
+  total: number
+  status: QuotationStatus
+  convertedSaleId?: string
+  convertedInvoiceNo?: string
+  createdAt: string
+  updatedAt: string
+}
+
+export type DeliveryOrder = {
+  id: string
+  doNo: string
+  date: string
+  customerId: string
+  deliveryAddress: string
+  contactPerson: string
+  contactNumber: string
+  saleId?: string
+  invoiceNo?: string
+  quotationId?: string
+  quotationNo?: string
+  transport: string
+  preparedBy: string
+  notes: string
+  items: Array<{ productId: string; description: string; qty: number; unit: string }>
+  status: DeliveryOrderStatus
+  createdAt: string
+  updatedAt: string
+}
+
+export type DocumentAuditAction =
+  | 'quotation_created'
+  | 'quotation_edited'
+  | 'quotation_issued'
+  | 'quotation_cancelled'
+  | 'quotation_converted'
+  | 'invoice_created'
+  | 'invoice_edited'
+  | 'invoice_issued'
+  | 'invoice_printed'
+  | 'invoice_cancelled'
+  | 'delivery_created'
+  | 'delivery_edited'
+  | 'delivery_issued'
+  | 'delivery_cancelled'
+  | 'delivery_delivered'
+  | 'quotation_printed'
+  | 'delivery_printed'
+
+export type DocumentAuditLog = {
+  id: string
+  action: DocumentAuditAction
+  documentType: 'quotation' | 'invoice' | 'delivery'
+  documentId: string
+  documentNo: string
+  field: string
+  oldValue: string
+  newValue: string
+  changedBy: string
+  changedAt: string
 }
 
 export type Purchase = {
@@ -467,6 +562,24 @@ export type PermissionKey =
   | 'sales.create'
   | 'sales.edit'
   | 'sales.void'
+  | 'sales.quotation.view'
+  | 'sales.quotation.create'
+  | 'sales.quotation.edit'
+  | 'sales.quotation.issue'
+  | 'sales.quotation.cancel'
+  | 'sales.quotation.print'
+  | 'sales.invoice.view'
+  | 'sales.invoice.create'
+  | 'sales.invoice.edit'
+  | 'sales.invoice.issue'
+  | 'sales.invoice.cancel'
+  | 'sales.invoice.print'
+  | 'sales.delivery.view'
+  | 'sales.delivery.create'
+  | 'sales.delivery.edit'
+  | 'sales.delivery.issue'
+  | 'sales.delivery.cancel'
+  | 'sales.delivery.print'
   | 'purchases.view'
   | 'purchases.create'
   | 'purchases.edit'
@@ -507,9 +620,16 @@ export type RoleMatrix = Record<string, RolePermissions>
 
 export type Settings = {
   businessName: string
+  legalName: string
   phone: string
   email: string
   address: string
+  website: string
+  registrationNo: string
+  bankName: string
+  bankAccount: string
+  paymentTerms: string
+  documentTerms: string
   currency: string
   defaultWarehouseId: string
   allowNegativeStock: boolean
@@ -540,6 +660,8 @@ export type DrawerState =
   | { type: 'bom'; id: string }
   | { type: 'production'; id: string }
   | { type: 'session'; id: string }
+  | { type: 'quotation'; id: string }
+  | { type: 'delivery'; id: string }
   | null
 
 export type QuickModal =
@@ -564,6 +686,7 @@ export type UiState = {
   customFrom: string
   customTo: string
   currentUserId: string
+  payInvoiceId?: string
 }
 
 export type AppData = {
@@ -575,6 +698,9 @@ export type AppData = {
   customers: Customer[]
   suppliers: Supplier[]
   sales: Sale[]
+  quotations: Quotation[]
+  deliveryOrders: DeliveryOrder[]
+  documentAuditLogs: DocumentAuditLog[]
   purchases: Purchase[]
   salesReturns: SalesReturn[]
   purchaseReturns: PurchaseReturn[]
@@ -616,13 +742,48 @@ export type SaleInput = {
   customerId: string
   warehouseId: string
   salesperson?: string
-  items: Array<{ productId: string; qty: number; price: number; discount?: number }>
+  items: Array<{ productId: string; qty: number; price: number; discount?: number; description?: string }>
   discount?: number
   tax?: number
   paymentMethod?: PaymentMethod
   paidAmount?: number
   notes?: string
+  reference?: string
   date?: string
+  datedInvoiceNo?: boolean
+  quotationId?: string
+  quotationNo?: string
+  dueDate?: string
+  paymentTerms?: string
+}
+
+export type QuotationInput = {
+  customerId: string
+  date?: string
+  validUntil?: string
+  salesperson?: string
+  reference?: string
+  notes?: string
+  terms?: string
+  items: Array<{ productId: string; description?: string; qty: number; unit?: string; price: number; discount?: number }>
+  discount?: number
+  tax?: number
+  status?: QuotationStatus
+}
+
+export type DeliveryOrderInput = {
+  customerId: string
+  date?: string
+  deliveryAddress?: string
+  contactPerson?: string
+  contactNumber?: string
+  saleId?: string
+  quotationId?: string
+  transport?: string
+  preparedBy?: string
+  notes?: string
+  items: Array<{ productId: string; description?: string; qty: number; unit?: string }>
+  status?: DeliveryOrderStatus
 }
 
 export type BomInput = {
