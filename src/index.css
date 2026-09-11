@@ -95,6 +95,86 @@ body {
     display: none !important;
   }
   body {
-    background: #fff;
+    background: #fff !important;
   }
+  html.print-blocked .a4-page {
+    display: none !important;
+  }
+  html.print-blocked body::before {
+    content: 'Print permission required';
+    display: block;
+    padding: 24px;
+    font-size: 14px;
+  }
+  @page {
+    size: A4 portrait;
+    margin: 14mm 12mm 18mm;
+    @bottom-center {
+      content: 'Page ' counter(page) ' of ' counter(pages);
+      font-size: 9pt;
+      color: #64748b;
+    }
+  }
+  header,
+  aside,
+  .sf-toast,
+  .sf-drawer-root {
+    display: none !important;
+  }
+  main {
+    padding: 0 !important;
+  }
+  .a4-page {
+    width: auto !important;
+    min-height: auto !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    box-shadow: none !important;
+    border: 0 !important;
+  }
+  .a4-table thead {
+    display: table-header-group;
+  }
+  .a4-avoid-break {
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+}
+
+.a4-page {
+  width: 210mm;
+  min-height: 297mm;
+  padding: 14mm 12mm;
+  background: #fff;
+  color: #0f172a;
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.a4-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.a4-table th {
+  text-align: left;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: #334155;
+  border-bottom: 1px solid #0f172a;
+  padding: 6px 4px;
+}
+
+.a4-table td {
+  padding: 6px 4px;
+  border-bottom: 1px solid #e2e8f0;
+  vertical-align: top;
+}
+
+.a4-sign {
+  min-height: 48px;
+  border-bottom: 1px solid #94a3b8;
+  margin-bottom: 6px;
 }

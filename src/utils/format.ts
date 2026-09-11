@@ -98,6 +98,29 @@ export function nextDocNo(existing: string[], prefix: string, pad = 6) {
   return `${prefix}${String(max + 1).padStart(pad, '0')}`
 }
 
+export function nextDatedDocNo(existing: string[], prefix: string, iso = PROTOTYPE_TODAY.toISOString()) {
+  const stamp = ymdCompact(iso)
+  const full = `${prefix}${stamp}-`
+  let max = 0
+  for (const value of existing) {
+    if (!value.startsWith(full)) continue
+    const n = Number(value.slice(full.length))
+    if (!Number.isNaN(n)) max = Math.max(max, n)
+  }
+  return `${full}${String(max + 1).padStart(3, '0')}`
+}
+
+export function ymdCompact(iso: string) {
+  const parts = new Intl.DateTimeFormat('en-GB', {
+    timeZone: 'Asia/Kuala_Lumpur',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(new Date(iso))
+  const pick = (type: string) => parts.find((part) => part.type === type)?.value ?? ''
+  return `${pick('year')}${pick('month')}${pick('day')}`
+}
+
 export function downloadCsv(filename: string, rows: Array<Array<string | number>>) {
   const csv = rows
     .map((row) =>

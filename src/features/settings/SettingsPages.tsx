@@ -1,4 +1,4 @@
-import { Button, Card, Field, Input, PageHeader, Select, Toggle } from '@/components/ui'
+import { Button, Card, Field, Input, PageHeader, Select, Textarea, Toggle } from '@/components/ui'
 import { useApi, useStore } from '@/store/hooks'
 import type { PaymentMethod } from '@/types'
 
@@ -13,10 +13,17 @@ export function BusinessSettingsPage() {
       <PageHeader title="Business Settings" subtitle="Branding and company profile for documents." />
       <Card className="space-y-4 p-6">
         <Field label="Business name"><Input value={s.businessName} onChange={(e) => api.updateSettings({ businessName: e.target.value })} /></Field>
-        <Field label="Logo"><div className="rounded-xl border border-dashed border-slate-200 px-4 py-6 text-sm text-slate-400">Preview only — logo upload will be enabled in production.</div></Field>
+        <Field label="Legal name"><Input value={s.legalName ?? ''} onChange={(e) => api.updateSettings({ legalName: e.target.value })} /></Field>
+        <Field label="Logo"><div className="rounded-xl border border-dashed border-slate-200 px-4 py-6 text-sm text-slate-400">Preview only — logo upload will be enabled in production. Documents use the company initials until then.</div></Field>
         <Field label="Phone"><Input value={s.phone} onChange={(e) => api.updateSettings({ phone: e.target.value })} /></Field>
         <Field label="Email"><Input value={s.email} onChange={(e) => api.updateSettings({ email: e.target.value })} /></Field>
+        <Field label="Website"><Input value={s.website ?? ''} placeholder="Optional" onChange={(e) => api.updateSettings({ website: e.target.value })} /></Field>
+        <Field label="Registration number"><Input value={s.registrationNo ?? ''} placeholder="Leave blank if not configured" onChange={(e) => api.updateSettings({ registrationNo: e.target.value })} /></Field>
         <Field label="Address"><Input value={s.address} onChange={(e) => api.updateSettings({ address: e.target.value })} /></Field>
+        <Field label="Payment terms"><Input value={s.paymentTerms ?? ''} onChange={(e) => api.updateSettings({ paymentTerms: e.target.value })} /></Field>
+        <Field label="Bank name"><Input value={s.bankName ?? ''} placeholder="Optional" onChange={(e) => api.updateSettings({ bankName: e.target.value })} /></Field>
+        <Field label="Bank account"><Input value={s.bankAccount ?? ''} placeholder="Optional" onChange={(e) => api.updateSettings({ bankAccount: e.target.value })} /></Field>
+        <Field label="Document terms"><Textarea rows={4} value={s.documentTerms ?? ''} onChange={(e) => api.updateSettings({ documentTerms: e.target.value })} /></Field>
         <Field label="Currency">
           <Select value={s.currency} onChange={(e) => api.updateSettings({ currency: e.target.value })}>
             <option value="MYR">MYR (RM)</option>

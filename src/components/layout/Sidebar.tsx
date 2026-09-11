@@ -47,6 +47,8 @@ export const navGroups: NavGroup[] = [
     label: 'SALES',
     items: [
       { to: '/sales', label: 'Sales', icon: Receipt },
+      { to: '/sales/quotations', label: 'Quotations', icon: FileText },
+      { to: '/sales/delivery-orders', label: 'Delivery Orders', icon: Truck },
       { to: '/pos', label: 'POS', icon: ShoppingCart },
       { to: '/sales-returns', label: 'Sales Returns', icon: PackageMinus },
       { to: '/customers', label: 'Customers', icon: Users },
@@ -127,6 +129,7 @@ export const navGroups: NavGroup[] = [
 
 function pathActive(pathname: string, to: string) {
   if (to === '/') return pathname === '/'
+  if (to === '/sales') return pathname === '/sales' || pathname.startsWith('/sales/invoices')
   if (to === '/manufacturing') return pathname === '/manufacturing'
   if (to === '/manufacturing/today') return pathname === '/manufacturing/today' || pathname.startsWith('/manufacturing/today/')
   return pathname === to || pathname.startsWith(`${to}/`)

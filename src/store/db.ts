@@ -24,11 +24,17 @@ import {
   canManagePermissions,
   canRenameRole,
 } from '@/features/settings/userPermissions'
+import { buildDocumentLines, DEFAULT_DOCUMENT_TERMS, defaultDueDate, totalsFromLines } from '@/features/documents/documentModel'
 import type {
   AppData,
   AppState,
   AdjustmentType,
   BomInput,
+  DeliveryOrder,
+  DeliveryOrderInput,
+  DeliveryOrderStatus,
+  DocumentAuditAction,
+  DocumentAuditLog,
   DrawerState,
   Expense,
   ExpenseCategory,
@@ -43,6 +49,9 @@ import type {
   PurchaseInput,
   PurchaseStatus,
   QuickModal,
+  Quotation,
+  QuotationInput,
+  QuotationStatus,
   Role,
   RolePermissions,
   RoleStatus,
@@ -58,9 +67,9 @@ import type {
   UserStatus,
   WastageKind,
 } from '@/types'
-import { nextDocNo, PROTOTYPE_TODAY, round2, stockStatus, uid } from '@/utils/format'
+import { nextDatedDocNo, nextDocNo, PROTOTYPE_TODAY, round2, stockStatus, uid } from '@/utils/format'
 
-const STORAGE_KEY = 'stockflow-prototype-v7'
+const STORAGE_KEY = 'stockflow-prototype-v8'
 
 const defaultUi = (): UiState => ({
   toasts: [],
@@ -104,10 +113,29 @@ function persist(data: AppData) {
   }
 }
 
+function hydrateData(data: AppData): AppData {
+  return {
+    ...data,
+    quotations: data.quotations ?? [],
+    deliveryOrders: data.deliveryOrders ?? [],
+    documentAuditLogs: data.documentAuditLogs ?? [],
+    settings: {
+      ...data.settings,
+      legalName: data.settings.legalName ?? '',
+      website: data.settings.website ?? '',
+      registrationNo: data.settings.registrationNo ?? '',
+      bankName: data.settings.bankName ?? '',
+      bankAccount: data.settings.bankAccount ?? '',
+      paymentTerms: data.settings.paymentTerms ?? 'Net 7 days',
+      documentTerms: data.settings.documentTerms ?? DEFAULT_DOCUMENT_TERMS,
+    },
+  }
+}
+
 let seed = createSeedData()
 const loaded = loadPersisted()
 let state: AppState = {
-  ...(loaded?.data ?? cloneData(seed)),
+  ...hydrateData(loaded?.data ?? cloneData(seed)),
   ui: {
     ...defaultUi(),
     currentUserId: loaded?.currentUserId && (loaded.data.users ?? seed.users).some((user) => user.id === loaded.currentUserId)
@@ -163,6 +191,33 @@ function makeAudit(input: {
 function uniqueRoleName(name: string, excludeId?: string) {
   const needle = name.trim().toLowerCase()
   return !state.roles.some((role) => role.id !== excludeId && role.name.trim().toLowerCase() === needle)
+}
+
+function makeDocAudit(input: {
+  action: DocumentAuditAction
+  documentType: DocumentAuditLog['documentType']
+  documentId: string
+  documentNo: string
+  field?: string
+  oldValue?: string
+  newValue?: string
+}): DocumentAuditLog {
+  return {
+    id: uid('dal'),
+    action: input.action,
+    documentType: input.documentType,
+    documentId: input.documentId,
+    documentNo: input.documentNo,
+    field: input.field ?? '',
+    oldValue: input.oldValue ?? '',
+    newValue: input.newValue ?? '',
+    changedBy: currentUser(state).name,
+    changedAt: nowIso(),
+  }
+}
+
+function pushDocAudit(log: DocumentAuditLog) {
+  return [log, ...(state.documentAuditLogs ?? [])]
 }
 
 function getQty(productId: string, warehouseId: string) {
@@ -233,7 +288,7 @@ function notify(type: AppState['notifications'][number]['type'], title: string, 
 }
 
 function makeLines(
-  items: Array<{ productId: string; qty: number; price: number; discount?: number; batchNo?: string; expiry?: string }>,
+  items: Array<{ productId: string; qty: number; price: number; discount?: number; batchNo?: string; expiry?: string; description?: string }>,
 ): LineItem[] {
   return items.map((item) => ({
     productId: item.productId,
@@ -244,6 +299,7 @@ function makeLines(
     returnedQty: 0,
     batchNo: item.batchNo,
     expiry: item.expiry,
+    description: item.description,
   }))
 }
 
@@ -280,7 +336,10 @@ export const db = {
     setUi({ quickModal, mobileNavOpen: false })
   },
   closeModal() {
-    setUi({ quickModal: null })
+    setUi({ quickModal: null, payInvoiceId: undefined })
+  },
+  openPaymentForSale(invoiceId: string) {
+    setUi({ quickModal: 'payment', payInvoiceId: invoiceId })
   },
   setWarehouseFilter(warehouseFilter: string) {
     setUi({ warehouseFilter })
@@ -384,8 +443,8 @@ export const db = {
     toast('Category renamed')
   },
 
-  createCustomer(input: { name: string; phone: string; email: string }) {
-    const customer = { id: uid('cus'), status: 'active' as const, ...input }
+  createCustomer(input: { name: string; phone: string; email: string; address?: string }) {
+    const customer = { id: uid('cus'), status: 'active' as const, address: input.address ?? '', ...input }
     setData({ customers: [customer, ...state.customers] })
     toast('Customer added', customer.name)
     return customer
@@ -737,6 +796,388 @@ export const db = {
     setData({ settings: { ...state.settings, ...patch } })
   },
 
+  createQuotation(input: QuotationInput) {
+    if (!hasPermission(state, 'sales.quotation.create')) {
+      toast('Permission denied', 'You cannot create quotations.', 'danger')
+      return null
+    }
+    const customer = state.customers.find((item) => item.id === input.customerId)
+    if (!customer) {
+      toast('Select a customer', undefined, 'warning')
+      return null
+    }
+    const items = buildDocumentLines(state, input.items)
+    if (!items.length) {
+      toast('Add at least one item', undefined, 'warning')
+      return null
+    }
+    const date = input.date ?? nowIso()
+    const totals = totalsFromLines(items, input.discount ?? 0, input.tax ?? 0)
+    const quotation: Quotation = {
+      id: uid('qt'),
+      quotationNo: nextDatedDocNo((state.quotations ?? []).map((row) => row.quotationNo), 'QT-', date),
+      date,
+      validUntil: input.validUntil ?? defaultDueDate(date, 14),
+      customerId: customer.id,
+      salesperson: input.salesperson ?? currentUser(state).name,
+      reference: input.reference?.trim() ?? '',
+      notes: input.notes?.trim() ?? '',
+      terms: input.terms?.trim() || state.settings.documentTerms,
+      items,
+      ...totals,
+      status: input.status ?? 'draft',
+      createdAt: nowIso(),
+      updatedAt: nowIso(),
+    }
+    setData({
+      quotations: [quotation, ...(state.quotations ?? [])],
+      documentAuditLogs: pushDocAudit(
+        makeDocAudit({
+          action: 'quotation_created',
+          documentType: 'quotation',
+          documentId: quotation.id,
+          documentNo: quotation.quotationNo,
+          newValue: `${customer.name} · ${quotation.total}`,
+        }),
+      ),
+    })
+    toast('Quotation created', quotation.quotationNo)
+    return quotation
+  },
+
+  updateQuotation(id: string, input: QuotationInput) {
+    if (!hasPermission(state, 'sales.quotation.edit')) {
+      toast('Permission denied', 'You cannot edit quotations.', 'danger')
+      return false
+    }
+    const current = (state.quotations ?? []).find((item) => item.id === id)
+    if (!current) return false
+    if (current.status === 'cancelled' || current.convertedSaleId) {
+      toast('This quotation cannot be edited', undefined, 'warning')
+      return false
+    }
+    const items = buildDocumentLines(state, input.items)
+    if (!items.length) {
+      toast('Add at least one item', undefined, 'warning')
+      return false
+    }
+    const totals = totalsFromLines(items, input.discount ?? 0, input.tax ?? 0)
+    setData({
+      quotations: state.quotations.map((item) =>
+        item.id === id
+          ? {
+              ...item,
+              customerId: input.customerId || item.customerId,
+              validUntil: input.validUntil ?? item.validUntil,
+              salesperson: input.salesperson ?? item.salesperson,
+              reference: input.reference ?? item.reference,
+              notes: input.notes ?? item.notes,
+              terms: input.terms ?? item.terms,
+              items,
+              ...totals,
+              updatedAt: nowIso(),
+            }
+          : item,
+      ),
+      documentAuditLogs: pushDocAudit(
+        makeDocAudit({
+          action: 'quotation_edited',
+          documentType: 'quotation',
+          documentId: current.id,
+          documentNo: current.quotationNo,
+        }),
+      ),
+    })
+    toast('Quotation updated', current.quotationNo)
+    return true
+  },
+
+  setQuotationStatus(id: string, status: QuotationStatus) {
+    const current = (state.quotations ?? []).find((item) => item.id === id)
+    if (!current) return false
+    if (status === 'sent' && !hasPermission(state, 'sales.quotation.issue')) {
+      toast('Permission denied', 'You cannot issue quotations.', 'danger')
+      return false
+    }
+    if (status === 'cancelled' && !hasPermission(state, 'sales.quotation.cancel')) {
+      toast('Permission denied', 'You cannot cancel quotations.', 'danger')
+      return false
+    }
+    if (status !== 'sent' && status !== 'cancelled' && !hasPermission(state, 'sales.quotation.edit') && !hasPermission(state, 'sales.quotation.issue')) {
+      toast('Permission denied', 'You cannot update this quotation.', 'danger')
+      return false
+    }
+    const action: DocumentAuditAction =
+      status === 'sent' ? 'quotation_issued' : status === 'cancelled' ? 'quotation_cancelled' : 'quotation_edited'
+    setData({
+      quotations: state.quotations.map((item) => (item.id === id ? { ...item, status, updatedAt: nowIso() } : item)),
+      documentAuditLogs: pushDocAudit(
+        makeDocAudit({
+          action,
+          documentType: 'quotation',
+          documentId: current.id,
+          documentNo: current.quotationNo,
+          field: 'status',
+          oldValue: current.status,
+          newValue: status,
+        }),
+      ),
+    })
+    toast('Quotation updated', `${current.quotationNo} · ${status}`)
+    return true
+  },
+
+  convertQuotationToInvoice(id: string) {
+    if (!hasPermission(state, 'sales.invoice.create') && !hasPermission(state, 'sales.create')) {
+      toast('Permission denied', 'You cannot convert this quotation to an invoice.', 'danger')
+      return null
+    }
+    const quotation = (state.quotations ?? []).find((item) => item.id === id)
+    if (!quotation) return null
+    if (quotation.convertedSaleId) {
+      toast('Already converted', quotation.convertedInvoiceNo, 'info')
+      return state.sales.find((item) => item.id === quotation.convertedSaleId) ?? null
+    }
+    if (quotation.status === 'cancelled') {
+      toast('Cancelled quotations cannot be converted', undefined, 'warning')
+      return null
+    }
+    const sale = this.createSale({
+      customerId: quotation.customerId,
+      warehouseId: state.settings.defaultWarehouseId,
+      salesperson: quotation.salesperson,
+      items: quotation.items.map((line) => ({
+        productId: line.productId,
+        qty: line.qty,
+        price: line.price,
+        discount: line.discount,
+        description: line.description,
+      })),
+      discount: quotation.discount,
+      tax: quotation.tax,
+      paidAmount: 0,
+      notes: quotation.notes,
+      reference: quotation.reference,
+      datedInvoiceNo: true,
+      quotationId: quotation.id,
+      quotationNo: quotation.quotationNo,
+      dueDate: defaultDueDate(nowIso(), 7),
+      paymentTerms: state.settings.paymentTerms,
+    })
+    if (!sale) return null
+    setData({
+      quotations: state.quotations.map((item) =>
+        item.id === id
+          ? { ...item, status: 'accepted', convertedSaleId: sale.id, convertedInvoiceNo: sale.invoiceNo, updatedAt: nowIso() }
+          : item,
+      ),
+      documentAuditLogs: [
+        makeDocAudit({
+          action: 'quotation_converted',
+          documentType: 'quotation',
+          documentId: quotation.id,
+          documentNo: quotation.quotationNo,
+          oldValue: quotation.quotationNo,
+          newValue: sale.invoiceNo,
+        }),
+        makeDocAudit({
+          action: 'invoice_created',
+          documentType: 'invoice',
+          documentId: sale.id,
+          documentNo: sale.invoiceNo,
+          newValue: `From ${quotation.quotationNo}`,
+        }),
+        ...(state.documentAuditLogs ?? []),
+      ],
+    })
+    toast('Converted to invoice', sale.invoiceNo)
+    return sale
+  },
+
+  createDeliveryOrder(input: DeliveryOrderInput) {
+    if (!hasPermission(state, 'sales.delivery.create')) {
+      toast('Permission denied', 'You cannot create delivery orders.', 'danger')
+      return null
+    }
+    const customer = state.customers.find((item) => item.id === input.customerId)
+    if (!customer) {
+      toast('Select a customer', undefined, 'warning')
+      return null
+    }
+    const sale = input.saleId ? state.sales.find((item) => item.id === input.saleId) : undefined
+    const quotation = input.quotationId ? (state.quotations ?? []).find((item) => item.id === input.quotationId) : undefined
+    const items = (input.items.length
+      ? input.items
+      : sale
+        ? sale.items.map((line) => {
+            const product = state.products.find((row) => row.id === line.productId)
+            return {
+              productId: line.productId,
+              description: line.description || product?.name,
+              qty: line.qty,
+              unit: product?.unit,
+            }
+          })
+        : []
+    ).filter((line) => line.qty > 0 && line.productId)
+    if (!items.length) {
+      toast('Add at least one item', undefined, 'warning')
+      return null
+    }
+    const date = input.date ?? nowIso()
+    const order: DeliveryOrder = {
+      id: uid('do'),
+      doNo: nextDatedDocNo((state.deliveryOrders ?? []).map((row) => row.doNo), 'DO-', date),
+      date,
+      customerId: customer.id,
+      deliveryAddress: input.deliveryAddress?.trim() || customer.address || state.settings.address,
+      contactPerson: input.contactPerson?.trim() || customer.name,
+      contactNumber: input.contactNumber?.trim() || customer.phone,
+      saleId: sale?.id,
+      invoiceNo: sale?.invoiceNo,
+      quotationId: quotation?.id ?? sale?.quotationId,
+      quotationNo: quotation?.quotationNo ?? sale?.quotationNo,
+      transport: input.transport?.trim() ?? '',
+      preparedBy: input.preparedBy?.trim() || currentUser(state).name,
+      notes: input.notes?.trim() ?? '',
+      items: items.map((line) => ({
+        productId: line.productId,
+        description: line.description?.trim() || state.products.find((product) => product.id === line.productId)?.name || 'Item',
+        qty: line.qty,
+        unit: line.unit || state.products.find((product) => product.id === line.productId)?.unit || 'pcs',
+      })),
+      status: input.status ?? 'draft',
+      createdAt: nowIso(),
+      updatedAt: nowIso(),
+    }
+    setData({
+      deliveryOrders: [order, ...(state.deliveryOrders ?? [])],
+      documentAuditLogs: pushDocAudit(
+        makeDocAudit({
+          action: 'delivery_created',
+          documentType: 'delivery',
+          documentId: order.id,
+          documentNo: order.doNo,
+          newValue: order.invoiceNo || customer.name,
+        }),
+      ),
+    })
+    toast('Delivery order created', order.doNo)
+    return order
+  },
+
+  updateDeliveryOrder(id: string, input: Partial<DeliveryOrderInput>) {
+    if (!hasPermission(state, 'sales.delivery.edit')) {
+      toast('Permission denied', 'You cannot edit delivery orders.', 'danger')
+      return false
+    }
+    const current = (state.deliveryOrders ?? []).find((item) => item.id === id)
+    if (!current || current.status === 'cancelled' || current.status === 'delivered') {
+      toast('This delivery order cannot be edited', undefined, 'warning')
+      return false
+    }
+    const items = input.items
+      ? input.items
+          .filter((line) => line.qty > 0 && line.productId)
+          .map((line) => ({
+            productId: line.productId,
+            description: line.description?.trim() || state.products.find((product) => product.id === line.productId)?.name || 'Item',
+            qty: line.qty,
+            unit: line.unit || state.products.find((product) => product.id === line.productId)?.unit || 'pcs',
+          }))
+      : current.items
+    setData({
+      deliveryOrders: state.deliveryOrders.map((item) =>
+        item.id === id
+          ? {
+              ...item,
+              deliveryAddress: input.deliveryAddress ?? item.deliveryAddress,
+              contactPerson: input.contactPerson ?? item.contactPerson,
+              contactNumber: input.contactNumber ?? item.contactNumber,
+              transport: input.transport ?? item.transport,
+              notes: input.notes ?? item.notes,
+              items,
+              updatedAt: nowIso(),
+            }
+          : item,
+      ),
+      documentAuditLogs: pushDocAudit(
+        makeDocAudit({
+          action: 'delivery_edited',
+          documentType: 'delivery',
+          documentId: current.id,
+          documentNo: current.doNo,
+        }),
+      ),
+    })
+    toast('Delivery order updated', current.doNo)
+    return true
+  },
+
+  setDeliveryOrderStatus(id: string, status: DeliveryOrderStatus) {
+    const current = (state.deliveryOrders ?? []).find((item) => item.id === id)
+    if (!current) return false
+    if (status === 'issued' && !hasPermission(state, 'sales.delivery.issue')) {
+      toast('Permission denied', 'You cannot issue delivery orders.', 'danger')
+      return false
+    }
+    if (status === 'cancelled' && !hasPermission(state, 'sales.delivery.cancel')) {
+      toast('Permission denied', 'You cannot cancel delivery orders.', 'danger')
+      return false
+    }
+    if (status === 'delivered' && !hasPermission(state, 'sales.delivery.issue') && !hasPermission(state, 'sales.delivery.edit')) {
+      toast('Permission denied', 'You cannot mark this delivery order delivered.', 'danger')
+      return false
+    }
+    const action: DocumentAuditAction =
+      status === 'issued' ? 'delivery_issued' : status === 'cancelled' ? 'delivery_cancelled' : status === 'delivered' ? 'delivery_delivered' : 'delivery_edited'
+    setData({
+      deliveryOrders: state.deliveryOrders.map((item) => (item.id === id ? { ...item, status, updatedAt: nowIso() } : item)),
+      documentAuditLogs: pushDocAudit(
+        makeDocAudit({
+          action,
+          documentType: 'delivery',
+          documentId: current.id,
+          documentNo: current.doNo,
+          field: 'status',
+          oldValue: current.status,
+          newValue: status,
+        }),
+      ),
+    })
+    toast('Delivery order updated', `${current.doNo} · ${status}`)
+    return true
+  },
+
+  recordDocumentPrint(type: 'quotation' | 'invoice' | 'delivery', id: string) {
+    const key =
+      type === 'quotation' ? 'sales.quotation.print' : type === 'invoice' ? 'sales.invoice.print' : 'sales.delivery.print'
+    if (!hasPermission(state, key)) {
+      toast('Permission denied', 'You cannot print this document.', 'danger')
+      return false
+    }
+    const row =
+      type === 'quotation'
+        ? (state.quotations ?? []).find((item) => item.id === id)
+        : type === 'invoice'
+          ? state.sales.find((item) => item.id === id)
+          : (state.deliveryOrders ?? []).find((item) => item.id === id)
+    if (!row) return false
+    const documentNo = ('doNo' in row ? row.doNo : 'quotationNo' in row ? row.quotationNo : row.invoiceNo) || id
+    const action: DocumentAuditAction = type === 'quotation' ? 'quotation_printed' : type === 'invoice' ? 'invoice_printed' : 'delivery_printed'
+    setData({
+      documentAuditLogs: pushDocAudit(
+        makeDocAudit({
+          action,
+          documentType: type,
+          documentId: id,
+          documentNo,
+        }),
+      ),
+    })
+    return true
+  },
+
   createSale(input: SaleInput) {
     const items = makeLines(input.items).filter((item) => item.qty > 0)
     if (!items.length) {
@@ -760,15 +1201,17 @@ export const db = {
     const total = round2(subtotal - discount + tax)
     const paidAmount = Math.min(input.paidAmount ?? 0, total)
     const balance = round2(total - paidAmount)
-    const invoiceNo = nextDocNo(state.sales.map((s) => s.invoiceNo), 'INV-')
     const date = input.date ?? nowIso()
+    const invoiceNo = input.datedInvoiceNo
+      ? nextDatedDocNo(state.sales.map((s) => s.invoiceNo), 'INV-', date)
+      : nextDocNo(state.sales.map((s) => s.invoiceNo), 'INV-')
     const sale = {
       id: uid('sal'),
       invoiceNo,
       date,
       customerId: input.customerId,
       warehouseId,
-      salesperson: input.salesperson ?? CURRENT_USER.name,
+      salesperson: input.salesperson ?? currentUser(state).name,
       items,
       subtotal,
       discount,
@@ -779,6 +1222,11 @@ export const db = {
       status: (paidAmount >= total ? 'paid' : paidAmount > 0 ? 'partial' : 'unpaid') as SaleStatus,
       paymentMethod: input.paymentMethod,
       notes: input.notes,
+      quotationId: input.quotationId,
+      quotationNo: input.quotationNo,
+      dueDate: input.dueDate,
+      paymentTerms: input.paymentTerms ?? state.settings.paymentTerms,
+      reference: input.reference,
     }
 
     let inventory = state.inventory
@@ -848,6 +1296,17 @@ export const db = {
       sales: state.sales.map((item) => (item.id === id ? { ...item, status: 'voided', balance: 0 } : item)),
       inventory,
       stockMovements: movements,
+      documentAuditLogs: pushDocAudit(
+        makeDocAudit({
+          action: 'invoice_cancelled',
+          documentType: 'invoice',
+          documentId: sale.id,
+          documentNo: sale.invoiceNo,
+          field: 'status',
+          oldValue: sale.status,
+          newValue: 'cancelled',
+        }),
+      ),
     })
     toast('Sale voided', sale.invoiceNo, 'warning')
   },
