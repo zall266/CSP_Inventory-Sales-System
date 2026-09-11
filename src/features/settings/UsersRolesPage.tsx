@@ -71,10 +71,14 @@ type Tab = 'users' | 'roles' | 'matrix'
 type UserForm = { name: string; email: string; roleId: string; departmentId: string; status: UserStatus }
 type RoleForm = { name: string; description: string; status: RoleStatus }
 
-function PermissionList({ permissions }: { permissions: RolePermissions }) {
+function PermissionList({ permissions, enabledOnly = false }: { permissions: RolePermissions; enabledOnly?: boolean }) {
+  const groups = PERMISSION_GROUPS.map((group) => ({
+    ...group,
+    keys: enabledOnly ? group.keys.filter((key) => permissions[key]) : group.keys,
+  })).filter((group) => group.keys.length)
   return (
     <div className="space-y-4">
-      {PERMISSION_GROUPS.map((group) => (
+      {groups.map((group) => (
         <div key={group.id}>
           <div className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-slate-400">{group.label}</div>
           <div className="space-y-1 text-sm">
@@ -87,6 +91,7 @@ function PermissionList({ permissions }: { permissions: RolePermissions }) {
           </div>
         </div>
       ))}
+      {enabledOnly && !groups.length && <p className="text-sm text-slate-500">No permissions assigned to this role.</p>}
     </div>
   )
 }
@@ -446,7 +451,7 @@ export function UsersSettingsPage() {
         </div>
       </Modal>
 
-      <Modal open={userMode === 'view'} onClose={() => setUserMode(null)} title="User">
+      <Modal open={userMode === 'view'} onClose={() => setUserMode(null)} title="User" width="max-w-xl">
         {selectedUser && (
           <div className="space-y-3 text-sm">
             <div><span className="text-slate-400">Name</span><div className="font-medium">{selectedUser.name}</div></div>
@@ -459,7 +464,7 @@ export function UsersSettingsPage() {
             <div>
               <div className="mb-2 font-medium">Effective permissions</div>
               <p className="mb-3 text-xs text-slate-400">Inherited from {displayRoleName(state, selectedUser)}. Not stored on the user.</p>
-              <PermissionList permissions={effectivePermissions(state, selectedUser)} />
+              <PermissionList permissions={effectivePermissions(state, selectedUser)} enabledOnly />
             </div>
             <div className="flex justify-end gap-2 pt-3">
               {selectedUser.status === 'active' && canDeactivateUser(state, actor, selectedUser) && (
