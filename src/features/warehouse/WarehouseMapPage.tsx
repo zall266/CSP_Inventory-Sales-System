@@ -399,7 +399,7 @@ function RackCard({
   searching?: boolean
   onClick: (slot: StorageSlot, occupancy?: SlotOccupancy) => void
 }) {
-  const levels = [...new Set(slots.map((row) => row.level))].sort((a, b) => b - a)
+  const levels = [...new Set(slots.map((row) => row.level))].sort((a, b) => a - b)
   return (
     <div className="rounded-2xl border border-slate-200 bg-white p-4">
       <div className="mb-3 flex items-center gap-2 text-sm font-semibold text-slate-900">
