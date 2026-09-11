@@ -1155,6 +1155,7 @@ export function createSeedData(): AppData {
     settings: {
       businessName: 'Cool Slurppy',
       legalName: 'Cool Slurppy Sdn Bhd',
+      logoUrl: '',
       phone: '+60 3-2100 4588',
       email: 'hello@coolslurppy.my',
       address: '12, Jalan Ampang, 50450 Kuala Lumpur',

@@ -621,6 +621,7 @@ export type RoleMatrix = Record<string, RolePermissions>
 export type Settings = {
   businessName: string
   legalName: string
+  logoUrl: string
   phone: string
   email: string
   address: string

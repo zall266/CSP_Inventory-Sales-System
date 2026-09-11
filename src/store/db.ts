@@ -122,6 +122,7 @@ function hydrateData(data: AppData): AppData {
     settings: {
       ...data.settings,
       legalName: data.settings.legalName ?? '',
+      logoUrl: data.settings.logoUrl ?? '',
       website: data.settings.website ?? '',
       registrationNo: data.settings.registrationNo ?? '',
       bankName: data.settings.bankName ?? '',
