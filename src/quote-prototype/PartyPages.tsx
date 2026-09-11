@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
+import { Link } from 'react-router-dom'
 import { Button, Card, ConfirmDialog, Field, FilterRow, Input, Modal, PageHeader, Select, StatusBadge, Textarea } from '@/components/ui'
 import { formatMoney } from '@/utils/format'
 import { quoteApi, useQuoteStore } from './store'
@@ -52,6 +53,7 @@ export function QuoteCustomersPage() {
                     <td>{quotes.length}</td>
                     <td className="tabular">{formatMoney(sales)}</td>
                     <td className="space-x-3 text-right text-xs">
+                      <Link className="text-indigo-700" to={`/quotations?customer=${row.id}`}>View</Link>
                       <button type="button" className="text-indigo-700" onClick={() => setEditing(row)}>Edit</button>
                       <button type="button" className="text-rose-600" onClick={() => setDeleteId(row.id)}>Delete</button>
                     </td>

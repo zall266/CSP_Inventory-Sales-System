@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react'
-import { Link, useNavigate, useParams } from 'react-router-dom'
+import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { Trash2 } from 'lucide-react'
 import { Button, Card, Field, FilterRow, Input, PageHeader, Select, StatusBadge, Textarea } from '@/components/ui'
 import { formatMoney, PROTOTYPE_TODAY } from '@/utils/format'
@@ -11,28 +11,36 @@ import type { QuoteLine, QuoteStatus } from './types'
 export function QuotationsListPage() {
   const { state } = useQuoteStore()
   const navigate = useNavigate()
+  const [searchParams] = useSearchParams()
   const [query, setQuery] = useState('')
   const [status, setStatus] = useState('all')
   const [from, setFrom] = useState('')
   const [to, setTo] = useState('')
+  const customerFilter = searchParams.get('customer') ?? ''
   const customerName = (id: string) => state.customers.find((item) => item.id === id)?.company || state.customers.find((item) => item.id === id)?.name || '—'
   const rows = useMemo(
     () =>
       state.quotations.filter((row) => {
+        if (customerFilter && row.customerId !== customerFilter) return false
         if (query && !`${row.quotationNo} ${customerName(row.customerId)}`.toLowerCase().includes(query.toLowerCase())) return false
         if (status !== 'all' && row.status !== status) return false
         if (from && row.date.slice(0, 10) < from) return false
         if (to && row.date.slice(0, 10) > to) return false
         return true
       }),
-    [state.quotations, query, status, from, to, state.customers],
+    [state.quotations, query, status, from, to, state.customers, customerFilter],
   )
   return (
     <div>
       <PageHeader
         title="Quotations"
-        subtitle="Create, preview and print professional A4 quotations."
-        actions={<Button onClick={() => navigate('/quotations/new')}>+ New Quotation</Button>}
+        subtitle={customerFilter ? `Showing quotations for ${customerName(customerFilter)}.` : 'Create, preview and print professional A4 quotations.'}
+        actions={
+          <div className="flex flex-wrap gap-2">
+            {customerFilter ? <Link to="/quotations"><Button variant="secondary">All quotations</Button></Link> : null}
+            <Button onClick={() => navigate('/quotations/new')}>+ New Quotation</Button>
+          </div>
+        }
       />
       <FilterRow>
         <Input placeholder="Search number or customer" value={query} onChange={(e) => setQuery(e.target.value)} />
@@ -159,9 +167,23 @@ export function QuotationEditorPage() {
         subtitle={creating ? 'Draft a customer-facing quotation. Totals update as you type.' : 'Edit quotation details. Preview uses the saved document plus live totals below.'}
         actions={
           <div className="flex flex-wrap gap-2">
-            {existing && <Link to={`/quotations/${existing.id}/preview`}><Button variant="secondary">Preview</Button></Link>}
-            <Button variant="secondary" onClick={() => save(true)}>Save & Preview</Button>
-            <Button onClick={() => save(false)}>Save Draft</Button>
+            <Button variant="secondary" onClick={() => save(false)}>Save Draft</Button>
+            <Button variant="secondary" onClick={() => save(true)}>Preview</Button>
+            {existing && (
+              <>
+                <Link to={`/quotations/${existing.id}/preview`}><Button variant="secondary">Print</Button></Link>
+                <Button
+                  variant="secondary"
+                  onClick={() => {
+                    quoteApi.setStatus(existing.id, 'sent')
+                    quoteApi.toast('Marked as sent', 'Email / WhatsApp sending is not connected in this prototype.')
+                  }}
+                >
+                  Send
+                </Button>
+              </>
+            )}
+            <Button onClick={() => save(true)}>Save & Preview</Button>
           </div>
         }
       />
@@ -357,7 +379,8 @@ export function QuotationPreviewPage() {
         <div className="flex flex-wrap gap-2">
           <Button variant="secondary" onClick={() => navigate(`/quotations/${quotation.id}`)}>Edit</Button>
           <Button variant="secondary" onClick={send}>Send</Button>
-          <Button onClick={print}>Print / Download PDF</Button>
+          <Button variant="secondary" onClick={print}>Print</Button>
+          <Button onClick={print}>Download PDF</Button>
         </div>
       </div>
       <div className="no-print mb-4"><StatusBadge status={quotation.status} /></div>

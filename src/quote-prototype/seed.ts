@@ -53,10 +53,10 @@ export const seedProducts = (): QuoteProduct[] => [
   { id: 'p-pandan', name: 'Pandan Waffle Premix', code: 'PW001', description: 'Pandan waffle premix', unit: 'KG', sellingPrice: 34, taxRate: 0, status: 'active' },
 ]
 
-function line(product: QuoteProduct, qty: number, price = product.sellingPrice, discount = 0): QuoteLine {
+function line(id: string, product: QuoteProduct, qty: number, price = product.sellingPrice, discount = 0): QuoteLine {
   const subtotal = Math.round((qty * price - discount) * 100) / 100
   return {
-    id: `l-${product.id}-${qty}`,
+    id,
     productId: product.id,
     name: product.name,
     code: product.code,
@@ -101,7 +101,7 @@ export function createSeedState() {
   const byId = Object.fromEntries(products.map((item) => [item.id, item])) as Record<string, QuoteProduct>
   const notes = defaultSettings().defaultNotes
   const quotations: Quotation[] = [
-    quote('q-0211', '2026/0211', iso(7, 15, 11, 51), 'c-gbk', [line(byId['p-waffle'], 250, 7.49)], {
+    quote('q-0211', '2026/0211', iso(7, 15, 11, 51), 'c-gbk', [line('l-0211-1', byId['p-waffle'], 250, 7.49)], {
       shipping: 325,
       discount: 122.5,
       status: 'sent',
@@ -109,19 +109,19 @@ export function createSeedState() {
       reference: 'GBK-JUL',
       notes,
     }),
-    quote('q-0201', '2026/0201', iso(6, 5, 10, 3), 'c-kaki', [line(byId['p-vanilla'], 20), line(byId['p-straw'], 20)], { status: 'accepted', shipping: 0, discount: 0 }),
-    quote('q-0204', '2026/0204', iso(6, 18, 14, 20), 'c-abc', [line(byId['p-matcha'], 30), line(byId['p-cup'], 500)], { status: 'accepted', shipping: 80, discount: 40 }),
-    quote('q-0208', '2026/0208', iso(7, 2, 9, 10), 'c-fajar', [line(byId['p-choc'], 40)], { status: 'expired', shipping: 120, discount: 0 }),
-    quote('q-0212', '2026/0212', iso(8, 4, 16, 40), 'c-xyz', [line(byId['p-waffle'], 80)], { status: 'rejected', shipping: 90, discount: 20 }),
-    quote('q-0215', '2026/0215', iso(8, 21, 11, 5), 'c-seri', [line(byId['p-pandan'], 25), line(byId['p-bd'], 12)], { status: 'sent', shipping: 110, discount: 35 }),
-    quote('q-0218', '2026/0218', iso(9, 1, 10, 0), 'c-maju', [line(byId['p-waffle'], 400), line(byId['p-cup'], 2000)], { status: 'accepted', shipping: 380, discount: 200 }),
-    quote('q-0219', '2026/0219', iso(9, 2, 13, 15), 'c-halo', [line(byId['p-matcha'], 80), line(byId['p-vanilla'], 60)], { status: 'accepted', shipping: 220, discount: 150 }),
-    quote('q-0220', '2026/0220', iso(9, 3, 9, 40), 'c-wong', [line(byId['p-wfkg'], 50), line(byId['p-choc'], 20)], { status: 'accepted', shipping: 160, discount: 80 }),
-    quote('q-0221', '2026/0221', iso(9, 4, 15, 10), 'c-dapur', [line(byId['p-air'], 35), line(byId['p-ice'], 20)], { status: 'accepted', shipping: 140, discount: 50 }),
-    quote('q-0222', '2026/0222', iso(9, 5, 11, 25), 'c-abc', [line(byId['p-straw'], 100), line(byId['p-matcha'], 100)], { status: 'accepted', shipping: 250, discount: 180 }),
-    quote('q-0223', '2026/0223', iso(9, 8, 10, 12), 'c-fajar', [line(byId['p-waffle'], 180)], { status: 'accepted', shipping: 200, discount: 90 }),
-    quote('q-0224', '2026/0224', iso(9, 9, 14, 50), 'c-maju', [line(byId['p-mt'], 18), line(byId['p-choc'], 24)], { status: 'draft', shipping: 95, discount: 0 }),
-    quote('q-0225', '2026/0225', iso(9, 10, 9, 20), 'c-halo', [line(byId['p-vanilla'], 40), line(byId['p-straw'], 40), line(byId['p-matcha'], 20)], { status: 'draft', shipping: 175, discount: 60 }),
+    quote('q-0201', '2026/0201', iso(6, 5, 10, 3), 'c-kaki', [line('l-0201-1', byId['p-vanilla'], 20), line('l-0201-2', byId['p-straw'], 20)], { status: 'accepted', shipping: 0, discount: 0 }),
+    quote('q-0204', '2026/0204', iso(6, 18, 14, 20), 'c-abc', [line('l-0204-1', byId['p-matcha'], 30), line('l-0204-2', byId['p-cup'], 500)], { status: 'accepted', shipping: 80, discount: 40 }),
+    quote('q-0208', '2026/0208', iso(7, 2, 9, 10), 'c-fajar', [line('l-0208-1', byId['p-choc'], 40)], { status: 'expired', shipping: 120, discount: 0 }),
+    quote('q-0212', '2026/0212', iso(8, 4, 16, 40), 'c-xyz', [line('l-0212-1', byId['p-waffle'], 80)], { status: 'rejected', shipping: 90, discount: 20 }),
+    quote('q-0215', '2026/0215', iso(8, 21, 11, 5), 'c-seri', [line('l-0215-1', byId['p-pandan'], 25), line('l-0215-2', byId['p-bd'], 12)], { status: 'sent', shipping: 110, discount: 35 }),
+    quote('q-0218', '2026/0218', iso(9, 1, 10, 0), 'c-maju', [line('l-0218-1', byId['p-waffle'], 400), line('l-0218-2', byId['p-cup'], 2000)], { status: 'accepted', shipping: 380, discount: 200 }),
+    quote('q-0219', '2026/0219', iso(9, 2, 13, 15), 'c-halo', [line('l-0219-1', byId['p-matcha'], 80), line('l-0219-2', byId['p-vanilla'], 60)], { status: 'accepted', shipping: 220, discount: 150 }),
+    quote('q-0220', '2026/0220', iso(9, 3, 9, 40), 'c-wong', [line('l-0220-1', byId['p-wfkg'], 50), line('l-0220-2', byId['p-choc'], 20)], { status: 'accepted', shipping: 160, discount: 80 }),
+    quote('q-0221', '2026/0221', iso(9, 4, 15, 10), 'c-dapur', [line('l-0221-1', byId['p-air'], 35), line('l-0221-2', byId['p-ice'], 20)], { status: 'accepted', shipping: 140, discount: 50 }),
+    quote('q-0222', '2026/0222', iso(9, 5, 11, 25), 'c-abc', [line('l-0222-1', byId['p-straw'], 100), line('l-0222-2', byId['p-matcha'], 100)], { status: 'accepted', shipping: 250, discount: 180 }),
+    quote('q-0223', '2026/0223', iso(9, 8, 10, 12), 'c-fajar', [line('l-0223-1', byId['p-waffle'], 180)], { status: 'accepted', shipping: 200, discount: 90 }),
+    quote('q-0224', '2026/0224', iso(9, 9, 14, 50), 'c-maju', [line('l-0224-1', byId['p-mt'], 18), line('l-0224-2', byId['p-choc'], 24)], { status: 'draft', shipping: 95, discount: 0 }),
+    quote('q-0225', '2026/0225', iso(9, 10, 9, 20), 'c-halo', [line('l-0225-1', byId['p-vanilla'], 40), line('l-0225-2', byId['p-straw'], 40), line('l-0225-3', byId['p-matcha'], 20)], { status: 'draft', shipping: 175, discount: 60 }),
   ]
 
   void PROTOTYPE_TODAY

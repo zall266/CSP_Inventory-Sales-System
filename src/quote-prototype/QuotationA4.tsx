@@ -99,7 +99,7 @@ export function QuotationA4({
         <Row label="Subtotal" value={formatMoney(quotation.subtotal)} />
         <Row label="Shipping Charges" value={formatMoney(quotation.shipping)} />
         <Row label="Discount" value={`-${formatMoney(quotation.discount)}`} />
-        {quotation.tax ? <Row label="Tax" value={formatMoney(quotation.tax)} /> : null}
+        <Row label="Tax" value={formatMoney(quotation.tax)} />
         <Row label="TOTAL" value={formatMoney(quotation.total)} strong />
       </div>
 
@@ -114,15 +114,10 @@ export function QuotationA4({
         {settings.duitNowQrDataUrl ? <img src={settings.duitNowQrDataUrl} alt="DuitNow QR" className="quote-a4-qr" /> : null}
       </section>
 
-      <section className="quote-a4-block">
-        <div className="quote-a4-label">Notes</div>
-        {(quotation.notes || quotation.terms || settings.defaultNotes)
-          .split('\n')
-          .filter(Boolean)
-          .map((line) => (
-            <div key={line}>* {line.replace(/^\*\s*/, '')}</div>
-          ))}
-      </section>
+      <BulletBlock title="Notes" text={quotation.notes || settings.defaultNotes} />
+      {quotation.terms && quotation.terms.trim() !== (quotation.notes || '').trim() ? (
+        <BulletBlock title="Terms & Conditions" text={quotation.terms} />
+      ) : null}
 
       <footer className="quote-a4-footer">
         {settings.companyName}
@@ -138,5 +133,18 @@ function Row({ label, value, strong }: { label: string; value: string; strong?: 
       <span>{label}</span>
       <span className="tabular">{value}</span>
     </div>
+  )
+}
+
+function BulletBlock({ title, text }: { title: string; text: string }) {
+  const lines = text.split('\n').map((line) => line.trim()).filter(Boolean)
+  if (!lines.length) return null
+  return (
+    <section className="quote-a4-block">
+      <div className="quote-a4-label">{title}</div>
+      {lines.map((line, index) => (
+        <div key={`${title}-${index}`}>{`* ${line.replace(/^\*\s*/, '')}`}</div>
+      ))}
+    </section>
   )
 }
