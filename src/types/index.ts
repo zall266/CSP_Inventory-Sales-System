@@ -390,18 +390,54 @@ export type ProductionSession = {
   posted: boolean
 }
 
+export type RoleStatus = 'active' | 'inactive'
+export type DepartmentStatus = 'active' | 'inactive'
+
+export type Role = {
+  id: string
+  name: string
+  description: string
+  status: RoleStatus
+  protected: boolean
+  /** Operational mapping used only by existing manufacturing session gates. */
+  legacyRole: UserRole
+  createdAt: string
+  updatedAt: string
+}
+
+export type Department = {
+  id: string
+  name: string
+  status: DepartmentStatus
+}
+
 export type User = {
   id: string
   name: string
   email: string
+  roleId: string
+  /** Synced from the assigned role's legacyRole for manufacturing session gates. */
   role: UserRole
+  departmentId: string
   status: UserStatus
   lastLogin: string
   createdAt: string
   updatedAt: string
 }
 
-export type UserAuditAction = 'user_created' | 'user_updated' | 'role_changed' | 'user_deactivated' | 'user_reactivated'
+export type UserAuditAction =
+  | 'user_created'
+  | 'user_updated'
+  | 'role_changed'
+  | 'department_changed'
+  | 'user_deactivated'
+  | 'user_reactivated'
+  | 'role_created'
+  | 'role_renamed'
+  | 'role_updated'
+  | 'role_deactivated'
+  | 'role_reactivated'
+  | 'role_permissions_changed'
 
 export type UserAuditLog = {
   id: string
@@ -426,20 +462,48 @@ export type AppNotification = {
 }
 
 export type PermissionKey =
-  | 'dashboard'
-  | 'pos'
-  | 'create_sale'
-  | 'void_sale'
-  | 'create_purchase'
-  | 'adjust_stock'
-  | 'transfer_stock'
-  | 'view_reports'
-  | 'manage_settings'
-  | 'manage_users'
-  | 'create_production'
-  | 'edit_completed_production'
+  | 'dashboard.view'
+  | 'sales.view'
+  | 'sales.create'
+  | 'sales.edit'
+  | 'sales.void'
+  | 'purchases.view'
+  | 'purchases.create'
+  | 'purchases.edit'
+  | 'purchases.delete'
+  | 'inventory.view'
+  | 'inventory.adjust'
+  | 'inventory.transfer'
+  | 'inventory.count'
+  | 'manufacturing.view'
+  | 'manufacturing.create'
+  | 'manufacturing.edit'
+  | 'manufacturing.start'
+  | 'manufacturing.complete'
+  | 'manufacturing.completed.edit'
+  | 'manufacturing.history.view'
+  | 'reports.view'
+  | 'reports.export'
+  | 'finance.view'
+  | 'payments.view'
+  | 'receivables.view'
+  | 'payables.view'
+  | 'expenses.manage'
+  | 'users.view'
+  | 'users.create'
+  | 'users.edit'
+  | 'users.role.change'
+  | 'users.deactivate'
+  | 'roles.view'
+  | 'roles.create'
+  | 'roles.edit'
+  | 'roles.deactivate'
+  | 'roles.permissions.manage'
+  | 'settings.view'
+  | 'settings.edit'
 
-export type RoleMatrix = Record<UserRole, Record<PermissionKey, boolean>>
+export type RolePermissions = Record<PermissionKey, boolean>
+export type RoleMatrix = Record<string, RolePermissions>
 
 export type Settings = {
   businessName: string
@@ -518,6 +582,8 @@ export type AppData = {
   payments: Payment[]
   expenses: Expense[]
   users: User[]
+  roles: Role[]
+  departments: Department[]
   userAuditLogs: UserAuditLog[]
   notifications: AppNotification[]
   settings: Settings

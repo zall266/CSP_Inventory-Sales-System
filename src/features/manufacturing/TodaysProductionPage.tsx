@@ -5,7 +5,8 @@ import { ProductMark } from '@/components/ProductMark'
 import { useApi, useLookups, useStore } from '@/store/hooks'
 import { formatDate, formatDateTime, formatQty } from '@/utils/format'
 import type { ProductionSession } from '@/types'
-import { buildSessionPlan, canEditCompleted, canEditSession, currentUser } from './sessionPlan'
+import { buildSessionPlan, canEditSession, currentUser } from './sessionPlan'
+import { hasPermission } from '@/features/settings/permissions'
 
 const SAMPLE_SHEET =
   'data:image/svg+xml;utf8,' +
@@ -48,7 +49,7 @@ function SessionWorkspace({ session }: { session: ProductionSession }) {
   const user = currentUser(state)
   const plan = useMemo(() => buildSessionPlan(state, session), [state, session])
   const canEdit = canEditSession(user.role, session.status)
-  const adminEdit = canEditCompleted(user.role)
+  const adminEdit = hasPermission(state, 'manufacturing.completed.edit')
 
   const [startOpen, setStartOpen] = useState(false)
   const [photo, setPhoto] = useState(session.recipePhoto)

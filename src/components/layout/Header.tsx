@@ -13,7 +13,8 @@ import {
 import { useApi, useStore } from '@/store/hooks'
 import { formatDate, initials, PROTOTYPE_TODAY } from '@/utils/format'
 import { Dropdown, MenuItem } from '@/components/ui'
-import { currentUser, roleLabel } from '@/features/manufacturing/sessionPlan'
+import { currentUser } from '@/features/manufacturing/sessionPlan'
+import { displayRoleName } from '@/features/settings/permissions'
 
 export function Header() {
   const state = useStore()
@@ -273,7 +274,7 @@ export function Header() {
             </div>
             <div className="hidden text-left sm:block">
               <div className="text-sm font-medium leading-4 text-slate-800">{currentUser(state).name}</div>
-              <div className="text-[11px] text-slate-400">{roleLabel(currentUser(state).role)}</div>
+              <div className="text-[11px] text-slate-400">{displayRoleName(state, currentUser(state))}</div>
             </div>
             <ChevronDown size={14} className="hidden text-slate-400 sm:block" />
           </button>
@@ -282,7 +283,7 @@ export function Header() {
         <div className="px-3 py-2 text-[10px] font-semibold uppercase tracking-wide text-slate-400">Switch role (prototype)</div>
         {state.users.filter((u) => u.status === 'active').map((u) => (
           <MenuItem key={u.id} onClick={() => api.switchUser(u.id)}>
-            {u.name} · {roleLabel(u.role)}
+            {u.name} · {displayRoleName(state, u)}
           </MenuItem>
         ))}
       </Dropdown>

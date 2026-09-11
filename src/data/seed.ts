@@ -2,6 +2,7 @@ import type {
   AppData,
   Batch,
   Bom,
+  Department,
   Expense,
   InventoryRow,
   LineItem,
@@ -14,101 +15,44 @@ import type {
   ProductionOrder,
   ProductionSession,
   Purchase,
+  Role,
   RoleMatrix,
   Sale,
   StockMovement,
   UserAuditLog,
 } from '@/types'
+import { defaultPermissionsForLegacy } from '@/features/settings/permissions'
 import { PROTOTYPE_TODAY, round2, uid } from '@/utils/format'
 
 const iso = (month: number, day: number, hour = 10) =>
   `2026-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}T${String(hour).padStart(2, '0')}:15:00+08:00`
 
-const defaultRoleMatrix: RoleMatrix = {
-  owner: {
-    dashboard: true,
-    pos: true,
-    create_sale: true,
-    void_sale: true,
-    create_purchase: true,
-    adjust_stock: true,
-    transfer_stock: true,
-    view_reports: true,
-    manage_settings: true,
-    manage_users: true,
-    create_production: true,
-    edit_completed_production: true,
-  },
-  admin: {
-    dashboard: true,
-    pos: true,
-    create_sale: true,
-    void_sale: true,
-    create_purchase: true,
-    adjust_stock: true,
-    transfer_stock: true,
-    view_reports: true,
-    manage_settings: true,
-    manage_users: true,
-    create_production: true,
-    edit_completed_production: true,
-  },
-  manager: {
-    dashboard: true,
-    pos: true,
-    create_sale: true,
-    void_sale: true,
-    create_purchase: true,
-    adjust_stock: true,
-    transfer_stock: true,
-    view_reports: true,
-    manage_settings: false,
-    manage_users: false,
-    create_production: true,
-    edit_completed_production: false,
-  },
-  staff: {
-    dashboard: true,
-    pos: true,
-    create_sale: true,
-    void_sale: false,
-    create_purchase: false,
-    adjust_stock: false,
-    transfer_stock: false,
-    view_reports: true,
-    manage_settings: false,
-    manage_users: false,
-    create_production: true,
-    edit_completed_production: false,
-  },
-  cashier: {
-    dashboard: false,
-    pos: true,
-    create_sale: true,
-    void_sale: false,
-    create_purchase: false,
-    adjust_stock: false,
-    transfer_stock: false,
-    view_reports: false,
-    manage_settings: false,
-    manage_users: false,
-    create_production: false,
-    edit_completed_production: false,
-  },
-  warehouse: {
-    dashboard: true,
-    pos: false,
-    create_sale: false,
-    void_sale: false,
-    create_purchase: true,
-    adjust_stock: true,
-    transfer_stock: true,
-    view_reports: false,
-    manage_settings: false,
-    manage_users: false,
-    create_production: true,
-    edit_completed_production: false,
-  },
+function seedRoles(): Role[] {
+  const createdAt = iso(8, 1, 9)
+  return [
+    { id: 'role-owner', name: 'Owner', description: 'Full system access. Protected account.', status: 'active', protected: true, legacyRole: 'owner', createdAt, updatedAt: createdAt },
+    { id: 'role-admin', name: 'Admin', description: 'Business administration and configuration.', status: 'active', protected: false, legacyRole: 'admin', createdAt, updatedAt: createdAt },
+    { id: 'role-supervisor', name: 'Supervisor', description: 'Supervises operations and production records.', status: 'active', protected: false, legacyRole: 'manager', createdAt, updatedAt: createdAt },
+    { id: 'role-staff', name: 'Staff', description: 'Day-to-day operations.', status: 'active', protected: false, legacyRole: 'staff', createdAt, updatedAt: createdAt },
+    { id: 'role-cashier', name: 'Cashier', description: 'Point of sale and customer checkout.', status: 'active', protected: false, legacyRole: 'cashier', createdAt, updatedAt: createdAt },
+    { id: 'role-warehouse', name: 'Warehouse', description: 'Warehouse and inventory operations.', status: 'active', protected: false, legacyRole: 'warehouse', createdAt, updatedAt: createdAt },
+  ]
+}
+
+function seedDepartments(): Department[] {
+  return [
+    { id: 'dept-production', name: 'Production', status: 'active' },
+    { id: 'dept-sales', name: 'Sales', status: 'active' },
+    { id: 'dept-purchasing', name: 'Purchasing', status: 'active' },
+    { id: 'dept-warehouse', name: 'Warehouse', status: 'active' },
+    { id: 'dept-finance', name: 'Finance', status: 'active' },
+    { id: 'dept-management', name: 'Management', status: 'active' },
+    { id: 'dept-admin', name: 'Administration', status: 'active' },
+  ]
+}
+
+function seedRoleMatrix(roles: Role[]): RoleMatrix {
+  return Object.fromEntries(roles.map((role) => [role.id, defaultPermissionsForLegacy(role.legacyRole)]))
 }
 
 function line(product: Product, qty: number, price = product.sellingPrice, discount = 0): LineItem {
@@ -193,13 +137,15 @@ export function createSeedData(): AppData {
     { id: 's-ing', name: 'Ingredient Supplier', contact: 'Lily Wong', phone: '03-5621 7733', email: 'sales@ingsupply.my', status: 'active' as const },
   ]
 
+  const roles = seedRoles()
+  const departments = seedDepartments()
   const users = [
-    { id: 'u-aina', name: 'Aina Rahman', email: 'aina@coolslurppy.my', role: 'owner' as const, status: 'active' as const, lastLogin: iso(9, 10, 8), createdAt: iso(8, 1, 9), updatedAt: iso(9, 10, 8) },
-    { id: 'u-admin', name: 'Admin', email: 'admin@coolslurppy.my', role: 'admin' as const, status: 'active' as const, lastLogin: iso(9, 10, 9), createdAt: iso(8, 1, 9), updatedAt: iso(9, 10, 9) },
-    { id: 'u-hafiz', name: 'Hafiz Malik', email: 'hafiz@coolslurppy.my', role: 'manager' as const, status: 'active' as const, lastLogin: iso(9, 9, 18), createdAt: iso(8, 15, 9), updatedAt: iso(9, 9, 18) },
-    { id: 'u-siti', name: 'Siti Nurhaliza', email: 'siti@coolslurppy.my', role: 'cashier' as const, status: 'active' as const, lastLogin: iso(9, 10, 11), createdAt: iso(8, 20, 9), updatedAt: iso(9, 10, 11) },
-    { id: 'u-kumar', name: 'Kumar Raj', email: 'kumar@coolslurppy.my', role: 'warehouse' as const, status: 'active' as const, lastLogin: iso(9, 8, 16), createdAt: iso(8, 20, 9), updatedAt: iso(9, 8, 16) },
-    { id: 'u-mei', name: 'Mei Ling', email: 'mei@coolslurppy.my', role: 'staff' as const, status: 'active' as const, lastLogin: iso(9, 7, 14), createdAt: iso(8, 22, 9), updatedAt: iso(9, 7, 14) },
+    { id: 'u-aina', name: 'Aina Rahman', email: 'aina@coolslurppy.my', roleId: 'role-owner', role: 'owner' as const, departmentId: 'dept-management', status: 'active' as const, lastLogin: iso(9, 10, 8), createdAt: iso(8, 1, 9), updatedAt: iso(9, 10, 8) },
+    { id: 'u-admin', name: 'Admin', email: 'admin@coolslurppy.my', roleId: 'role-admin', role: 'admin' as const, departmentId: 'dept-admin', status: 'active' as const, lastLogin: iso(9, 10, 9), createdAt: iso(8, 1, 9), updatedAt: iso(9, 10, 9) },
+    { id: 'u-hafiz', name: 'Hafiz Malik', email: 'hafiz@coolslurppy.my', roleId: 'role-supervisor', role: 'manager' as const, departmentId: 'dept-production', status: 'active' as const, lastLogin: iso(9, 9, 18), createdAt: iso(8, 15, 9), updatedAt: iso(9, 9, 18) },
+    { id: 'u-siti', name: 'Siti Nurhaliza', email: 'siti@coolslurppy.my', roleId: 'role-cashier', role: 'cashier' as const, departmentId: 'dept-sales', status: 'active' as const, lastLogin: iso(9, 10, 11), createdAt: iso(8, 20, 9), updatedAt: iso(9, 10, 11) },
+    { id: 'u-kumar', name: 'Kumar Raj', email: 'kumar@coolslurppy.my', roleId: 'role-warehouse', role: 'warehouse' as const, departmentId: 'dept-warehouse', status: 'active' as const, lastLogin: iso(9, 8, 16), createdAt: iso(8, 20, 9), updatedAt: iso(9, 8, 16) },
+    { id: 'u-mei', name: 'Mei Ling', email: 'mei@coolslurppy.my', roleId: 'role-staff', role: 'staff' as const, departmentId: 'dept-sales', status: 'active' as const, lastLogin: iso(9, 7, 14), createdAt: iso(8, 22, 9), updatedAt: iso(9, 7, 14) },
   ]
   const userAuditLogs: UserAuditLog[] = []
 
@@ -1194,6 +1140,8 @@ export function createSeedData(): AppData {
     payments,
     expenses,
     users,
+    roles,
+    departments,
     userAuditLogs,
     notifications,
     boms,
@@ -1215,7 +1163,7 @@ export function createSeedData(): AppData {
       allowDiscount: true,
       allowReturns: true,
       enabledPaymentMethods: ['cash', 'bank_transfer', 'duitnow', 'card', 'ewallet'],
-      roleMatrix: defaultRoleMatrix,
+      roleMatrix: seedRoleMatrix(roles),
     },
   }
 }
