@@ -24,6 +24,7 @@ function load(): QuoteState {
 
 let state = load()
 let toasts: QuoteToast[] = []
+let cachedSnapshot = { state, toasts }
 const listeners = new Set<() => void>()
 
 function emit() {
@@ -32,11 +33,12 @@ function emit() {
   } catch {
     /* ignore */
   }
+  cachedSnapshot = { state, toasts }
   listeners.forEach((listener) => listener())
 }
 
 function snapshot() {
-  return { state, toasts }
+  return cachedSnapshot
 }
 
 export function subscribeQuote(listener: () => void) {
@@ -58,6 +60,7 @@ function toast(title: string, description?: string) {
   emit()
   window.setTimeout(() => {
     toasts = toasts.filter((row) => row.id !== item.id)
+    cachedSnapshot = { state, toasts }
     listeners.forEach((listener) => listener())
   }, 3200)
 }
@@ -70,6 +73,7 @@ export const quoteApi = {
   toast,
   dismissToast(id: string) {
     toasts = toasts.filter((row) => row.id !== id)
+    cachedSnapshot = { state, toasts }
     listeners.forEach((listener) => listener())
   },
   reset() {
