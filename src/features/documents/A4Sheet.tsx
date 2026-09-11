@@ -52,7 +52,7 @@ export function MetaGrid({ items }: { items: Array<{ label: string; value: strin
       {items.map((item) => (
         <div key={item.label}>
           <span className="text-slate-500">{item.label}: </span>
-          <span className="font-medium text-slate-800">{item.value}</span>
+          <span className="whitespace-nowrap font-medium text-slate-800">{item.value}</span>
         </div>
       ))}
     </div>
