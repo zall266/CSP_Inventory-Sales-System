@@ -11,6 +11,7 @@ import {
   shortProductName,
   slotLabel,
   unplacedPacks,
+  latestProductionRef,
 } from '@/features/warehouse/warehouseModel'
 import { useApi, useStore } from '@/store/hooks'
 import { formatQty } from '@/utils/format'
@@ -22,7 +23,7 @@ export function WarehouseMapPage() {
   const state = useStore()
   const api = useApi()
   const warehouseId = state.ui.warehouseFilter === 'all' ? 'wh-main' : state.ui.warehouseFilter
-  const canView = hasPermission(state, 'warehouse_map.view') || hasPermission(state, 'inventory.view')
+  const canView = hasPermission(state, 'warehouse_map.view')
   const canPlace = hasPermission(state, 'warehouse_map.putaway')
   const canMove = hasPermission(state, 'warehouse_map.move')
   const canManage = hasPermission(state, 'warehouse_map.location.manage')
@@ -105,7 +106,14 @@ export function WarehouseMapPage() {
     if (!selectedSlotId || !mode) return
     if (mode.kind === 'place') {
       const remaining = unplacedPacks(state, mode.productId, warehouseId)
-      const ok = api.placeStock({ slotId: selectedSlotId, productId: mode.productId, qty })
+      const batchRef = latestProductionRef(state, mode.productId)
+      const ok = api.placeStock({
+        slotId: selectedSlotId,
+        productId: mode.productId,
+        qty,
+        batchRef,
+        productionSessionRef: batchRef,
+      })
       if (ok) {
         setSelectedSlotId('')
         if (remaining - qty <= 0) setMode(null)
@@ -183,6 +191,29 @@ export function WarehouseMapPage() {
 
       <div className="mb-4 grid gap-4 xl:grid-cols-[280px_1fr]">
         <div className="space-y-4">
+          {query.trim() && (
+            <Card className="p-4">
+              <div className="mb-3 text-sm font-semibold">Find results</div>
+              {findMatches.length === 0 ? (
+                <p className="text-sm text-slate-500">No mapped locations.</p>
+              ) : (
+                <div className="space-y-2">
+                  {findMatches.map((row) => (
+                    <button
+                      key={row.occupancy.id}
+                      type="button"
+                      className={`block w-full rounded-lg px-2 py-1.5 text-left text-sm hover:bg-slate-50 ${
+                        highlightId === row.occupancy.slotId ? 'bg-indigo-50 ring-1 ring-indigo-300' : ''
+                      }`}
+                      onClick={() => setHighlightId(row.occupancy.slotId)}
+                    >
+                      {slotLabel(state, row.occupancy.slotId)} · {formatQty(row.occupancy.quantityPacks)}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </Card>
+          )}
           <Card className="p-4">
             <div className="mb-3 text-sm font-semibold">Ready to place</div>
             {unplaced.filter((row) => row.qty > 0).length === 0 ? (
@@ -194,6 +225,9 @@ export function WarehouseMapPage() {
                     <div className="text-sm font-medium text-slate-900">{row.product.name}</div>
                     <div className="mt-1 text-lg font-semibold tabular">{formatQty(row.qty)} PACK</div>
                     <div className="text-xs text-slate-400">Inventory {formatQty(row.inventory)} · Mapped {formatQty(row.placed)}</div>
+                    {latestProductionRef(state, row.product.id) && (
+                      <div className="text-xs text-slate-400">Batch: {latestProductionRef(state, row.product.id)}</div>
+                    )}
                     {canPlace && (
                       <Button
                         size="sm"
@@ -208,27 +242,6 @@ export function WarehouseMapPage() {
               </div>
             )}
           </Card>
-          {query.trim() && (
-            <Card className="p-4">
-              <div className="mb-3 text-sm font-semibold">Find results</div>
-              {findMatches.length === 0 ? (
-                <p className="text-sm text-slate-500">No mapped locations.</p>
-              ) : (
-                <div className="space-y-2">
-                  {findMatches.map((row) => (
-                    <button
-                      key={row.occupancy.id}
-                      type="button"
-                      className="block w-full rounded-lg px-2 py-1.5 text-left text-sm hover:bg-slate-50"
-                      onClick={() => setHighlightId(row.occupancy.slotId)}
-                    >
-                      {slotLabel(state, row.occupancy.slotId)} · {formatQty(row.occupancy.quantityPacks)}
-                    </button>
-                  ))}
-                </div>
-              )}
-            </Card>
-          )}
           {mode?.kind === 'move' && movingFrom && (
             <Card className="p-4">
               <div className="text-sm font-semibold">Move stock</div>
@@ -261,6 +274,7 @@ export function WarehouseMapPage() {
                   productById={productById}
                   highlightedSlotIds={highlightedSlotIds}
                   selectedSlotId={selectedSlotId}
+                  searching={Boolean(query.trim())}
                   onClick={clickSlot}
                 />
               ))}
@@ -276,6 +290,7 @@ export function WarehouseMapPage() {
               productById={productById}
               highlightedSlotIds={highlightedSlotIds}
               selectedSlotId={selectedSlotId}
+              searching={Boolean(query.trim())}
               onClick={clickSlot}
             />
           ))}
@@ -293,6 +308,7 @@ export function WarehouseMapPage() {
                     productById={productById}
                     highlightedSlotIds={highlightedSlotIds}
                     selectedSlotId={selectedSlotId}
+                    searching={Boolean(query.trim())}
                     onClick={clickSlot}
                     onDeactivate={canManage ? () => setDeactivateId(location.id) : undefined}
                   />
@@ -314,13 +330,31 @@ export function WarehouseMapPage() {
       >
         {selectedSlotId && mode && (
           <div className="space-y-3">
-            <div className="text-sm text-slate-600">{slotLabel(state, selectedSlotId)}</div>
-            <div className="text-sm font-medium">
-              {mode.kind === 'place' ? placingProduct?.name : productById(movingFrom?.productId ?? '')?.name}
-            </div>
+            <Field label="Location">
+              <div className="text-sm text-slate-800">{slotLabel(state, selectedSlotId)}</div>
+            </Field>
+            <Field label="Product">
+              <div className="text-sm font-medium">
+                {mode.kind === 'place' ? placingProduct?.name : productById(movingFrom?.productId ?? '')?.name}
+              </div>
+            </Field>
+            {mode.kind === 'place' && placingProduct && (
+              <Field label="Available to place">
+                <div className="text-sm tabular">{formatQty(unplacedPacks(state, placingProduct.id, warehouseId))} PACK</div>
+              </Field>
+            )}
             <Field label="Quantity (packs)">
               <Input type="number" min={0.01} step="1" value={qty} onChange={(e) => setQty(Number(e.target.value))} />
             </Field>
+            {(mode.kind === 'move' ? movingFrom?.batchRef : latestProductionRef(state, placingProduct?.id ?? '')) ? (
+              <Field label="Batch">
+                <div className="text-sm text-slate-600">
+                  {mode.kind === 'move'
+                    ? movingFrom?.batchRef
+                    : latestProductionRef(state, placingProduct?.id ?? '')}
+                </div>
+              </Field>
+            ) : null}
             <div className="flex justify-end gap-2">
               <Button variant="secondary" onClick={() => setSelectedSlotId('')}>Cancel</Button>
               <Button onClick={confirmPlace}>{mode.kind === 'place' ? 'Place' : 'Move'}</Button>
@@ -353,6 +387,7 @@ function RackCard({
   productById,
   highlightedSlotIds,
   selectedSlotId,
+  searching,
   onClick,
 }: {
   location: StorageLocation
@@ -361,6 +396,7 @@ function RackCard({
   productById: (id: string) => Product | undefined
   highlightedSlotIds: Set<string>
   selectedSlotId: string
+  searching?: boolean
   onClick: (slot: StorageSlot, occupancy?: SlotOccupancy) => void
 }) {
   const levels = [...new Set(slots.map((row) => row.level))].sort((a, b) => b - a)
@@ -385,6 +421,7 @@ function RackCard({
                 highlightedSlotIds={highlightedSlotIds}
                 selectedSlotId={selectedSlotId}
                 partnerSlots={back}
+                searching={searching}
                 onClick={onClick}
               />
               <FaceRow
@@ -395,6 +432,7 @@ function RackCard({
                 highlightedSlotIds={highlightedSlotIds}
                 selectedSlotId={selectedSlotId}
                 partnerSlots={front}
+                searching={searching}
                 onClick={onClick}
                 muted
               />
@@ -414,6 +452,7 @@ function FaceRow({
   highlightedSlotIds,
   selectedSlotId,
   partnerSlots,
+  searching,
   onClick,
   muted,
 }: {
@@ -424,6 +463,7 @@ function FaceRow({
   highlightedSlotIds: Set<string>
   selectedSlotId: string
   partnerSlots: StorageSlot[]
+  searching?: boolean
   onClick: (slot: StorageSlot, occupancy?: SlotOccupancy) => void
   muted?: boolean
 }) {
@@ -434,14 +474,16 @@ function FaceRow({
         {slots.map((slot) => {
           const partner = partnerSlots.find((row) => row.slotNo === slot.slotNo)
           const backHidden = Boolean(muted && occupancies[slot.id] && partner && occupancies[partner.id])
+          const highlighted = highlightedSlotIds.has(slot.id)
           return (
             <SlotCell
               key={slot.id}
               slot={slot}
               occupancy={occupancies[slot.id]}
               product={occupancies[slot.id] ? productById(occupancies[slot.id].productId) : undefined}
-              highlighted={highlightedSlotIds.has(slot.id)}
+              highlighted={highlighted}
               selected={selectedSlotId === slot.id}
+              dimmed={Boolean(searching && occupancies[slot.id] && !highlighted)}
               backStock={backHidden}
               onClick={() => onClick(slot, occupancies[slot.id])}
             />
@@ -459,6 +501,7 @@ function GenericStrip({
   productById,
   highlightedSlotIds,
   selectedSlotId,
+  searching,
   onClick,
   onDeactivate,
 }: {
@@ -468,6 +511,7 @@ function GenericStrip({
   productById: (id: string) => Product | undefined
   highlightedSlotIds: Set<string>
   selectedSlotId: string
+  searching?: boolean
   onClick: (slot: StorageSlot, occupancy?: SlotOccupancy) => void
   onDeactivate?: () => void
 }) {
@@ -478,17 +522,21 @@ function GenericStrip({
         {onDeactivate && <button type="button" className="text-xs text-rose-600" onClick={onDeactivate}>Deactivate</button>}
       </div>
       <div className="flex flex-wrap gap-1.5">
-        {slots.sort((a, b) => a.slotNo - b.slotNo).map((slot) => (
-          <SlotCell
-            key={slot.id}
-            slot={slot}
-            occupancy={occupancies[slot.id]}
-            product={occupancies[slot.id] ? productById(occupancies[slot.id].productId) : undefined}
-            highlighted={highlightedSlotIds.has(slot.id)}
-            selected={selectedSlotId === slot.id}
-            onClick={() => onClick(slot, occupancies[slot.id])}
-          />
-        ))}
+        {slots.sort((a, b) => a.slotNo - b.slotNo).map((slot) => {
+          const highlighted = highlightedSlotIds.has(slot.id)
+          return (
+            <SlotCell
+              key={slot.id}
+              slot={slot}
+              occupancy={occupancies[slot.id]}
+              product={occupancies[slot.id] ? productById(occupancies[slot.id].productId) : undefined}
+              highlighted={highlighted}
+              selected={selectedSlotId === slot.id}
+              dimmed={Boolean(searching && occupancies[slot.id] && !highlighted)}
+              onClick={() => onClick(slot, occupancies[slot.id])}
+            />
+          )
+        })}
       </div>
     </div>
   )
@@ -529,6 +577,7 @@ function SlotCell({
   product,
   highlighted,
   selected,
+  dimmed,
   backStock,
   onClick,
 }: {
@@ -537,6 +586,7 @@ function SlotCell({
   product?: Product
   highlighted?: boolean
   selected?: boolean
+  dimmed?: boolean
   backStock?: boolean
   onClick: () => void
 }) {
@@ -549,7 +599,9 @@ function SlotCell({
         occupancy
           ? 'border-slate-300 shadow-sm'
           : 'border-dashed border-slate-300 bg-[repeating-linear-gradient(-45deg,#fff,#fff_6px,#f8fafc_6px,#f8fafc_12px)] text-slate-400'
-      } ${highlighted ? 'ring-2 ring-indigo-500' : ''} ${selected ? 'ring-2 ring-emerald-500' : ''}`}
+      } ${highlighted ? 'z-10 scale-[1.03] ring-4 ring-indigo-500 ring-offset-2' : ''} ${selected ? 'ring-2 ring-emerald-500' : ''} ${
+        dimmed ? 'opacity-35' : ''
+      }`}
       style={occupancy ? { background: color, color: contrastText(color) } : undefined}
     >
       <div className="flex h-full flex-col justify-between p-1.5">

@@ -194,6 +194,14 @@ export function seedWarehouseOccupancy(createdAt: string, placedBy: string): {
   return { slotOccupancies: occupancies, placementLogs: logs }
 }
 
+export function latestProductionRef(state: AppState, productId: string) {
+  if (!productId) return ''
+  const sessions = state.productionSessions
+    .filter((session) => session.status === 'completed' && session.items.some((item) => item.productId === productId && item.actualQty > 0))
+    .sort((a, b) => (b.completedAt || b.productionDate).localeCompare(a.completedAt || a.productionDate))
+  return sessions[0]?.reference ?? ''
+}
+
 export function locationTypeLabel(type: StorageLocationType) {
   if (type === 'RACK') return 'Rack'
   if (type === 'DISPLAY') return 'Display'

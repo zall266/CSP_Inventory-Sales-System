@@ -32,7 +32,7 @@ import { useMemo, useState } from 'react'
 import { brand } from '@/brand'
 import { cn } from '@/utils/format'
 import { useApi, useStore } from '@/store/hooks'
-import { actorUser, canAccessUsersAndRoles } from '@/features/settings/permissions'
+import { actorUser, canAccessUsersAndRoles, hasPermission } from '@/features/settings/permissions'
 
 type NavItem = { to: string; label: string; icon: typeof LayoutDashboard }
 type NavGroup = { id: string; label: string; items: NavItem[] }
@@ -145,6 +145,7 @@ export function Sidebar() {
   const ui = state.ui
   const collapsed = ui.sidebarCollapsed
   const canUsers = canAccessUsersAndRoles(state, actorUser(state))
+  const canWarehouseMap = hasPermission(state, 'warehouse_map.view')
 
   const initialOpen = useMemo(() => {
     const open: Record<string, boolean> = {}
@@ -191,7 +192,7 @@ export function Sidebar() {
               )}
               {isOpen &&
                 group.items
-                  .filter((item) => item.to !== '/settings/users' || canUsers)
+                  .filter((item) => (item.to !== '/settings/users' || canUsers) && (item.to !== '/inventory/warehouse-map' || canWarehouseMap))
                   .map((item) => {
                   const Icon = item.icon
                   const active = pathActive(location.pathname, item.to)
@@ -226,6 +227,7 @@ export function MobileSidebar() {
   const open = state.ui.mobileNavOpen
   const location = useLocation()
   const canUsers = canAccessUsersAndRoles(state, actorUser(state))
+  const canWarehouseMap = hasPermission(state, 'warehouse_map.view')
   if (!open) return null
   return (
     <div className="fixed inset-0 z-50 lg:hidden">
@@ -244,7 +246,7 @@ export function MobileSidebar() {
           <div key={group.id} className="mb-3">
             <div className="px-2 py-1 text-[10px] font-semibold tracking-[0.14em] text-slate-400">{group.label}</div>
             {group.items
-              .filter((item) => item.to !== '/settings/users' || canUsers)
+              .filter((item) => (item.to !== '/settings/users' || canUsers) && (item.to !== '/inventory/warehouse-map' || canWarehouseMap))
               .map((item) => {
               const Icon = item.icon
               const active = pathActive(location.pathname, item.to)
