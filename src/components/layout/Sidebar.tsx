@@ -11,6 +11,7 @@ import {
   FlaskConical,
   History,
   LayoutDashboard,
+  MapPin,
   Package,
   PackageMinus,
   PackagePlus,
@@ -68,6 +69,7 @@ export const navGroups: NavGroup[] = [
     label: 'INVENTORY',
     items: [
       { to: '/inventory', label: 'Inventory', icon: Warehouse },
+      { to: '/inventory/warehouse-map', label: 'Warehouse Map', icon: MapPin },
       { to: '/stock-movements', label: 'Stock Movements', icon: ClipboardList },
       { to: '/stock-adjustment', label: 'Stock Adjustment', icon: BadgePercent },
       { to: '/stock-transfer', label: 'Stock Transfer', icon: ArrowLeftRight },
@@ -131,6 +133,7 @@ function pathActive(pathname: string, to: string) {
   if (to === '/') return pathname === '/'
   if (to === '/sales') return pathname === '/sales' || pathname.startsWith('/sales/invoices')
   if (to === '/manufacturing') return pathname === '/manufacturing'
+  if (to === '/inventory') return pathname === '/inventory'
   if (to === '/manufacturing/today') return pathname === '/manufacturing/today' || pathname.startsWith('/manufacturing/today/')
   return pathname === to || pathname.startsWith(`${to}/`)
 }

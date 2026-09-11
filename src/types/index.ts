@@ -46,6 +46,9 @@ export type ExpenseCategory =
 export type AdjustmentType = 'increase' | 'decrease'
 export type ToastTone = 'success' | 'info' | 'warning' | 'danger'
 export type DatePreset = '7d' | '30d' | '90d' | 'custom'
+export type StorageLocationType = 'RACK' | 'DISPLAY' | 'PALLET' | 'FLOOR' | 'BALANCE_AREA'
+export type StorageFace = 'FRONT' | 'BACK' | 'NONE'
+export type PlacementAction = 'PLACED' | 'MOVED' | 'TOPPED_UP' | 'EMPTIED'
 
 export type Warehouse = {
   id: string
@@ -79,6 +82,52 @@ export type InventoryRow = {
   productId: string
   warehouseId: string
   qty: number
+}
+
+export type StorageLocation = {
+  id: string
+  name: string
+  type: StorageLocationType
+  warehouseId: string
+  active: boolean
+  createdAt: string
+  updatedAt: string
+}
+
+export type StorageSlot = {
+  id: string
+  locationId: string
+  level: number
+  face: StorageFace
+  slotNo: number
+  capacity: number
+  active: boolean
+}
+
+export type SlotOccupancy = {
+  id: string
+  slotId: string
+  productId: string
+  quantityPacks: number
+  batchRef: string
+  productionSessionRef: string
+  placedBy: string
+  placedAt: string
+  updatedAt: string
+}
+
+export type PlacementLog = {
+  id: string
+  action: PlacementAction
+  productId: string
+  quantity: number
+  fromSlotId: string
+  toSlotId: string
+  batchRef: string
+  referenceId: string
+  performedBy: string
+  performedAt: string
+  reason: string
 }
 
 export type Batch = {
@@ -588,6 +637,11 @@ export type PermissionKey =
   | 'inventory.adjust'
   | 'inventory.transfer'
   | 'inventory.count'
+  | 'warehouse_map.view'
+  | 'warehouse_map.putaway'
+  | 'warehouse_map.move'
+  | 'warehouse_map.layout.edit'
+  | 'warehouse_map.location.manage'
   | 'manufacturing.view'
   | 'manufacturing.create'
   | 'manufacturing.edit'
@@ -718,6 +772,10 @@ export type AppData = {
   productionOrders: ProductionOrder[]
   productionSessions: ProductionSession[]
   productionBalances: ProductionBalance[]
+  storageLocations: StorageLocation[]
+  storageSlots: StorageSlot[]
+  slotOccupancies: SlotOccupancy[]
+  placementLogs: PlacementLog[]
 }
 
 export type AppState = AppData & {

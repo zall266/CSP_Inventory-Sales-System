@@ -1,0 +1,658 @@
+import { useMemo, useState } from 'react'
+import { MapPin, Search } from 'lucide-react'
+import { Button, Card, ConfirmDialog, Field, Input, Modal, PageHeader, Select } from '@/components/ui'
+import { hasPermission } from '@/features/settings/permissions'
+import {
+  contrastText,
+  isFinishedPack,
+  locationTypeLabel,
+  occupancyBySlot,
+  placedPacks,
+  shortProductName,
+  slotLabel,
+  unplacedPacks,
+} from '@/features/warehouse/warehouseModel'
+import { useApi, useStore } from '@/store/hooks'
+import { formatQty } from '@/utils/format'
+import type { PlacementLog, Product, SlotOccupancy, StorageLocation, StorageSlot } from '@/types'
+
+type PlaceMode = { kind: 'place'; productId: string } | { kind: 'move'; fromSlotId: string } | null
+
+export function WarehouseMapPage() {
+  const state = useStore()
+  const api = useApi()
+  const warehouseId = state.ui.warehouseFilter === 'all' ? 'wh-main' : state.ui.warehouseFilter
+  const canView = hasPermission(state, 'warehouse_map.view') || hasPermission(state, 'inventory.view')
+  const canPlace = hasPermission(state, 'warehouse_map.putaway')
+  const canMove = hasPermission(state, 'warehouse_map.move')
+  const canManage = hasPermission(state, 'warehouse_map.location.manage')
+  const canLayout = hasPermission(state, 'warehouse_map.layout.edit')
+  const [query, setQuery] = useState('')
+  const [highlightId, setHighlightId] = useState('')
+  const [mode, setMode] = useState<PlaceMode>(null)
+  const [selectedSlotId, setSelectedSlotId] = useState('')
+  const [qty, setQty] = useState(20)
+  const [showTemp, setShowTemp] = useState(false)
+  const [showRack, setShowRack] = useState(false)
+  const [historyOpen, setHistoryOpen] = useState(false)
+  const [deactivateId, setDeactivateId] = useState('')
+  const occupancies = occupancyBySlot(state.slotOccupancies)
+  const products = state.products.filter(isFinishedPack)
+  const productById = (id: string) => state.products.find((row) => row.id === id)
+
+  const unplaced = useMemo(
+    () =>
+      products
+        .map((product) => ({
+          product,
+          qty: unplacedPacks(state, product.id, warehouseId),
+          placed: placedPacks(state, product.id, warehouseId),
+          inventory: state.inventory.find((row) => row.productId === product.id && row.warehouseId === warehouseId)?.qty ?? 0,
+        }))
+        .filter((row) => row.qty > 0 || row.placed > row.inventory),
+    [products, state, warehouseId],
+  )
+
+  const overPlaced = unplaced.filter((row) => row.placed > row.inventory)
+  const findMatches = useMemo(() => {
+    const q = query.trim().toLowerCase()
+    if (!q) return []
+    return state.slotOccupancies
+      .map((row) => {
+        const product = productById(row.productId)
+        const slot = state.storageSlots.find((item) => item.id === row.slotId)
+        const location = slot ? state.storageLocations.find((item) => item.id === slot.locationId) : undefined
+        if (!product || !slot || !location?.active || location.warehouseId !== warehouseId) return null
+        if (!`${product.name} ${product.sku}`.toLowerCase().includes(q)) return null
+        return { occupancy: row, product, slot, location }
+      })
+      .filter((row): row is NonNullable<typeof row> => Boolean(row))
+  }, [query, state.slotOccupancies, state.storageSlots, state.storageLocations, warehouseId])
+
+  const highlightedSlotIds = new Set(findMatches.map((row) => row.occupancy.slotId))
+  if (highlightId) highlightedSlotIds.add(highlightId)
+
+  const racks = state.storageLocations.filter((row) => row.active && row.warehouseId === warehouseId && row.type === 'RACK')
+  const displays = state.storageLocations.filter((row) => row.active && row.warehouseId === warehouseId && row.type === 'DISPLAY')
+  const overflow = state.storageLocations.filter((row) => row.active && row.warehouseId === warehouseId && (row.type === 'PALLET' || row.type === 'FLOOR'))
+  const balances = state.storageLocations.filter((row) => row.active && row.warehouseId === warehouseId && row.type === 'BALANCE_AREA')
+
+  const clickSlot = (slot: StorageSlot, occupancy?: SlotOccupancy) => {
+    if (mode?.kind === 'place') {
+      if (occupancy) return
+      if (!canPlace) return
+      setSelectedSlotId(slot.id)
+      const remaining = unplacedPacks(state, mode.productId, warehouseId)
+      setQty(Math.min(20, remaining) || remaining)
+      return
+    }
+    if (mode?.kind === 'move') {
+      if (slot.id === mode.fromSlotId) return
+      if (!canMove) return
+      setSelectedSlotId(slot.id)
+      const source = occupancies[mode.fromSlotId]
+      setQty(source?.quantityPacks ?? 0)
+      return
+    }
+    if (occupancy && canMove) {
+      setMode({ kind: 'move', fromSlotId: slot.id })
+      setSelectedSlotId('')
+      setQty(occupancy.quantityPacks)
+    }
+  }
+
+  const confirmPlace = () => {
+    if (!selectedSlotId || !mode) return
+    if (mode.kind === 'place') {
+      const remaining = unplacedPacks(state, mode.productId, warehouseId)
+      const ok = api.placeStock({ slotId: selectedSlotId, productId: mode.productId, qty })
+      if (ok) {
+        setSelectedSlotId('')
+        if (remaining - qty <= 0) setMode(null)
+      }
+      return
+    }
+    const toLocation = state.storageLocations.find((row) => row.id === state.storageSlots.find((item) => item.id === selectedSlotId)?.locationId)
+    api.moveStock({
+      fromSlotId: mode.fromSlotId,
+      toSlotId: selectedSlotId,
+      qty,
+      action: toLocation?.type === 'DISPLAY' ? 'TOPPED_UP' : 'MOVED',
+    })
+    setMode(null)
+    setSelectedSlotId('')
+  }
+
+  const moveToDisplay = (fromSlotId: string) => {
+    const source = occupancies[fromSlotId]
+    if (!source) return
+    const display = displays[0]
+    if (!display) {
+      api.toast('No display rack', 'Add a display location first.', 'warning')
+      return
+    }
+    const displaySlots = state.storageSlots.filter((row) => row.locationId === display.id && row.active)
+    const same = displaySlots.find((slot) => occupancies[slot.id]?.productId === source.productId)
+    const empty = displaySlots.find((slot) => !occupancies[slot.id])
+    const target = same ?? empty
+    if (!target) {
+      api.toast('Display is full', 'Empty a display position first.', 'warning')
+      return
+    }
+    setMode({ kind: 'move', fromSlotId })
+    setSelectedSlotId(target.id)
+    setQty(Math.min(source.quantityPacks, 5) || source.quantityPacks)
+  }
+
+  if (!canView) {
+    return <PageHeader title="Warehouse Map" subtitle="You do not have permission to view the warehouse map." />
+  }
+
+  const placingProduct = mode?.kind === 'place' ? productById(mode.productId) : undefined
+  const movingFrom = mode?.kind === 'move' ? occupancies[mode.fromSlotId] : undefined
+
+  return (
+    <div>
+      <PageHeader
+        title="Warehouse Map"
+        subtitle="Physical carton locations. Inventory qty is unchanged when you place or move stock."
+        actions={
+          <div className="flex flex-wrap gap-2">
+            <Button variant="secondary" onClick={() => setHistoryOpen(true)}>Placement history</Button>
+            {canManage && <Button variant="secondary" onClick={() => setShowTemp(true)}>+ Temporary location</Button>}
+            {canLayout && <Button variant="secondary" onClick={() => setShowRack(true)}>+ Rack</Button>}
+          </div>
+        }
+      />
+      {overPlaced.length > 0 && (
+        <div className="mb-4 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+          Map occupancy is higher than inventory for {overPlaced.map((row) => row.product.name).join(', ')}. POS does not deduct carton slots in this prototype.
+        </div>
+      )}
+      <div className="mb-4 flex flex-col gap-3 lg:flex-row">
+        <div className="relative min-w-0 flex-1">
+          <Search size={16} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+          <Input className="pl-9" placeholder="Find product" value={query} onChange={(e) => { setQuery(e.target.value); setHighlightId('') }} />
+        </div>
+        {mode && (
+          <Button variant="ghost" onClick={() => { setMode(null); setSelectedSlotId('') }}>
+            Cancel {mode.kind === 'place' ? 'putaway' : 'move'}
+          </Button>
+        )}
+      </div>
+
+      <div className="mb-4 grid gap-4 xl:grid-cols-[280px_1fr]">
+        <div className="space-y-4">
+          <Card className="p-4">
+            <div className="mb-3 text-sm font-semibold">Ready to place</div>
+            {unplaced.filter((row) => row.qty > 0).length === 0 ? (
+              <p className="text-sm text-slate-500">No finished goods waiting for placement.</p>
+            ) : (
+              <div className="space-y-3">
+                {unplaced.filter((row) => row.qty > 0).map((row) => (
+                  <div key={row.product.id} className="rounded-xl border border-slate-100 p-3">
+                    <div className="text-sm font-medium text-slate-900">{row.product.name}</div>
+                    <div className="mt-1 text-lg font-semibold tabular">{formatQty(row.qty)} PACK</div>
+                    <div className="text-xs text-slate-400">Inventory {formatQty(row.inventory)} · Mapped {formatQty(row.placed)}</div>
+                    {canPlace && (
+                      <Button
+                        size="sm"
+                        className="mt-2"
+                        onClick={() => { setMode({ kind: 'place', productId: row.product.id }); setSelectedSlotId(''); setQty(Math.min(20, row.qty)) }}
+                      >
+                        Place stock
+                      </Button>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </Card>
+          {query.trim() && (
+            <Card className="p-4">
+              <div className="mb-3 text-sm font-semibold">Find results</div>
+              {findMatches.length === 0 ? (
+                <p className="text-sm text-slate-500">No mapped locations.</p>
+              ) : (
+                <div className="space-y-2">
+                  {findMatches.map((row) => (
+                    <button
+                      key={row.occupancy.id}
+                      type="button"
+                      className="block w-full rounded-lg px-2 py-1.5 text-left text-sm hover:bg-slate-50"
+                      onClick={() => setHighlightId(row.occupancy.slotId)}
+                    >
+                      {slotLabel(state, row.occupancy.slotId)} · {formatQty(row.occupancy.quantityPacks)}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </Card>
+          )}
+          {mode?.kind === 'move' && movingFrom && (
+            <Card className="p-4">
+              <div className="text-sm font-semibold">Move stock</div>
+              <p className="mt-1 text-sm text-slate-600">{slotLabel(state, mode.fromSlotId)} · {formatQty(movingFrom.quantityPacks)} pack</p>
+              <p className="mt-2 text-xs text-slate-500">Click a destination cell, or top up Display.</p>
+              <div className="mt-3 flex flex-wrap gap-2">
+                <Button size="sm" onClick={() => moveToDisplay(mode.fromSlotId)}>Move to Display</Button>
+                <Button size="sm" variant="secondary" onClick={() => api.emptySlot(mode.fromSlotId)}>Empty (unplace)</Button>
+              </div>
+            </Card>
+          )}
+          {mode?.kind === 'place' && placingProduct && (
+            <Card className="p-4">
+              <div className="text-sm font-semibold">Placing {placingProduct.name}</div>
+              <p className="mt-1 text-sm text-slate-600">{formatQty(unplacedPacks(state, placingProduct.id, warehouseId))} pack left. Click an empty cell.</p>
+            </Card>
+          )}
+        </div>
+
+        <div className="min-w-0 space-y-5">
+          <div className="overflow-x-auto pb-2">
+            <div className="mb-2 text-xs font-semibold uppercase tracking-[0.14em] text-slate-400">Main warehouse</div>
+            <div className="flex min-w-max gap-6">
+              {racks.map((rack) => (
+                <RackCard
+                  key={rack.id}
+                  location={rack}
+                  slots={state.storageSlots.filter((row) => row.locationId === rack.id && row.active)}
+                  occupancies={occupancies}
+                  productById={productById}
+                  highlightedSlotIds={highlightedSlotIds}
+                  selectedSlotId={selectedSlotId}
+                  onClick={clickSlot}
+                />
+              ))}
+            </div>
+          </div>
+
+          {displays.map((location) => (
+              <GenericStrip
+                key={location.id}
+                title="Display rack"
+                slots={state.storageSlots.filter((row) => row.locationId === location.id && row.active)}
+              occupancies={occupancies}
+              productById={productById}
+              highlightedSlotIds={highlightedSlotIds}
+              selectedSlotId={selectedSlotId}
+              onClick={clickSlot}
+            />
+          ))}
+
+          {overflow.length > 0 && (
+            <div>
+              <div className="mb-2 text-xs font-semibold uppercase tracking-[0.14em] text-slate-400">Overflow</div>
+              <div className="space-y-3">
+                {overflow.map((location) => (
+                  <GenericStrip
+                    key={location.id}
+                    title={`${locationTypeLabel(location.type)} · ${location.name}`}
+                    slots={state.storageSlots.filter((row) => row.locationId === location.id && row.active)}
+                    occupancies={occupancies}
+                    productById={productById}
+                    highlightedSlotIds={highlightedSlotIds}
+                    selectedSlotId={selectedSlotId}
+                    onClick={clickSlot}
+                    onDeactivate={canManage ? () => setDeactivateId(location.id) : undefined}
+                  />
+                ))}
+              </div>
+            </div>
+          )}
+
+          {balances.map((location) => (
+            <BalanceStrip key={location.id} location={location} slots={state.storageSlots.filter((row) => row.locationId === location.id && row.active)} />
+          ))}
+        </div>
+      </div>
+
+      <Modal
+        open={Boolean(selectedSlotId && mode)}
+        onClose={() => setSelectedSlotId('')}
+        title={mode?.kind === 'place' ? 'Place stock' : 'Move stock'}
+      >
+        {selectedSlotId && mode && (
+          <div className="space-y-3">
+            <div className="text-sm text-slate-600">{slotLabel(state, selectedSlotId)}</div>
+            <div className="text-sm font-medium">
+              {mode.kind === 'place' ? placingProduct?.name : productById(movingFrom?.productId ?? '')?.name}
+            </div>
+            <Field label="Quantity (packs)">
+              <Input type="number" min={0.01} step="1" value={qty} onChange={(e) => setQty(Number(e.target.value))} />
+            </Field>
+            <div className="flex justify-end gap-2">
+              <Button variant="secondary" onClick={() => setSelectedSlotId('')}>Cancel</Button>
+              <Button onClick={confirmPlace}>{mode.kind === 'place' ? 'Place' : 'Move'}</Button>
+            </div>
+          </div>
+        )}
+      </Modal>
+      <TempLocationModal open={showTemp} onClose={() => setShowTemp(false)} warehouseId={warehouseId} />
+      <RackModal open={showRack} onClose={() => setShowRack(false)} warehouseId={warehouseId} />
+      <HistoryModal open={historyOpen} onClose={() => setHistoryOpen(false)} logs={state.placementLogs} />
+      <ConfirmDialog
+        open={Boolean(deactivateId)}
+        title="Deactivate location?"
+        message="History is kept. The location can only be deactivated if it is empty."
+        confirmLabel="Deactivate"
+        onClose={() => setDeactivateId('')}
+        onConfirm={() => {
+          if (deactivateId) api.deactivateStorageLocation(deactivateId)
+          setDeactivateId('')
+        }}
+      />
+    </div>
+  )
+}
+
+function RackCard({
+  location,
+  slots,
+  occupancies,
+  productById,
+  highlightedSlotIds,
+  selectedSlotId,
+  onClick,
+}: {
+  location: StorageLocation
+  slots: StorageSlot[]
+  occupancies: Record<string, SlotOccupancy>
+  productById: (id: string) => Product | undefined
+  highlightedSlotIds: Set<string>
+  selectedSlotId: string
+  onClick: (slot: StorageSlot, occupancy?: SlotOccupancy) => void
+}) {
+  const levels = [...new Set(slots.map((row) => row.level))].sort((a, b) => b - a)
+  return (
+    <div className="rounded-2xl border border-slate-200 bg-white p-4">
+      <div className="mb-3 flex items-center gap-2 text-sm font-semibold text-slate-900">
+        <MapPin size={15} className="text-slate-400" />
+        {location.name}
+      </div>
+      <div className="space-y-4">
+        {levels.map((level) => {
+          const front = slots.filter((row) => row.level === level && row.face === 'FRONT').sort((a, b) => a.slotNo - b.slotNo)
+          const back = slots.filter((row) => row.level === level && row.face === 'BACK').sort((a, b) => a.slotNo - b.slotNo)
+          return (
+            <div key={level}>
+              <div className="mb-1 text-[10px] font-semibold uppercase tracking-[0.12em] text-slate-400">Level {level}</div>
+              <FaceRow
+                label="Front"
+                slots={front}
+                occupancies={occupancies}
+                productById={productById}
+                highlightedSlotIds={highlightedSlotIds}
+                selectedSlotId={selectedSlotId}
+                partnerSlots={back}
+                onClick={onClick}
+              />
+              <FaceRow
+                label="Back"
+                slots={back}
+                occupancies={occupancies}
+                productById={productById}
+                highlightedSlotIds={highlightedSlotIds}
+                selectedSlotId={selectedSlotId}
+                partnerSlots={front}
+                onClick={onClick}
+                muted
+              />
+            </div>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
+function FaceRow({
+  label,
+  slots,
+  occupancies,
+  productById,
+  highlightedSlotIds,
+  selectedSlotId,
+  partnerSlots,
+  onClick,
+  muted,
+}: {
+  label: string
+  slots: StorageSlot[]
+  occupancies: Record<string, SlotOccupancy>
+  productById: (id: string) => Product | undefined
+  highlightedSlotIds: Set<string>
+  selectedSlotId: string
+  partnerSlots: StorageSlot[]
+  onClick: (slot: StorageSlot, occupancy?: SlotOccupancy) => void
+  muted?: boolean
+}) {
+  return (
+    <div className={muted ? 'mt-1' : ''}>
+      <div className="mb-1 text-[10px] font-medium uppercase tracking-wide text-slate-400">{label}</div>
+      <div className="flex gap-1.5">
+        {slots.map((slot) => {
+          const partner = partnerSlots.find((row) => row.slotNo === slot.slotNo)
+          const backHidden = Boolean(muted && occupancies[slot.id] && partner && occupancies[partner.id])
+          return (
+            <SlotCell
+              key={slot.id}
+              slot={slot}
+              occupancy={occupancies[slot.id]}
+              product={occupancies[slot.id] ? productById(occupancies[slot.id].productId) : undefined}
+              highlighted={highlightedSlotIds.has(slot.id)}
+              selected={selectedSlotId === slot.id}
+              backStock={backHidden}
+              onClick={() => onClick(slot, occupancies[slot.id])}
+            />
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
+function GenericStrip({
+  title,
+  slots,
+  occupancies,
+  productById,
+  highlightedSlotIds,
+  selectedSlotId,
+  onClick,
+  onDeactivate,
+}: {
+  title: string
+  slots: StorageSlot[]
+  occupancies: Record<string, SlotOccupancy>
+  productById: (id: string) => Product | undefined
+  highlightedSlotIds: Set<string>
+  selectedSlotId: string
+  onClick: (slot: StorageSlot, occupancy?: SlotOccupancy) => void
+  onDeactivate?: () => void
+}) {
+  return (
+    <div>
+      <div className="mb-2 flex items-center justify-between gap-2">
+        <div className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-400">{title}</div>
+        {onDeactivate && <button type="button" className="text-xs text-rose-600" onClick={onDeactivate}>Deactivate</button>}
+      </div>
+      <div className="flex flex-wrap gap-1.5">
+        {slots.sort((a, b) => a.slotNo - b.slotNo).map((slot) => (
+          <SlotCell
+            key={slot.id}
+            slot={slot}
+            occupancy={occupancies[slot.id]}
+            product={occupancies[slot.id] ? productById(occupancies[slot.id].productId) : undefined}
+            highlighted={highlightedSlotIds.has(slot.id)}
+            selected={selectedSlotId === slot.id}
+            onClick={() => onClick(slot, occupancies[slot.id])}
+          />
+        ))}
+      </div>
+    </div>
+  )
+}
+
+function BalanceStrip({ location, slots }: { location: StorageLocation; slots: StorageSlot[] }) {
+  const state = useStore()
+  return (
+    <div>
+      <div className="mb-2 text-xs font-semibold uppercase tracking-[0.14em] text-slate-400">{location.name}</div>
+      <div className="flex flex-wrap gap-2">
+        {slots.sort((a, b) => a.slotNo - b.slotNo).map((slot) => {
+          const rows = state.productionBalances.filter(
+            (row) => row.status === 'available' && row.warehouseId === location.warehouseId && row.container === `Box ${slot.slotNo}`,
+          )
+          return (
+            <div key={slot.id} className="min-w-[120px] rounded-xl border border-dashed border-slate-300 bg-slate-50 px-3 py-2">
+              <div className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">Box {slot.slotNo}</div>
+              {rows.length ? rows.map((row) => {
+                const product = state.products.find((item) => item.id === row.productId)
+                return (
+                  <div key={row.id} className="mt-1 text-xs text-slate-700">
+                    {shortProductName(product?.name ?? 'Balance')}
+                    <div className="tabular text-slate-500">{formatQty(row.quantity)}{row.unit}</div>
+                  </div>
+                )
+              }) : <div className="mt-1 text-xs text-slate-400">Empty</div>}
+            </div>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
+function SlotCell({
+  occupancy,
+  product,
+  highlighted,
+  selected,
+  backStock,
+  onClick,
+}: {
+  slot: StorageSlot
+  occupancy?: SlotOccupancy
+  product?: Product
+  highlighted?: boolean
+  selected?: boolean
+  backStock?: boolean
+  onClick: () => void
+}) {
+  const color = product?.accent || '#e2e8f0'
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={`relative h-[76px] w-[96px] shrink-0 rounded-lg border text-left text-[11px] leading-tight ${
+        occupancy
+          ? 'border-slate-300 shadow-sm'
+          : 'border-dashed border-slate-300 bg-[repeating-linear-gradient(-45deg,#fff,#fff_6px,#f8fafc_6px,#f8fafc_12px)] text-slate-400'
+      } ${highlighted ? 'ring-2 ring-indigo-500' : ''} ${selected ? 'ring-2 ring-emerald-500' : ''}`}
+      style={occupancy ? { background: color, color: contrastText(color) } : undefined}
+    >
+      <div className="flex h-full flex-col justify-between p-1.5">
+        {occupancy && product ? (
+          <>
+            <div className="font-semibold uppercase tracking-wide">{shortProductName(product.name)}</div>
+            <div className="tabular font-medium">{formatQty(occupancy.quantityPacks)} PACK</div>
+          </>
+        ) : (
+          <div className="m-auto text-[10px] font-medium tracking-wide">EMPTY</div>
+        )}
+      </div>
+      {backStock && (
+        <span className="absolute -top-1 right-1 rounded bg-slate-900/80 px-1 text-[8px] font-semibold uppercase tracking-wide text-white">
+          Back stock
+        </span>
+      )}
+    </button>
+  )
+}
+
+function TempLocationModal({ open, onClose, warehouseId }: { open: boolean; onClose: () => void; warehouseId: string }) {
+  const api = useApi()
+  const [name, setName] = useState('Pallet P01')
+  const [type, setType] = useState<'PALLET' | 'FLOOR'>('PALLET')
+  const [slotCount, setSlotCount] = useState(3)
+  return (
+    <Modal open={open} onClose={onClose} title="Add temporary location">
+      <div className="space-y-3">
+        <Field label="Name"><Input value={name} onChange={(e) => setName(e.target.value)} /></Field>
+        <Field label="Type">
+          <Select value={type} onChange={(e) => setType(e.target.value as 'PALLET' | 'FLOOR')}>
+            <option value="PALLET">Pallet</option>
+            <option value="FLOOR">Floor</option>
+          </Select>
+        </Field>
+        <Field label="Positions"><Input type="number" min={1} value={slotCount} onChange={(e) => setSlotCount(Number(e.target.value))} /></Field>
+        <div className="flex justify-end gap-2">
+          <Button variant="secondary" onClick={onClose}>Cancel</Button>
+          <Button
+            onClick={() => {
+              if (api.createTemporaryLocation({ name, type, warehouseId, slotCount })) onClose()
+            }}
+          >
+            Add
+          </Button>
+        </div>
+      </div>
+    </Modal>
+  )
+}
+
+function RackModal({ open, onClose, warehouseId }: { open: boolean; onClose: () => void; warehouseId: string }) {
+  const api = useApi()
+  const [name, setName] = useState('Rack 3')
+  const [levels, setLevels] = useState(4)
+  const [frontCount, setFrontCount] = useState(4)
+  const [backCount, setBackCount] = useState(4)
+  return (
+    <Modal open={open} onClose={onClose} title="Add rack">
+      <div className="space-y-3">
+        <Field label="Name"><Input value={name} onChange={(e) => setName(e.target.value)} /></Field>
+        <div className="grid grid-cols-3 gap-3">
+          <Field label="Levels"><Input type="number" min={1} value={levels} onChange={(e) => setLevels(Number(e.target.value))} /></Field>
+          <Field label="Front"><Input type="number" min={1} value={frontCount} onChange={(e) => setFrontCount(Number(e.target.value))} /></Field>
+          <Field label="Back"><Input type="number" min={0} value={backCount} onChange={(e) => setBackCount(Number(e.target.value))} /></Field>
+        </div>
+        <div className="flex justify-end gap-2">
+          <Button variant="secondary" onClick={onClose}>Cancel</Button>
+          <Button
+            onClick={() => {
+              if (api.createRackLocation({ name, warehouseId, levels, frontCount, backCount })) onClose()
+            }}
+          >
+            Generate slots
+          </Button>
+        </div>
+      </div>
+    </Modal>
+  )
+}
+
+function HistoryModal({ open, onClose, logs }: { open: boolean; onClose: () => void; logs: PlacementLog[] }) {
+  const state = useStore()
+  return (
+    <Modal open={open} onClose={onClose} title="Placement history" width="max-w-2xl">
+      <div className="max-h-[60vh] space-y-2 overflow-y-auto">
+        {logs.length === 0 && <p className="text-sm text-slate-500">No movements yet.</p>}
+        {logs.slice(0, 80).map((row) => {
+          const product = state.products.find((item) => item.id === row.productId)
+          return (
+            <div key={row.id} className="rounded-lg border border-slate-100 px-3 py-2 text-sm">
+              <div className="font-medium text-slate-800">{row.action} · {shortProductName(product?.name ?? 'Product')} · {formatQty(row.quantity)}</div>
+              <div className="text-xs text-slate-500">
+                {row.fromSlotId ? slotLabel(state, row.fromSlotId) : 'Unplaced'}
+                {' → '}
+                {row.toSlotId ? slotLabel(state, row.toSlotId) : 'Unplaced'}
+                {' · '}{row.performedBy}
+              </div>
+            </div>
+          )
+        })}
+      </div>
+    </Modal>
+  )
+}

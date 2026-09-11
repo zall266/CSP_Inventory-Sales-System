@@ -1,4 +1,5 @@
 import { createSeedData, CURRENT_USER } from '@/data/seed'
+import { createMainWarehouseLayout, generateGenericSlots, generateRackSlots, seedWarehouseOccupancy, unplacedPacks } from '@/features/warehouse/warehouseModel'
 import { bomLinesForQty, consumptionCost, hasShortage, materialAvailability } from '@/features/manufacturing/helpers'
 import { buildSessionPlan, canEditSession, currentUser, mergePicking } from '@/features/manufacturing/sessionPlan'
 import {
@@ -59,6 +60,7 @@ import type {
   SaleStatus,
   Settings,
   StockStatus,
+  StorageLocationType,
   ToastTone,
   UiState,
   User,
@@ -114,11 +116,29 @@ function persist(data: AppData) {
 }
 
 function hydrateData(data: AppData): AppData {
+  const seedLayout = createMainWarehouseLayout('2026-09-08T09:15:00+08:00')
+  const seedOccupancy = seedWarehouseOccupancy('2026-09-08T16:15:00+08:00', 'Admin')
+  const roles = data.roles ?? seed.roles
+  const roleMatrix = Object.fromEntries(
+    roles.map((role) => {
+      const raw = data.settings?.roleMatrix?.[role.id] ?? {}
+      const normalized = normalizePermissions(raw)
+      const defaults = defaultPermissionsForLegacy(role.legacyRole)
+      for (const key of ['warehouse_map.view', 'warehouse_map.putaway', 'warehouse_map.move', 'warehouse_map.layout.edit', 'warehouse_map.location.manage'] as const) {
+        if (raw[key] === undefined) normalized[key] = defaults[key]
+      }
+      return [role.id, normalized]
+    }),
+  )
   return {
     ...data,
     quotations: data.quotations ?? [],
     deliveryOrders: data.deliveryOrders ?? [],
     documentAuditLogs: data.documentAuditLogs ?? [],
+    storageLocations: data.storageLocations?.length ? data.storageLocations : seedLayout.storageLocations,
+    storageSlots: data.storageSlots?.length ? data.storageSlots : seedLayout.storageSlots,
+    slotOccupancies: data.slotOccupancies ?? (data.storageLocations?.length ? [] : seedOccupancy.slotOccupancies),
+    placementLogs: data.placementLogs ?? (data.storageLocations?.length ? [] : seedOccupancy.placementLogs),
     settings: {
       ...data.settings,
       legalName: data.settings.legalName ?? '',
@@ -129,6 +149,7 @@ function hydrateData(data: AppData): AppData {
       bankAccount: data.settings.bankAccount ?? '',
       paymentTerms: data.settings.paymentTerms ?? 'Net 7 days',
       documentTerms: data.settings.documentTerms ?? DEFAULT_DOCUMENT_TERMS,
+      roleMatrix,
     },
   }
 }
@@ -2653,6 +2674,264 @@ export const db = {
     setData({ productionSessions: [session, ...state.productionSessions] })
     toast('Daily production created', session.reference)
     return session
+  },
+
+  unplacedPacks(productId: string, warehouseId = 'wh-main') {
+    return unplacedPacks(state, productId, warehouseId)
+  },
+
+  placeStock(input: { slotId: string; productId: string; qty: number; batchRef?: string; productionSessionRef?: string; reason?: string }) {
+    if (!hasPermission(state, 'warehouse_map.putaway')) {
+      toast('Permission denied', 'You cannot place finished goods.', 'danger')
+      return false
+    }
+    const qty = round2(input.qty)
+    if (qty <= 0) {
+      toast('Enter a quantity', undefined, 'warning')
+      return false
+    }
+    const slot = state.storageSlots.find((row) => row.id === input.slotId && row.active)
+    const location = slot ? state.storageLocations.find((row) => row.id === slot.locationId && row.active) : undefined
+    if (!slot || !location || location.type === 'BALANCE_AREA') {
+      toast('Choose a storage position', undefined, 'warning')
+      return false
+    }
+    const existing = state.slotOccupancies.find((row) => row.slotId === slot.id)
+    if (existing) {
+      toast('Slot occupied', 'Choose an empty position.', 'warning')
+      return false
+    }
+    const available = unplacedPacks(state, input.productId, location.warehouseId)
+    if (qty > available) {
+      toast('Not enough unplaced stock', `${available} pack(s) left to place.`, 'warning')
+      return false
+    }
+    const actor = currentUser(state)
+    const occupancy = {
+      id: uid('occ'),
+      slotId: slot.id,
+      productId: input.productId,
+      quantityPacks: qty,
+      batchRef: input.batchRef ?? '',
+      productionSessionRef: input.productionSessionRef ?? '',
+      placedBy: actor.name,
+      placedAt: nowIso(),
+      updatedAt: nowIso(),
+    }
+    const log = {
+      id: uid('pl'),
+      action: 'PLACED' as const,
+      productId: input.productId,
+      quantity: qty,
+      fromSlotId: '',
+      toSlotId: slot.id,
+      batchRef: occupancy.batchRef,
+      referenceId: occupancy.productionSessionRef,
+      performedBy: actor.name,
+      performedAt: nowIso(),
+      reason: input.reason ?? '',
+    }
+    setData({
+      slotOccupancies: [...state.slotOccupancies, occupancy],
+      placementLogs: [log, ...state.placementLogs],
+    })
+    toast('Stock placed', `${qty} pack(s) placed.`)
+    return true
+  },
+
+  moveStock(input: { fromSlotId: string; toSlotId: string; qty: number; action?: 'MOVED' | 'TOPPED_UP'; reason?: string }) {
+    if (!hasPermission(state, 'warehouse_map.move')) {
+      toast('Permission denied', 'You cannot move warehouse stock.', 'danger')
+      return false
+    }
+    const qty = round2(input.qty)
+    if (qty <= 0) {
+      toast('Enter a quantity', undefined, 'warning')
+      return false
+    }
+    if (input.fromSlotId === input.toSlotId) {
+      toast('Choose a different position', undefined, 'warning')
+      return false
+    }
+    const source = state.slotOccupancies.find((row) => row.slotId === input.fromSlotId)
+    const fromSlot = state.storageSlots.find((row) => row.id === input.fromSlotId && row.active)
+    const toSlot = state.storageSlots.find((row) => row.id === input.toSlotId && row.active)
+    const toLocation = toSlot ? state.storageLocations.find((row) => row.id === toSlot.locationId && row.active) : undefined
+    if (!source || !fromSlot || !toSlot || !toLocation || toLocation.type === 'BALANCE_AREA') {
+      toast('Choose valid positions', undefined, 'warning')
+      return false
+    }
+    if (qty > source.quantityPacks) {
+      toast('Not enough in that position', `${source.quantityPacks} pack(s) available.`, 'warning')
+      return false
+    }
+    const destination = state.slotOccupancies.find((row) => row.slotId === toSlot.id)
+    if (destination && destination.productId !== source.productId) {
+      toast('Slot has another product', 'One SKU per position.', 'warning')
+      return false
+    }
+    const actor = currentUser(state)
+    const remaining = round2(source.quantityPacks - qty)
+    let occupancies = state.slotOccupancies
+    if (remaining <= 0) occupancies = occupancies.filter((row) => row.id !== source.id)
+    else occupancies = occupancies.map((row) => (row.id === source.id ? { ...row, quantityPacks: remaining, updatedAt: nowIso() } : row))
+    if (destination) {
+      occupancies = occupancies.map((row) =>
+        row.id === destination.id ? { ...row, quantityPacks: round2(row.quantityPacks + qty), updatedAt: nowIso() } : row,
+      )
+    } else {
+      occupancies = [
+        ...occupancies,
+        {
+          id: uid('occ'),
+          slotId: toSlot.id,
+          productId: source.productId,
+          quantityPacks: qty,
+          batchRef: source.batchRef,
+          productionSessionRef: source.productionSessionRef,
+          placedBy: actor.name,
+          placedAt: nowIso(),
+          updatedAt: nowIso(),
+        },
+      ]
+    }
+    const log = {
+      id: uid('pl'),
+      action: (input.action ?? 'MOVED') as 'MOVED' | 'TOPPED_UP',
+      productId: source.productId,
+      quantity: qty,
+      fromSlotId: fromSlot.id,
+      toSlotId: toSlot.id,
+      batchRef: source.batchRef,
+      referenceId: source.productionSessionRef,
+      performedBy: actor.name,
+      performedAt: nowIso(),
+      reason: input.reason ?? '',
+    }
+    setData({ slotOccupancies: occupancies, placementLogs: [log, ...state.placementLogs] })
+    toast(log.action === 'TOPPED_UP' ? 'Display topped up' : 'Stock moved', `${qty} pack(s) moved.`)
+    return true
+  },
+
+  emptySlot(slotId: string, reason = '') {
+    if (!hasPermission(state, 'warehouse_map.move')) {
+      toast('Permission denied', 'You cannot empty a position.', 'danger')
+      return false
+    }
+    const source = state.slotOccupancies.find((row) => row.slotId === slotId)
+    if (!source) return false
+    const actor = currentUser(state)
+    const log = {
+      id: uid('pl'),
+      action: 'EMPTIED' as const,
+      productId: source.productId,
+      quantity: source.quantityPacks,
+      fromSlotId: slotId,
+      toSlotId: '',
+      batchRef: source.batchRef,
+      referenceId: source.productionSessionRef,
+      performedBy: actor.name,
+      performedAt: nowIso(),
+      reason,
+    }
+    setData({
+      slotOccupancies: state.slotOccupancies.filter((row) => row.id !== source.id),
+      placementLogs: [log, ...state.placementLogs],
+    })
+    toast('Position emptied', 'Packs returned to Ready to Place.')
+    return true
+  },
+
+  createTemporaryLocation(input: { name: string; type: Extract<StorageLocationType, 'PALLET' | 'FLOOR'>; warehouseId?: string; slotCount?: number }) {
+    if (!hasPermission(state, 'warehouse_map.location.manage')) {
+      toast('Permission denied', 'You cannot add storage locations.', 'danger')
+      return null
+    }
+    const name = input.name.trim()
+    if (!name) {
+      toast('Location name is required', undefined, 'warning')
+      return null
+    }
+    const id = uid('loc')
+    const location = {
+      id,
+      name,
+      type: input.type,
+      warehouseId: input.warehouseId || state.settings.defaultWarehouseId || 'wh-main',
+      active: true,
+      createdAt: nowIso(),
+      updatedAt: nowIso(),
+    }
+    const slots = generateGenericSlots(id, Math.max(1, input.slotCount ?? 3))
+    setData({
+      storageLocations: [...state.storageLocations, location],
+      storageSlots: [...state.storageSlots, ...slots],
+    })
+    toast('Temporary location added', name)
+    return location
+  },
+
+  createRackLocation(input: { name: string; warehouseId?: string; levels?: number; frontCount?: number; backCount?: number }) {
+    if (!hasPermission(state, 'warehouse_map.layout.edit')) {
+      toast('Permission denied', 'You cannot edit warehouse layout.', 'danger')
+      return null
+    }
+    const name = input.name.trim()
+    if (!name) {
+      toast('Rack name is required', undefined, 'warning')
+      return null
+    }
+    const id = uid('loc')
+    const location = {
+      id,
+      name,
+      type: 'RACK' as const,
+      warehouseId: input.warehouseId || state.settings.defaultWarehouseId || 'wh-main',
+      active: true,
+      createdAt: nowIso(),
+      updatedAt: nowIso(),
+    }
+    const slots = generateRackSlots(id, Math.max(1, input.levels ?? 4), Math.max(1, input.frontCount ?? 4), Math.max(0, input.backCount ?? 4))
+    setData({
+      storageLocations: [...state.storageLocations, location],
+      storageSlots: [...state.storageSlots, ...slots],
+    })
+    toast('Rack added', name)
+    return location
+  },
+
+  renameStorageLocation(id: string, name: string) {
+    if (!hasPermission(state, 'warehouse_map.location.manage')) {
+      toast('Permission denied', 'You cannot rename locations.', 'danger')
+      return false
+    }
+    const next = name.trim()
+    if (!next) return false
+    setData({
+      storageLocations: state.storageLocations.map((row) => (row.id === id ? { ...row, name: next, updatedAt: nowIso() } : row)),
+    })
+    toast('Location renamed', next)
+    return true
+  },
+
+  deactivateStorageLocation(id: string) {
+    if (!hasPermission(state, 'warehouse_map.location.manage')) {
+      toast('Permission denied', 'You cannot deactivate locations.', 'danger')
+      return false
+    }
+    const location = state.storageLocations.find((row) => row.id === id)
+    if (!location) return false
+    const slotIds = state.storageSlots.filter((row) => row.locationId === id).map((row) => row.id)
+    if (state.slotOccupancies.some((row) => slotIds.includes(row.slotId))) {
+      toast('Location still has stock', 'Empty it before deactivating.', 'warning')
+      return false
+    }
+    setData({
+      storageLocations: state.storageLocations.map((row) => (row.id === id ? { ...row, active: false, updatedAt: nowIso() } : row)),
+      storageSlots: state.storageSlots.map((row) => (row.locationId === id ? { ...row, active: false } : row)),
+    })
+    toast('Location deactivated', location.name)
+    return true
   },
 }
 
