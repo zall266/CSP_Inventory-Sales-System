@@ -11,7 +11,7 @@ import {
   unplacedPacks,
   WAREHOUSE_MAP_KEYS,
 } from '@/features/warehouse/warehouseModel'
-import { AGENT_PERMISSION_KEYS, companyWarehouses, isAgentWarehouseId, isCompanyWarehouseId } from '@/features/agent/agentModel'
+import { AGENT_PERMISSION_KEYS, agentLinkedWarehouseName, companyWarehouses, isAgentWarehouseId, isCompanyWarehouseId, nextAgentWarehouseId } from '@/features/agent/agentModel'
 import { bomLinesForQty, consumptionCost, hasShortage, materialAvailability } from '@/features/manufacturing/helpers'
 import { buildSessionPlan, canEditSession, currentUser, mergePicking } from '@/features/manufacturing/sessionPlan'
 import {
@@ -42,6 +42,9 @@ import type {
   AppData,
   AppState,
   AdjustmentType,
+  Agent,
+  AgentInput,
+  AgentStatus,
   BomInput,
   DeliveryOrder,
   DeliveryOrderInput,
@@ -527,6 +530,149 @@ export const db = {
     setData({ suppliers: [supplier, ...state.suppliers] })
     toast('Supplier added', supplier.name)
     return supplier
+  },
+
+  createAgent(input: AgentInput) {
+    if (!hasPermission(state, 'agent.manage')) {
+      toast('Permission denied', 'You cannot manage agents.', 'danger')
+      return null
+    }
+    const name = input.name.trim()
+    const code = input.code.trim().toUpperCase()
+    if (!name) {
+      toast('Agent name is required', undefined, 'warning')
+      return null
+    }
+    if (!code) {
+      toast('Agent code is required', undefined, 'warning')
+      return null
+    }
+    const agents = state.agents ?? []
+    if (agents.some((agent) => agent.code.trim().toLowerCase() === code.toLowerCase())) {
+      toast('Agent code already exists', code, 'warning')
+      return null
+    }
+    if (state.warehouses.some((warehouse) => warehouse.code.trim().toLowerCase() === code.toLowerCase())) {
+      toast('Warehouse code already exists', code, 'warning')
+      return null
+    }
+    const warehouseId = nextAgentWarehouseId(state.warehouses, code)
+    if (
+      state.warehouses.some((warehouse) => warehouse.id === warehouseId) ||
+      agents.some((agent) => agent.warehouseId === warehouseId)
+    ) {
+      toast('Linked warehouse already exists', warehouseId, 'warning')
+      return null
+    }
+    const userId = input.userId?.trim() || undefined
+    if (userId) {
+      const user = state.users.find((item) => item.id === userId)
+      if (!user) {
+        toast('User not found', undefined, 'warning')
+        return null
+      }
+      if (agents.some((agent) => agent.userId === userId)) {
+        toast('User already linked to an agent', user.name, 'warning')
+        return null
+      }
+    }
+    const stamp = nowIso()
+    const warehouse = {
+      id: warehouseId,
+      name: agentLinkedWarehouseName(name),
+      code,
+      kind: 'agent' as const,
+    }
+    const agent: Agent = {
+      id: uid('agt'),
+      name,
+      code,
+      warehouseId,
+      userId,
+      bankName: input.bankName?.trim() ?? '',
+      accountHolder: input.accountHolder?.trim() ?? '',
+      bankAccount: input.bankAccount?.trim() ?? '',
+      status: 'active',
+      createdAt: stamp,
+      updatedAt: stamp,
+    }
+    setData({
+      agents: [agent, ...agents],
+      warehouses: [...state.warehouses, warehouse],
+    })
+    toast('Agent added', agent.name)
+    return agent
+  },
+
+  updateAgent(id: string, patch: AgentInput) {
+    if (!hasPermission(state, 'agent.manage')) {
+      toast('Permission denied', 'You cannot manage agents.', 'danger')
+      return false
+    }
+    const current = (state.agents ?? []).find((agent) => agent.id === id)
+    if (!current) return false
+    const name = patch.name.trim()
+    const code = patch.code.trim().toUpperCase()
+    if (!name) {
+      toast('Agent name is required', undefined, 'warning')
+      return false
+    }
+    if (!code) {
+      toast('Agent code is required', undefined, 'warning')
+      return false
+    }
+    if ((state.agents ?? []).some((agent) => agent.id !== id && agent.code.trim().toLowerCase() === code.toLowerCase())) {
+      toast('Agent code already exists', code, 'warning')
+      return false
+    }
+    const userId = patch.userId?.trim() || undefined
+    if (userId) {
+      const user = state.users.find((item) => item.id === userId)
+      if (!user) {
+        toast('User not found', undefined, 'warning')
+        return false
+      }
+      if ((state.agents ?? []).some((agent) => agent.id !== id && agent.userId === userId)) {
+        toast('User already linked to an agent', user.name, 'warning')
+        return false
+      }
+    }
+    const next: Agent = {
+      ...current,
+      name,
+      code,
+      userId,
+      bankName: patch.bankName?.trim() ?? '',
+      accountHolder: patch.accountHolder?.trim() ?? '',
+      bankAccount: patch.bankAccount?.trim() ?? '',
+      warehouseId: current.warehouseId,
+      updatedAt: nowIso(),
+    }
+    setData({
+      agents: (state.agents ?? []).map((agent) => (agent.id === id ? next : agent)),
+      warehouses: state.warehouses.map((warehouse) =>
+        warehouse.id === current.warehouseId ? { ...warehouse, name: agentLinkedWarehouseName(name) } : warehouse,
+      ),
+    })
+    toast('Agent updated', next.name)
+    return true
+  },
+
+  setAgentStatus(id: string, status: AgentStatus) {
+    if (!hasPermission(state, 'agent.manage')) {
+      toast('Permission denied', 'You cannot manage agents.', 'danger')
+      return false
+    }
+    const current = (state.agents ?? []).find((agent) => agent.id === id)
+    if (!current) return false
+    if (current.status === status) return true
+    setData({
+      agents: (state.agents ?? []).map((agent) =>
+        agent.id === id ? { ...agent, status, updatedAt: nowIso() } : agent,
+      ),
+    })
+    toast(status === 'inactive' ? 'Agent deactivated' : 'Agent activated', current.name)
+    return true
   },
 
   createUser(input: { name: string; email: string; roleId: string; departmentId: string; status?: UserStatus }) {
