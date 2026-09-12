@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { Button, Card, Field, Input, PageHeader, Select, Textarea } from '@/components/ui'
+import { saleIsAgentSale } from '@/features/agent/agentModel'
 import { useApi, useLookups, useStore } from '@/store/hooks'
 import { formatMoney, formatQty } from '@/utils/format'
 
@@ -47,9 +48,13 @@ export function SalesReturnsPage() {
               })}
             </div>
             <Field label="Reason"><Textarea rows={3} value={reason} onChange={(e) => setReason(e.target.value)} /></Field>
-            <Button onClick={() => api.createSalesReturn({ saleId: sale.id, items: sale.items.map((l) => ({ productId: l.productId, qty: qtys[l.productId] ?? 0 })), reason })}>
-              Process return
-            </Button>
+            {saleIsAgentSale(state, sale) ? (
+              <div className="text-sm text-amber-700">Agent sales cannot be returned in this version.</div>
+            ) : (
+              <Button onClick={() => api.createSalesReturn({ saleId: sale.id, items: sale.items.map((l) => ({ productId: l.productId, qty: qtys[l.productId] ?? 0 })), reason })}>
+                Process return
+              </Button>
+            )}
           </>
         ) : (
           <div className="text-sm text-slate-500">Enter an invoice number to continue.</div>

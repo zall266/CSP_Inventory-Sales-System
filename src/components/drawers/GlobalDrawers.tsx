@@ -1,12 +1,12 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Drawer, StatusBadge, Tabs, Button, Badge } from '@/components/ui'
+import { Drawer, StatusBadge, Tabs, Button, Badge, Field, Input } from '@/components/ui'
 import { ProductMark, movementLabel, paymentLabel } from '@/components/ProductMark'
 import { useApi, useLookups, useStore, customerOutstanding, customerSalesTotal, supplierOutstanding, supplierPurchaseTotal } from '@/store/hooks'
 import { formatDate, formatMoney, formatQty } from '@/utils/format'
 import { BomDetail } from '@/features/manufacturing/BomPages'
 import { ProductionOrderDetail } from '@/features/manufacturing/ProductionOrdersPage'
-import { isCompanyWarehouseId } from '@/features/agent/agentModel'
+import { isCompanyWarehouseId, saleIsAgentSale } from '@/features/agent/agentModel'
 import { hasPermission } from '@/features/settings/permissions'
 
 export function GlobalDrawers() {
@@ -55,6 +55,7 @@ function ProductDrawer({ id, onClose }: { id: string; onClose: () => void }) {
               <Mini label="Inventory value" value={formatMoney(value)} />
               <Mini label="Average cost" value={`${formatMoney(item.costPrice)} / ${item.unit}`} />
               <Mini label="Selling price" value={`${formatMoney(item.sellingPrice)} / ${item.unit}`} />
+              <Mini label="Agent price" value={item.agentPrice === undefined || item.agentPrice === null ? 'Not configured' : `${formatMoney(item.agentPrice)} / ${item.unit}`} />
             </div>
           </div>
         </div>
@@ -71,7 +72,8 @@ function ProductDrawer({ id, onClose }: { id: string; onClose: () => void }) {
           ]}
         />
         {tab === 'overview' && (
-          <div className="sf-table-wrap rounded-xl border border-slate-100">
+          <div className="space-y-4">
+            <div className="sf-table-wrap rounded-xl border border-slate-100">
             <table>
               <thead>
                 <tr>
@@ -94,6 +96,8 @@ function ProductDrawer({ id, onClose }: { id: string; onClose: () => void }) {
                 ))}
               </tbody>
             </table>
+            </div>
+            <AgentPriceEditor productId={item.id} agentPrice={item.agentPrice} />
           </div>
         )}
         {tab === 'card' && (
@@ -197,7 +201,40 @@ function Mini({ label, value }: { label: string; value: string }) {
   return (
     <div className="rounded-xl bg-slate-50 p-3">
       <div className="text-[11px] uppercase tracking-wide text-slate-400">{label}</div>
-      <div className="mt-1 text-sm font-semibold text-slate-900">{value}</div>
+      <div className="mt-1 font-medium">{value}</div>
+    </div>
+  )
+}
+
+function AgentPriceEditor({ productId, agentPrice }: { productId: string; agentPrice?: number }) {
+  const state = useStore()
+  const api = useApi()
+  const canEdit = hasPermission(state, 'agent.manage')
+  const [draft, setDraft] = useState(agentPrice === undefined || agentPrice === null ? '' : String(agentPrice))
+  if (!canEdit) return null
+  const save = () => {
+    const next = draft === '' ? undefined : Number(draft)
+    if (next !== undefined && (!Number.isFinite(next) || next < 0)) {
+      api.toast('Agent Price cannot be negative.', undefined, 'warning')
+      return
+    }
+    api.updateProduct(productId, { agentPrice: next })
+  }
+  return (
+    <div className="rounded-xl border border-slate-100 p-4">
+      <Field label="Agent price">
+        <div className="flex gap-2">
+          <Input
+            type="number"
+            min={0}
+            step="0.01"
+            value={draft}
+            onChange={(event) => setDraft(event.target.value)}
+            placeholder="Required for agent sales"
+          />
+          <Button type="button" variant="secondary" onClick={save}>Save</Button>
+        </div>
+      </Field>
     </div>
   )
 }
@@ -238,6 +275,7 @@ function SaleDrawer({ id, onClose }: { id: string; onClose: () => void }) {
   const sale = state.sales.find((item) => item.id === id)
   if (!sale) return null
   const customer = state.customers.find((c) => c.id === sale.customerId)
+  const agentSale = saleIsAgentSale(state, sale)
 
   return (
     <Drawer open onClose={onClose} width="max-w-3xl">
@@ -288,6 +326,7 @@ function SaleDrawer({ id, onClose }: { id: string; onClose: () => void }) {
           </div>
           <div className="ml-auto mt-5 w-full max-w-xs space-y-2 text-sm">
             <Row label="Subtotal" value={formatMoney(sale.subtotal)} />
+            {sale.shipping > 0 && <Row label="Delivery" value={formatMoney(sale.shipping)} />}
             <Row label="Discount" value={formatMoney(sale.discount)} />
             <Row label="Tax" value={formatMoney(sale.tax)} />
             <Row label="Total" value={formatMoney(sale.total)} strong />
@@ -301,8 +340,12 @@ function SaleDrawer({ id, onClose }: { id: string; onClose: () => void }) {
           {hasPermission(state, 'sales.invoice.print') || hasPermission(state, 'sales.invoice.view') || hasPermission(state, 'sales.view') ? (
             <Button className="w-full" variant="secondary" onClick={() => { onClose(); navigate(`/print/invoice/${sale.id}`) }}>Preview / Print</Button>
           ) : null}
-          <Button className="w-full" variant="secondary" onClick={() => { onClose(); navigate(`/sales-returns?invoice=${sale.invoiceNo}`) }}>Return</Button>
-          <Button className="w-full" variant="danger" disabled={sale.status === 'voided'} onClick={() => { api.voidSale(sale.id); onClose() }}>Void</Button>
+          {!agentSale && (
+            <Button className="w-full" variant="secondary" onClick={() => { onClose(); navigate(`/sales-returns?invoice=${sale.invoiceNo}`) }}>Return</Button>
+          )}
+          {!agentSale && (
+            <Button className="w-full" variant="danger" disabled={sale.status === 'voided'} onClick={() => { api.voidSale(sale.id); onClose() }}>Void</Button>
+          )}
           {sale.balance > 0 && sale.status !== 'voided' && (
             <Button className="w-full" onClick={() => api.openPaymentForSale(sale.id)}>Record Payment</Button>
           )}
