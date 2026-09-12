@@ -17,7 +17,17 @@ import {
 } from '@/components/ui'
 import { paymentLabel } from '@/components/ProductMark'
 import { PermissionDenied } from '@/features/documents/A4Sheet'
-import { activeAgents, agentSalesForAgent, agentStockRows, agentStockTotal, companyWarehouses } from '@/features/agent/agentModel'
+import {
+  activeAgents,
+  agentSalesForAgent,
+  agentStockRows,
+  agentStockTotal,
+  calcAgentSaleEarnings,
+  companyWarehouses,
+  configuredAgentPrice,
+  saleEarningForAgentSale,
+  summarizeAgentEarnings,
+} from '@/features/agent/agentModel'
 import { hasPermission } from '@/features/settings/permissions'
 import { useApi, useLookups, useStore } from '@/store/hooks'
 import { formatDate, formatMoney, formatQty, round2 } from '@/utils/format'
@@ -86,6 +96,7 @@ function AgentSaleModal({
   const [productId, setProductId] = useState(defaultProductId)
   const [qty, setQty] = useState(0)
   const [sellingPrice, setSellingPrice] = useState(() => products.find((item) => item.id === defaultProductId)?.sellingPrice ?? 0)
+  const [delivery, setDelivery] = useState(0)
   const [customerId, setCustomerId] = useState(state.settings.defaultCustomerId)
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>(methods.includes('cash') ? 'cash' : methods[0] ?? 'cash')
   const [notes, setNotes] = useState('')
@@ -96,8 +107,20 @@ function AgentSaleModal({
 
   const product = products.find((item) => item.id === productId)
   const available = productId && agent?.warehouseId ? api.getProductQty(productId, agent.warehouseId) : 0
-  const total = round2((Number(qty) || 0) * (Number(sellingPrice) || 0))
-  const afterQty = round2(available - (Number(qty) || 0))
+  const agentPrice = configuredAgentPrice(product)
+  const qtyValue = Number(qty) || 0
+  const sellingValue = Number(sellingPrice) || 0
+  const deliveryValue = round2(Number(delivery) || 0)
+  const preview = agentPrice !== null
+    ? calcAgentSaleEarnings({
+        agentPrice,
+        sellingPrice: sellingValue,
+        qty: qtyValue,
+        delivery: deliveryValue,
+      })
+    : null
+  const customerTotal = preview?.customerPays ?? round2(qtyValue * sellingValue + deliveryValue)
+  const afterQty = round2(available - qtyValue)
   const agentLabel = agent ? (state.warehouses.find((warehouse) => warehouse.id === agent.warehouseId)?.name ?? agent.name) : '—'
 
   const chooseProduct = (nextId: string) => {
@@ -120,6 +143,18 @@ function AgentSaleModal({
       api.toast('Insufficient stock.', `Available: ${formatQty(available)}.`, 'danger')
       return
     }
+    if (agentPrice === null) {
+      api.toast('Agent Price must be configured', 'Set Agent Price on the product before creating an agent sale.', 'warning')
+      return
+    }
+    if (round2(Number(sellingPrice)) < agentPrice) {
+      api.toast('Selling price cannot be lower than Agent Price.', undefined, 'warning')
+      return
+    }
+    if (!Number.isFinite(Number(delivery)) || Number(delivery) < 0) {
+      api.toast('Unable to complete sale. Please try again.', undefined, 'warning')
+      return
+    }
     requestIdRef.current = `asr_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`
     setConfirm(true)
   }
@@ -133,6 +168,7 @@ function AgentSaleModal({
       productId,
       qty,
       sellingPrice,
+      delivery: deliveryValue,
       customerId,
       paymentMethod,
       notes,
@@ -143,6 +179,7 @@ function AgentSaleModal({
     setConfirm(false)
     if (sale) {
       setQty(0)
+      setDelivery(0)
       setNotes('')
       onClose()
     }
@@ -169,6 +206,9 @@ function AgentSaleModal({
               ))}
             </Select>
           </Field>
+          <Field label="Agent Price">
+            <Input disabled value={agentPrice === null ? 'Not configured' : formatMoney(agentPrice)} />
+          </Field>
           <Field label="Available stock">
             <Input disabled value={product ? `${formatQty(available)} ${product.unit}` : '—'} />
           </Field>
@@ -178,8 +218,21 @@ function AgentSaleModal({
           <Field label="Selling price">
             <Input type="number" min={0} step="0.01" value={sellingPrice} onChange={(event) => setSellingPrice(Number(event.target.value))} />
           </Field>
-          <Field label="Total">
-            <Input disabled value={formatMoney(total)} />
+          <Field label="Delivery charge">
+            <Input type="number" min={0} step="0.01" value={delivery} onChange={(event) => setDelivery(Number(event.target.value))} />
+          </Field>
+          <Field label="Customer total">
+            <Input disabled value={formatMoney(customerTotal)} />
+          </Field>
+          <Field label="Agent earnings" className="sm:col-span-2">
+            <Input
+              disabled
+              value={
+                preview
+                  ? `${formatMoney(preview.totalEarnings)} · Markup ${formatMoney(preview.productMarkup)} · Delivery ${formatMoney(preview.deliveryEarnings)}`
+                  : 'Configure Agent Price to calculate earnings'
+              }
+            />
           </Field>
           <Field label="Customer">
             <Select value={customerId} onChange={(event) => setCustomerId(event.target.value)}>
@@ -208,7 +261,7 @@ function AgentSaleModal({
         open={confirm}
         onClose={() => { if (!submittingRef.current) setConfirm(false) }}
         title="Confirm Agent Sale?"
-        message={`Agent:\n${agentLabel}\nProduct:\n${product ? productOptionLabel(product) : '—'}\nAvailable:\n${formatQty(available)} ${product?.unit ?? ''}\nSale Quantity:\n${formatQty(qty)} ${product?.unit ?? ''}\nAfter Sale:\n${formatQty(afterQty)} ${product?.unit ?? ''}\nSelling Price:\n${formatMoney(sellingPrice)}\nTotal:\n${formatMoney(total)}`}
+        message={`Agent:\n${agentLabel}\nProduct:\n${product ? productOptionLabel(product) : '—'}\nAgent Price:\n${agentPrice === null ? 'Not configured' : formatMoney(agentPrice)}\nAvailable:\n${formatQty(available)} ${product?.unit ?? ''}\nSale Quantity:\n${formatQty(qty)} ${product?.unit ?? ''}\nAfter Sale:\n${formatQty(afterQty)} ${product?.unit ?? ''}\nSelling Price:\n${formatMoney(sellingPrice)}\nDelivery:\n${formatMoney(deliveryValue)}\nCustomer Total:\n${formatMoney(customerTotal)}\nAgent Earnings:\nMarkup ${formatMoney(preview?.productMarkup ?? 0)}\nDelivery ${formatMoney(preview?.deliveryEarnings ?? 0)}\nTotal ${formatMoney(preview?.totalEarnings ?? 0)}`}
         confirmLabel={submitting ? 'Processing...' : 'Confirm Sale'}
         confirmDisabled={submitting}
         onConfirm={confirmSale}
@@ -567,6 +620,8 @@ export function AgentDetailPage() {
   if (!agent) return <PageHeader title="Agent" subtitle="Not found." />
 
   const stockRows = canStock ? agentStockRows(state, agent.warehouseId) : []
+  const earnings = summarizeAgentEarnings(state.agentEarningLedgers ?? [], agent.id)
+  const history = agentSalesForAgent(state.agentSales ?? [], agent.id)
   const linkedUserIds = new Set((state.agents ?? []).map((item) => item.userId).filter(Boolean))
   const formUsers = state.users.filter((user) => {
     if (user.status !== 'active') return false
@@ -636,6 +691,24 @@ export function AgentDetailPage() {
         </Card>
       </div>
       <Card className="mb-5 space-y-2 p-5">
+        <div className="text-[11px] font-semibold uppercase tracking-[0.08em] text-slate-400">Earnings</div>
+        <div className="grid gap-3 sm:grid-cols-3">
+          <div>
+            <div className="text-sm text-slate-500">Available</div>
+            <div className="font-medium tabular">{formatMoney(earnings.available)}</div>
+          </div>
+          <div>
+            <div className="text-sm text-slate-500">Pending</div>
+            <div className="font-medium tabular">{formatMoney(earnings.pendingWithdrawal)}</div>
+          </div>
+          <div>
+            <div className="text-sm text-slate-500">Paid</div>
+            <div className="font-medium tabular">{formatMoney(earnings.paid)}</div>
+          </div>
+        </div>
+        <div className="text-xs text-slate-400">Earnings apply to sales from this version onward.</div>
+      </Card>
+      <Card className="mb-5 space-y-2 p-5">
         <div className="text-[11px] font-semibold uppercase tracking-[0.08em] text-slate-400">Linked stock holder / internal warehouse</div>
         <div className="font-medium">{warehouse?.name ?? warehouseName(agent.warehouseId)}</div>
         <div className="text-sm text-slate-500">{warehouse?.code ?? '—'} · {agent.warehouseId}</div>
@@ -691,14 +764,16 @@ export function AgentDetailPage() {
                 <th>Qty</th>
                 <th>Total</th>
                 <th>Payment</th>
+                <th>Earnings</th>
                 <th>User</th>
               </tr>
             </thead>
             <tbody>
-              {agentSalesForAgent(state.agentSales ?? [], agent.id).map((agentSale) => {
+              {history.map((agentSale) => {
                 const sale = state.sales.find((item) => item.id === agentSale.saleId)
                 const line = agentSale.items[0]
                 const lineProduct = line ? state.products.find((item) => item.id === line.productId) : undefined
+                const ledger = saleEarningForAgentSale(state.agentEarningLedgers ?? [], agentSale.id)
                 return (
                   <tr key={agentSale.id} className="cursor-default">
                     <td>{formatDate(agentSale.date)}</td>
@@ -710,13 +785,16 @@ export function AgentDetailPage() {
                     <td className="tabular">{line ? `${formatQty(line.qty)} ${lineProduct?.unit ?? ''}` : '—'}</td>
                     <td className="tabular">{formatMoney(sale?.total ?? agentSale.customerPaid)}</td>
                     <td>{paymentLabel(sale?.paymentMethod)}</td>
+                    <td className="tabular">
+                      {ledger ? formatMoney(ledger.amount) : 'No earnings ledger'}
+                    </td>
                     <td>{sale?.salesperson ?? '—'}</td>
                   </tr>
                 )
               })}
             </tbody>
           </table>
-          {!agentSalesForAgent(state.agentSales ?? [], agent.id).length && (
+          {!history.length && (
             <EmptyState title="No agent sales yet" hint={canSale && agent.status === 'active' ? 'Create a sale from this agent stock.' : undefined} />
           )}
         </div>

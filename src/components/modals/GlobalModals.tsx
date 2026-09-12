@@ -38,6 +38,7 @@ export function ProductModal({ open, onClose }: { open: boolean; onClose: () => 
     costPrice: 0,
     sellingPrice: 0,
     wholesalePrice: 0,
+    agentPrice: '' as number | '',
     reorderLevel: 10,
     trackBatch: false,
     trackExpiry: false,
@@ -46,7 +47,10 @@ export function ProductModal({ open, onClose }: { open: boolean; onClose: () => 
 
   const submit = (event: FormEvent) => {
     event.preventDefault()
-    const created = api.createProduct(form)
+    const created = api.createProduct({
+      ...form,
+      agentPrice: form.agentPrice === '' ? undefined : Number(form.agentPrice),
+    })
     if (created) {
       setForm({
         name: '',
@@ -57,6 +61,7 @@ export function ProductModal({ open, onClose }: { open: boolean; onClose: () => 
         costPrice: 0,
         sellingPrice: 0,
         wholesalePrice: 0,
+        agentPrice: '',
         reorderLevel: 10,
         trackBatch: false,
         trackExpiry: false,
@@ -96,6 +101,14 @@ export function ProductModal({ open, onClose }: { open: boolean; onClose: () => 
         </Field>
         <Field label="Wholesale price">
           <Input type="number" step="0.01" value={form.wholesalePrice} onChange={(e) => setForm({ ...form, wholesalePrice: Number(e.target.value) })} />
+        </Field>
+        <Field label="Agent price">
+          <Input
+            type="number"
+            step="0.01"
+            value={form.agentPrice}
+            onChange={(e) => setForm({ ...form, agentPrice: e.target.value === '' ? '' : Number(e.target.value) })}
+          />
         </Field>
         <Field label="Reorder level">
           <Input type="number" value={form.reorderLevel} onChange={(e) => setForm({ ...form, reorderLevel: Number(e.target.value) })} />

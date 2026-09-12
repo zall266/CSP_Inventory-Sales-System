@@ -2,6 +2,7 @@ import { Link, useNavigate, useParams } from 'react-router-dom'
 import { Button, Card, PageHeader, StatusBadge } from '@/components/ui'
 import { useApi, useLookups, useStore } from '@/store/hooks'
 import { hasPermission } from '@/features/settings/permissions'
+import { saleIsAgentSale } from '@/features/agent/agentModel'
 import { formatDate, formatMoney } from '@/utils/format'
 import { PermissionDenied, PrintShell } from './A4Sheet'
 import { InvoiceA4 } from './DocumentBodies'
@@ -28,6 +29,7 @@ export function InvoiceDetailPage() {
   const status = invoiceDisplayStatus(sale)
   const relatedDos = (state.deliveryOrders ?? []).filter((row) => row.saleId === sale.id)
   const logs = (state.documentAuditLogs ?? []).filter((row) => row.documentId === sale.id || (sale.quotationId && row.documentId === sale.quotationId && row.action === 'quotation_converted'))
+  const agentSale = saleIsAgentSale(state, sale)
   return (
     <div>
       <PageHeader
@@ -42,7 +44,7 @@ export function InvoiceDetailPage() {
             {hasPermission(state, 'sales.delivery.create') && sale.status !== 'voided' && (
               <Button variant="secondary" onClick={() => navigate(`/sales/delivery-orders/new?invoice=${sale.id}`)}>Create DO</Button>
             )}
-            {sale.status !== 'voided' && (hasPermission(state, 'sales.invoice.cancel') || hasPermission(state, 'sales.void')) && (
+            {sale.status !== 'voided' && !agentSale && (hasPermission(state, 'sales.invoice.cancel') || hasPermission(state, 'sales.void')) && (
               <Button variant="danger" onClick={() => api.voidSale(sale.id)}>Cancel</Button>
             )}
           </div>

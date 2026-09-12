@@ -1,5 +1,31 @@
-import type { AgentEarningLedger, AppState, Product, Warehouse } from '@/types'
+import type { AgentEarningKind, AgentEarningLedger, AppState, Product, Sale, Warehouse } from '@/types'
 import { round2 } from '@/utils/format'
+
+export const SALE_EARNING_KIND: AgentEarningKind = 'sale_earning'
+
+export function configuredAgentPrice(product: { agentPrice?: number | null } | undefined) {
+  if (!product) return null
+  const value = product.agentPrice
+  if (value === undefined || value === null) return null
+  if (!Number.isFinite(value)) return null
+  return round2(value)
+}
+
+export function hasSaleEarningLedger(entries: AgentEarningLedger[], agentSaleId: string) {
+  return entries.some((entry) => entry.kind === SALE_EARNING_KIND && entry.relatedAgentSaleId === agentSaleId)
+}
+
+export function saleEarningForAgentSale(entries: AgentEarningLedger[], agentSaleId: string) {
+  return entries.find((entry) => entry.kind === SALE_EARNING_KIND && entry.relatedAgentSaleId === agentSaleId)
+}
+
+export function saleIsAgentSale(
+  state: Pick<AppState, 'agentSales' | 'warehouses'>,
+  sale: Pick<Sale, 'id' | 'warehouseId'>,
+) {
+  if ((state.agentSales ?? []).some((row) => row.saleId === sale.id)) return true
+  return isAgentWarehouseId(state.warehouses, sale.warehouseId)
+}
 
 export const AGENT_PERMISSION_KEYS = [
   'agent.view',

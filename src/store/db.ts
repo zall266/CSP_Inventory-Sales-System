@@ -11,7 +11,7 @@ import {
   unplacedPacks,
   WAREHOUSE_MAP_KEYS,
 } from '@/features/warehouse/warehouseModel'
-import { AGENT_PERMISSION_KEYS, agentLinkedWarehouseName, calcAgentSaleEarnings, companyWarehouses, isAgentWarehouseId, isCompanyWarehouseId, nextAgentWarehouseId } from '@/features/agent/agentModel'
+import { AGENT_PERMISSION_KEYS, agentLinkedWarehouseName, calcAgentSaleEarnings, companyWarehouses, configuredAgentPrice, hasSaleEarningLedger, isAgentWarehouseId, isCompanyWarehouseId, nextAgentWarehouseId, SALE_EARNING_KIND, saleIsAgentSale } from '@/features/agent/agentModel'
 import { bomLinesForQty, consumptionCost, hasShortage, materialAvailability } from '@/features/manufacturing/helpers'
 import { buildSessionPlan, canEditSession, currentUser, mergePicking } from '@/features/manufacturing/sessionPlan'
 import {
@@ -43,6 +43,7 @@ import type {
   AppState,
   AdjustmentType,
   Agent,
+  AgentEarningLedger,
   AgentInput,
   AgentSale,
   AgentStatus,
@@ -437,6 +438,7 @@ function agentSaleRequestKey(input: {
   productId: string
   qty: number
   sellingPrice: number
+  delivery?: number
   customerId?: string
   paymentMethod?: PaymentMethod
   notes?: string
@@ -445,11 +447,18 @@ function agentSaleRequestKey(input: {
   return input.requestId?.trim() || ''
 }
 
+function withSaleEarningLedger(ledgers: AgentEarningLedger[], row: AgentEarningLedger) {
+  const agentSaleId = row.relatedAgentSaleId
+  if (!agentSaleId || hasSaleEarningLedger(ledgers, agentSaleId)) return ledgers
+  return [row, ...ledgers]
+}
+
 function postAgentSale(input: {
   agentId: string
   productId: string
   qty: number
   sellingPrice: number
+  delivery?: number
   customerId?: string
   paymentMethod?: PaymentMethod
   notes?: string
@@ -485,16 +494,31 @@ function postAgentSale(input: {
     toast('Please select a product.', undefined, 'warning')
     return null
   }
+  const agentPrice = configuredAgentPrice(product)
+  if (agentPrice === null) {
+    toast('Agent Price must be configured', 'Set Agent Price on the product before creating an agent sale.', 'warning')
+    return null
+  }
   const qty = Number(input.qty)
   if (!Number.isFinite(qty) || !(qty > 0)) {
     toast('Quantity must be greater than 0.', undefined, 'warning')
     return null
   }
-  const sellingPrice = Number(input.sellingPrice)
+  const sellingPrice = round2(Number(input.sellingPrice))
   if (!Number.isFinite(sellingPrice) || sellingPrice < 0) {
     toast('Unable to complete sale. Please try again.', undefined, 'warning')
     return null
   }
+  if (sellingPrice < agentPrice) {
+    toast('Selling price cannot be lower than Agent Price.', undefined, 'warning')
+    return null
+  }
+  const deliveryRaw = Number(input.delivery ?? 0)
+  if (!Number.isFinite(deliveryRaw) || deliveryRaw < 0) {
+    toast('Unable to complete sale. Please try again.', undefined, 'warning')
+    return null
+  }
+  const delivery = round2(deliveryRaw)
   const available = getQty(product.id, agent.warehouseId)
   if (qty > available) {
     toast('Insufficient stock.', `Available: ${formatQty(available)}.`, 'danger')
@@ -506,7 +530,14 @@ function postAgentSale(input: {
     return null
   }
   const paymentMethod = input.paymentMethod ?? 'cash'
-  const total = round2(qty * sellingPrice)
+  const earnings = calcAgentSaleEarnings({
+    agentPrice,
+    sellingPrice,
+    qty,
+    delivery,
+  })
+  const productSubtotal = round2(sellingPrice * qty)
+  const customerTotal = earnings.customerPays
   const date = nowIso()
   const invoiceNo = nextDocNo(
     state.sales.filter((sale) => sale.invoiceNo.startsWith('SAL-')).map((sale) => sale.invoiceNo),
@@ -521,12 +552,12 @@ function postAgentSale(input: {
     warehouseId: agent.warehouseId,
     salesperson: currentUser(state).name,
     items: lines,
-    subtotal: total,
+    subtotal: productSubtotal,
     discount: 0,
     tax: 0,
-    shipping: 0,
-    total,
-    paid: total,
+    shipping: delivery,
+    total: customerTotal,
+    paid: customerTotal,
     balance: 0,
     status: 'paid' as SaleStatus,
     paymentMethod,
@@ -542,12 +573,6 @@ function postAgentSale(input: {
     stockOut: qty,
     notes: `Agent sale · ${agent.name}`,
   })
-  const earnings = calcAgentSaleEarnings({
-    agentPrice: product.agentPrice ?? 0,
-    sellingPrice,
-    qty,
-    delivery: 0,
-  })
   const agentSale: AgentSale = {
     id: uid('ags'),
     saleId: sale.id,
@@ -559,21 +584,35 @@ function postAgentSale(input: {
       {
         productId: product.id,
         qty,
-        agentPrice: product.agentPrice ?? 0,
+        agentPrice,
         sellingPrice,
         productMarkup: earnings.productMarkup,
       },
     ],
     cspAmount: earnings.cspAmount,
     productMarkup: earnings.productMarkup,
-    deliveryEarnings: 0,
+    deliveryEarnings: earnings.deliveryEarnings,
     totalEarnings: earnings.totalEarnings,
     customerPaid: earnings.customerPays,
     notes: sale.notes,
     createdAt: date,
   }
+  const ledger: AgentEarningLedger = {
+    id: uid('ael'),
+    agentId: agent.id,
+    date,
+    kind: SALE_EARNING_KIND,
+    amount: earnings.totalEarnings,
+    availableDelta: earnings.totalEarnings,
+    pendingDelta: 0,
+    paidDelta: 0,
+    relatedSaleId: sale.id,
+    relatedAgentSaleId: agentSale.id,
+    notes: `Sale earning · ${invoiceNo}`,
+    createdAt: date,
+  }
   const payments = [...state.payments]
-  if (total > 0) {
+  if (customerTotal > 0) {
     payments.unshift({
       id: uid('pay'),
       paymentNo: nextDocNo(state.payments.map((payment) => payment.paymentNo), 'PAY-'),
@@ -583,7 +622,7 @@ function postAgentSale(input: {
       invoiceId: sale.id,
       invoiceNo,
       method: paymentMethod,
-      amount: total,
+      amount: customerTotal,
       status: 'completed',
     })
   }
@@ -602,6 +641,7 @@ function postAgentSale(input: {
     inventory: applied.inventory,
     stockMovements: applied.movements,
     payments,
+    agentEarningLedgers: withSaleEarningLedger(state.agentEarningLedgers ?? [], ledger),
     documentAuditLogs: pushDocAudit(audit),
   }
   emit()
@@ -1717,6 +1757,10 @@ export const db = {
   voidSale(id: string) {
     const sale = state.sales.find((item) => item.id === id)
     if (!sale || sale.status === 'voided') return
+    if (saleIsAgentSale(state, sale)) {
+      toast('Agent sales cannot be voided in this version.', undefined, 'warning')
+      return
+    }
     let inventory = state.inventory
     let movements = state.stockMovements
     for (const item of sale.items) {
@@ -1967,6 +2011,7 @@ export const db = {
     productId: string
     qty: number
     sellingPrice: number
+    delivery?: number
     customerId?: string
     paymentMethod?: PaymentMethod
     notes?: string
@@ -1982,6 +2027,14 @@ export const db = {
     } finally {
       agentSaleInFlight = false
     }
+  },
+
+  creditAgentSaleEarning(agentSaleId: string) {
+    const existing = (state.agentEarningLedgers ?? []).find(
+      (row) => row.kind === SALE_EARNING_KIND && row.relatedAgentSaleId === agentSaleId,
+    )
+    if (existing) return existing
+    return null
   },
 
   completeStockCount(input: { warehouseId: string; counts: Array<{ productId: string; countedQty: number }> }) {
@@ -2024,6 +2077,10 @@ export const db = {
     }
     const sale = state.sales.find((item) => item.id === input.saleId)
     if (!sale) return null
+    if (saleIsAgentSale(state, sale)) {
+      toast('Agent sales cannot be returned in this version.', undefined, 'warning')
+      return null
+    }
     const returning = input.items.filter((item) => item.qty > 0)
     if (!returning.length) {
       toast('Select quantities to return', undefined, 'warning')

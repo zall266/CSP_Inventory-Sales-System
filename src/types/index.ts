@@ -276,6 +276,7 @@ export type AgentSale = {
 }
 
 export type AgentEarningKind =
+  | 'sale_earning'
   | 'product_markup'
   | 'delivery_earnings'
   | 'withdrawal_pending'
