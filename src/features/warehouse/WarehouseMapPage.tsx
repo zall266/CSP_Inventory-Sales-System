@@ -550,51 +550,55 @@ function PalletStockPanel({
           <p className="text-sm text-slate-500">{locations.length === 0 ? 'No active pallet locations. Add a temporary location such as DEPAN OFFICE.' : 'No pallet locations match that search.'}</p>
         </Card>
       ) : (
-        cards.map((card) => {
-          const highlighted = card.rows.some((row) => highlightedSlotIds.has(row.slot.id))
-          return (
-            <div
-              key={card.location.id}
-              className={`rounded-2xl border bg-white p-4 ${highlighted ? 'border-indigo-300 ring-1 ring-indigo-200' : 'border-slate-200'}`}
-              onDragOver={(event) => {
-                if (!dnd.enabled || !dnd.fromId || !card.empty) return
-                event.preventDefault()
-                event.dataTransfer.dropEffect = 'move'
-                if (dnd.overId !== card.empty.id) dnd.setOver(card.empty.id)
-              }}
-              onDrop={(event) => {
-                event.preventDefault()
-                const fromId = event.dataTransfer.getData('text/plain') || dnd.fromId
-                onDropLocation(card.location.id, fromId)
-                dnd.end()
-              }}
-            >
-              <div className="flex items-start gap-4">
-                <div className="w-40 shrink-0">
-                  <div className="text-sm font-semibold text-slate-900">{card.location.name}</div>
-                  <div className="text-[11px] uppercase tracking-wide text-slate-400">{locationTypeLabel(card.location.type)}</div>
-                  <div className="mt-2 flex flex-col items-start gap-2">
+        <div className="flex flex-wrap items-start gap-3">
+          {cards.map((card) => {
+            const highlighted = card.rows.some((row) => highlightedSlotIds.has(row.slot.id))
+            const visibleSlots = [
+              ...card.rows.map((row) => row.slot),
+              ...(card.empty ? [card.empty] : []),
+            ]
+            return (
+              <div
+                key={card.location.id}
+                className={`w-fit shrink-0 rounded-xl border bg-white p-1.5 ${highlighted ? 'border-indigo-300 ring-1 ring-indigo-200' : 'border-slate-200'}`}
+                onDragOver={(event) => {
+                  if (!dnd.enabled || !dnd.fromId || !card.empty) return
+                  event.preventDefault()
+                  event.dataTransfer.dropEffect = 'move'
+                  if (dnd.overId !== card.empty.id) dnd.setOver(card.empty.id)
+                }}
+                onDrop={(event) => {
+                  event.preventDefault()
+                  const fromId = event.dataTransfer.getData('text/plain') || dnd.fromId
+                  onDropLocation(card.location.id, fromId)
+                  dnd.end()
+                }}
+              >
+                <div className="mb-1.5 max-w-[96px] px-0.5">
+                  <div className="text-[11px] font-semibold leading-tight text-slate-900">{card.location.name}</div>
+                  <div className="text-[9px] uppercase tracking-wide text-slate-400">{locationTypeLabel(card.location.type)}</div>
+                  <div className="mt-1 flex flex-col items-start gap-1">
                     {placing && canPlace && (
-                      <Button size="sm" onClick={() => onPlaceHere(card.location.id)}>Place here</Button>
+                      <button type="button" className="text-[10px] font-medium text-indigo-600" onClick={() => onPlaceHere(card.location.id)}>Place here</button>
                     )}
                     {canManage && card.rows.length === 0 && (
-                      <button type="button" className="text-xs text-rose-600" onClick={() => onDeactivate(card.location.id)}>Deactivate</button>
+                      <button type="button" className="text-[10px] text-rose-600" onClick={() => onDeactivate(card.location.id)}>Deactivate</button>
                     )}
                   </div>
                 </div>
-                <div className="flex min-w-0 flex-col gap-1.5">
-                  {card.slots.map((slot) => {
+                <div className="flex flex-col gap-1.5">
+                  {visibleSlots.map((slot) => {
                     const occupancy = occupancies[slot.id]
-                    const highlighted = highlightedSlotIds.has(slot.id)
+                    const slotHighlighted = highlightedSlotIds.has(slot.id)
                     return (
                       <SlotCell
                         key={slot.id}
                         slot={slot}
                         occupancy={occupancy}
                         product={occupancy ? productById(occupancy.productId) : undefined}
-                        highlighted={highlighted}
+                        highlighted={slotHighlighted}
                         selected={selectedSlotId === slot.id}
-                        dimmed={Boolean(q && occupancy && !highlighted)}
+                        dimmed={Boolean(q && occupancy && !slotHighlighted)}
                         onClick={() => onClickSlot(slot, occupancy)}
                         dnd={dnd}
                       />
@@ -602,9 +606,9 @@ function PalletStockPanel({
                   })}
                 </div>
               </div>
-            </div>
-          )
-        })
+            )
+          })}
+        </div>
       )}
     </div>
   )
