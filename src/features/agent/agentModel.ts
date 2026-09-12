@@ -1,4 +1,4 @@
-import type { AgentEarningLedger, AppState, Warehouse } from '@/types'
+import type { AgentEarningLedger, AppState, Product, Warehouse } from '@/types'
 import { round2 } from '@/utils/format'
 
 export const AGENT_PERMISSION_KEYS = [
@@ -80,4 +80,41 @@ export function summarizeAgentEarnings(entries: AgentEarningLedger[], agentId?: 
     pendingWithdrawal: round2(rows.reduce((sum, entry) => sum + entry.pendingDelta, 0)),
     paid: round2(rows.reduce((sum, entry) => sum + entry.paidDelta, 0)),
   }
+}
+
+export function agentLinkedWarehouseName(agentName: string) {
+  const name = agentName.trim()
+  if (!name) return 'Agent'
+  if (/^agent\s+/i.test(name)) return name
+  return `Agent ${name}`
+}
+
+export function agentWarehouseSlug(code: string) {
+  const stripped = code.trim().toLowerCase().replace(/^ag[-_]?/, '')
+  return stripped.replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'agent'
+}
+
+export function nextAgentWarehouseId(warehouses: Warehouse[], code: string) {
+  const base = `wh-agent-${agentWarehouseSlug(code)}`
+  if (!warehouses.some((warehouse) => warehouse.id === base)) return base
+  let n = 2
+  while (warehouses.some((warehouse) => warehouse.id === `${base}-${n}`)) n += 1
+  return `${base}-${n}`
+}
+
+export function agentStockTotal(state: Pick<AppState, 'inventory'>, warehouseId: string) {
+  return round2(
+    state.inventory.filter((row) => row.warehouseId === warehouseId).reduce((sum, row) => sum + row.qty, 0),
+  )
+}
+
+export function agentStockRows(state: Pick<AppState, 'inventory' | 'products'>, warehouseId: string) {
+  return state.inventory
+    .filter((row) => row.warehouseId === warehouseId && row.qty !== 0)
+    .map((row) => {
+      const product = state.products.find((item) => item.id === row.productId)
+      return product ? { ...row, product } : null
+    })
+    .filter((row): row is { productId: string; warehouseId: string; qty: number; product: Product } => Boolean(row))
+    .sort((a, b) => a.product.name.localeCompare(b.product.name))
 }

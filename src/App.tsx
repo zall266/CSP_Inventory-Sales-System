@@ -27,6 +27,7 @@ import { PickingListPage } from '@/features/manufacturing/PickingListPage'
 import { QuotationsPage, QuotationEditorPage, QuotationDetailPage, QuotationPrintPage } from '@/features/documents/QuotationPages'
 import { InvoiceDetailPage, InvoicePrintPage } from '@/features/documents/InvoicePages'
 import { DeliveryOrdersPage, DeliveryEditorPage, DeliveryDetailPage, DeliveryPrintPage } from '@/features/documents/DeliveryPages'
+import { AgentDetailPage, AgentsPage } from '@/features/agent/AgentPages'
 
 export default function App() {
   return (
@@ -48,6 +49,8 @@ export default function App() {
           <Route path="/sales/delivery-orders/:id/edit" element={<DeliveryEditorPage />} />
           <Route path="/sales/delivery-orders/:id" element={<DeliveryDetailPage />} />
           <Route path="/pos" element={<PosPage />} />
+          <Route path="/sales/agents" element={<AgentsPage />} />
+          <Route path="/sales/agents/:id" element={<AgentDetailPage />} />
           <Route path="/sales-returns" element={<SalesReturnsPage />} />
           <Route path="/customers" element={<CustomersPage />} />
           <Route path="/purchases" element={<PurchasesPage />} />

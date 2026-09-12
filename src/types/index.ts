@@ -76,6 +76,15 @@ export type Agent = {
   updatedAt: string
 }
 
+export type AgentInput = {
+  name: string
+  code: string
+  userId?: string
+  bankName?: string
+  accountHolder?: string
+  bankAccount?: string
+}
+
 export type Category = {
   id: string
   name: string

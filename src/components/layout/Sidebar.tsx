@@ -27,6 +27,7 @@ import {
   Warehouse,
   CalendarDays,
   ChevronDown,
+  Contact,
 } from 'lucide-react'
 import { useMemo, useState } from 'react'
 import { brand } from '@/brand'
@@ -51,6 +52,7 @@ export const navGroups: NavGroup[] = [
       { to: '/sales/quotations', label: 'Quotations', icon: FileText },
       { to: '/sales/delivery-orders', label: 'Delivery Orders', icon: Truck },
       { to: '/pos', label: 'POS', icon: ShoppingCart },
+      { to: '/sales/agents', label: 'Agent', icon: Contact },
       { to: '/sales-returns', label: 'Sales Returns', icon: PackageMinus },
       { to: '/customers', label: 'Customers', icon: Users },
     ],
@@ -146,6 +148,7 @@ export function Sidebar() {
   const collapsed = ui.sidebarCollapsed
   const canUsers = canAccessUsersAndRoles(state, actorUser(state))
   const canWarehouseMap = hasPermission(state, 'warehouse_map.view')
+  const canAgents = hasPermission(state, 'agent.view') || hasPermission(state, 'agent.manage')
 
   const initialOpen = useMemo(() => {
     const open: Record<string, boolean> = {}
@@ -192,7 +195,7 @@ export function Sidebar() {
               )}
               {isOpen &&
                 group.items
-                  .filter((item) => (item.to !== '/settings/users' || canUsers) && (item.to !== '/inventory/warehouse-map' || canWarehouseMap))
+                  .filter((item) => (item.to !== '/settings/users' || canUsers) && (item.to !== '/inventory/warehouse-map' || canWarehouseMap) && (item.to !== '/sales/agents' || canAgents))
                   .map((item) => {
                   const Icon = item.icon
                   const active = pathActive(location.pathname, item.to)
@@ -228,6 +231,7 @@ export function MobileSidebar() {
   const location = useLocation()
   const canUsers = canAccessUsersAndRoles(state, actorUser(state))
   const canWarehouseMap = hasPermission(state, 'warehouse_map.view')
+  const canAgents = hasPermission(state, 'agent.view') || hasPermission(state, 'agent.manage')
   if (!open) return null
   return (
     <div className="fixed inset-0 z-50 lg:hidden">
@@ -246,7 +250,7 @@ export function MobileSidebar() {
           <div key={group.id} className="mb-3">
             <div className="px-2 py-1 text-[10px] font-semibold tracking-[0.14em] text-slate-400">{group.label}</div>
             {group.items
-              .filter((item) => (item.to !== '/settings/users' || canUsers) && (item.to !== '/inventory/warehouse-map' || canWarehouseMap))
+              .filter((item) => (item.to !== '/settings/users' || canUsers) && (item.to !== '/inventory/warehouse-map' || canWarehouseMap) && (item.to !== '/sales/agents' || canAgents))
               .map((item) => {
               const Icon = item.icon
               const active = pathActive(location.pathname, item.to)
