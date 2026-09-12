@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Button, Card, FilterRow, Input, KpiCard, PageHeader, Select, StatusBadge } from '@/components/ui'
 import { ProductMark } from '@/components/ProductMark'
+import { finishedGoodsBreakdown, isFinishedPack } from '@/features/warehouse/warehouseModel'
 import { inventoryValue, useApi, useLookups, useStore } from '@/store/hooks'
 import { formatMoney, formatQty } from '@/utils/format'
 
@@ -13,6 +14,7 @@ export function InventoryPage() {
   const [query, setQuery] = useState('')
   const [categoryId, setCategoryId] = useState('all')
   const [status, setStatus] = useState('all')
+  const [displayQuery, setDisplayQuery] = useState('')
   const warehouse = state.ui.warehouseFilter
 
   const rows = useMemo(() => {
@@ -35,6 +37,21 @@ export function InventoryPage() {
   const inStock = rows.filter((r) => r.status === 'in_stock').length
   const low = rows.filter((r) => r.status === 'low_stock').length
   const out = rows.filter((r) => r.status === 'out_of_stock').length
+
+  const displayRows = useMemo(() => {
+    const warehouses = warehouse === 'all' ? state.warehouses.map((row) => row.id) : [warehouse]
+    return state.products
+      .filter(isFinishedPack)
+      .flatMap((p) =>
+        warehouses.map((warehouseId) => {
+          const breakdown = finishedGoodsBreakdown(state, p.id, warehouseId)
+          if (breakdown.inventory <= 0 && breakdown.display <= 0 && breakdown.carton <= 0 && breakdown.ready <= 0) return null
+          if (displayQuery && !`${p.name} ${p.sku}`.toLowerCase().includes(displayQuery.toLowerCase())) return null
+          return { product: p, warehouseId, ...breakdown }
+        }),
+      )
+      .filter((row): row is NonNullable<typeof row> => Boolean(row))
+  }, [state, warehouse, displayQuery])
 
   return (
     <div>
@@ -113,6 +130,55 @@ export function InventoryPage() {
           </table>
         </div>
       </Card>
+      <div className="mt-6">
+        <div className="mb-3 flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
+          <div>
+            <h2 className="text-base font-semibold text-slate-900">Display stock</h2>
+            <p className="text-sm text-slate-500">Loose finished goods. Inventory remains the total. CTN Rack and Pallet are carton locations only.</p>
+          </div>
+          <Input className="sm:max-w-xs" placeholder="Search product" value={displayQuery} onChange={(e) => setDisplayQuery(e.target.value)} />
+        </div>
+        <Card>
+          <div className="sf-table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Product</th>
+                  <th>Warehouse</th>
+                  <th>Display</th>
+                  <th>CTN Rack</th>
+                  <th>Pallet</th>
+                  <th>Ready to place</th>
+                  <th>Inventory</th>
+                </tr>
+              </thead>
+              <tbody>
+                {displayRows.length === 0 && (
+                  <tr>
+                    <td colSpan={7} className="text-sm text-slate-500">No finished-goods display or carton quantities.</td>
+                  </tr>
+                )}
+                {displayRows.map((row) => (
+                  <tr key={`${row.product.id}-${row.warehouseId}`}>
+                    <td>
+                      <div className="flex items-center gap-3">
+                        <ProductMark product={row.product} size="sm" />
+                        <span className="font-medium">{row.product.name}</span>
+                      </div>
+                    </td>
+                    <td>{warehouseName(row.warehouseId)}</td>
+                    <td className="tabular">{formatQty(row.display)} PACK</td>
+                    <td className="tabular">{formatQty(row.rack)} PACK</td>
+                    <td className="tabular">{formatQty(row.pallet)} PACK</td>
+                    <td className="tabular">{formatQty(row.ready)} PACK</td>
+                    <td className="tabular font-medium">{formatQty(row.inventory)} PACK</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </Card>
+      </div>
     </div>
   )
 }

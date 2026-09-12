@@ -85,6 +85,14 @@ export type InventoryRow = {
   qty: number
 }
 
+export type DisplayStock = {
+  id: string
+  warehouseId: string
+  productId: string
+  qty: number
+  updatedAt: string
+}
+
 export type StorageLocation = {
   id: string
   name: string
@@ -522,6 +530,8 @@ export type ProductionSessionItem = {
   wasteQty: number
   wasteReason: string
   notes: string
+  displayQty: number
+  cartonQty: number
 }
 
 export type ProductionSession = {
@@ -790,6 +800,7 @@ export type AppData = {
   productionOrders: ProductionOrder[]
   productionSessions: ProductionSession[]
   productionBalances: ProductionBalance[]
+  displayStocks: DisplayStock[]
   storageLocations: StorageLocation[]
   storageSlots: StorageSlot[]
   slotOccupancies: SlotOccupancy[]
