@@ -3,6 +3,10 @@ import { round2 } from '@/utils/format'
 
 export const SALE_EARNING_KIND: AgentEarningKind = 'sale_earning'
 export const WITHDRAWAL_PENDING_KIND: AgentEarningKind = 'withdrawal_pending'
+export const WITHDRAWAL_PAID_KIND: AgentEarningKind = 'withdrawal_paid'
+export const WITHDRAWAL_CANCELLED_KIND: AgentEarningKind = 'withdrawal_cancelled'
+export const WITHDRAWAL_RECEIPT_MAX_BYTES = 5 * 1024 * 1024
+const WITHDRAWAL_RECEIPT_TYPES = new Set(['image/png', 'image/jpeg', 'image/webp'])
 
 export function configuredAgentPrice(product: { agentPrice?: number | null } | undefined) {
   if (!product) return null
@@ -212,4 +216,68 @@ export function withdrawalsForAgent(withdrawals: AgentWithdrawal[], agentId: str
     .filter((row) => row.agentId === agentId)
     .slice()
     .sort((a, b) => b.requestedAt.localeCompare(a.requestedAt) || b.createdAt.localeCompare(a.createdAt))
+}
+
+export function sortAgentWithdrawals(withdrawals: AgentWithdrawal[]) {
+  return withdrawals
+    .slice()
+    .sort((a, b) => b.requestedAt.localeCompare(a.requestedAt) || b.createdAt.localeCompare(a.createdAt))
+}
+
+export function hasWithdrawalPaidLedger(entries: AgentEarningLedger[], withdrawalId: string) {
+  return entries.some((entry) => entry.kind === WITHDRAWAL_PAID_KIND && entry.relatedWithdrawalId === withdrawalId)
+}
+
+export function hasWithdrawalCancelledLedger(entries: AgentEarningLedger[], withdrawalId: string) {
+  return entries.some((entry) => entry.kind === WITHDRAWAL_CANCELLED_KIND && entry.relatedWithdrawalId === withdrawalId)
+}
+
+export function withdrawalPaidForWithdrawal(entries: AgentEarningLedger[], withdrawalId: string) {
+  return entries.find((entry) => entry.kind === WITHDRAWAL_PAID_KIND && entry.relatedWithdrawalId === withdrawalId)
+}
+
+export function withdrawalCancelledForWithdrawal(entries: AgentEarningLedger[], withdrawalId: string) {
+  return entries.find((entry) => entry.kind === WITHDRAWAL_CANCELLED_KIND && entry.relatedWithdrawalId === withdrawalId)
+}
+
+export function parseWithdrawalPaymentDate(value: unknown) {
+  if (typeof value !== 'string') return { ok: false as const }
+  const date = value.trim()
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return { ok: false as const }
+  const parsed = new Date(`${date}T00:00:00+08:00`)
+  if (Number.isNaN(parsed.getTime())) return { ok: false as const }
+  return { ok: true as const, value: date }
+}
+
+export function parseWithdrawalPaymentReference(value: unknown) {
+  if (typeof value !== 'string') return { ok: false as const }
+  const reference = value.trim()
+  if (!reference) return { ok: false as const }
+  return { ok: true as const, value: reference }
+}
+
+export function isAllowedWithdrawalReceiptFile(file: Pick<File, 'type' | 'name' | 'size'>) {
+  const name = file.name.toLowerCase()
+  const extOk = ['.png', '.jpg', '.jpeg', '.webp'].some((ext) => name.endsWith(ext))
+  const type = file.type === 'image/jpg' ? 'image/jpeg' : file.type
+  if (file.size > WITHDRAWAL_RECEIPT_MAX_BYTES) return false
+  if (WITHDRAWAL_RECEIPT_TYPES.has(type)) return true
+  if (!file.type || file.type === 'application/octet-stream') return extOk
+  return false
+}
+
+export function parseWithdrawalReceipt(value: unknown, fileName?: string) {
+  if (typeof value !== 'string' || !value.startsWith('data:image/')) return { ok: false as const }
+  const match = value.match(/^data:(image\/[a-zA-Z0-9.+-]+);base64,([A-Za-z0-9+/=\s]+)$/)
+  if (!match) return { ok: false as const }
+  let mime = match[1].toLowerCase()
+  if (mime === 'image/jpg') mime = 'image/jpeg'
+  if (!WITHDRAWAL_RECEIPT_TYPES.has(mime)) return { ok: false as const }
+  const b64 = match[2].replace(/\s/g, '')
+  const padding = b64.endsWith('==') ? 2 : b64.endsWith('=') ? 1 : 0
+  const bytes = Math.floor((b64.length * 3) / 4) - padding
+  if (!(bytes > 0) || bytes > WITHDRAWAL_RECEIPT_MAX_BYTES) return { ok: false as const }
+  const extension = mime === 'image/png' ? 'png' : mime === 'image/webp' ? 'webp' : 'jpg'
+  const name = fileName?.trim() || `receipt.${extension}`
+  return { ok: true as const, url: `data:${mime};base64,${b64}`, name }
 }

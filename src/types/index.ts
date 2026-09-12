@@ -314,6 +314,8 @@ export type AgentWithdrawal = {
   processedAt?: string
   paidAt?: string
   cancelledAt?: string
+  paymentReference?: string
+  paymentDate?: string
   receiptUrl?: string
   receiptName?: string
   processedBy?: string
@@ -397,11 +399,13 @@ export type DocumentAuditAction =
   | 'quotation_printed'
   | 'delivery_printed'
   | 'agent_sale_created'
+  | 'agent_withdrawal_paid'
+  | 'agent_withdrawal_cancelled'
 
 export type DocumentAuditLog = {
   id: string
   action: DocumentAuditAction
-  documentType: 'quotation' | 'invoice' | 'delivery' | 'agent_sale'
+  documentType: 'quotation' | 'invoice' | 'delivery' | 'agent_sale' | 'agent_withdrawal'
   documentId: string
   documentNo: string
   field: string
