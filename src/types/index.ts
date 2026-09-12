@@ -90,6 +90,8 @@ export type Category = {
   name: string
 }
 
+export type CostSource = 'bom' | 'manual'
+
 export type Product = {
   id: string
   name: string
@@ -97,7 +99,11 @@ export type Product = {
   barcode: string
   categoryId: string
   unit: string
+  purchaseUnit?: string
+  purchaseConversionQty?: number
+  purchaseCost?: number
   costPrice: number
+  costSource?: CostSource
   sellingPrice: number
   wholesalePrice: number
   agentPrice?: number
@@ -934,18 +940,22 @@ export type AppState = AppData & {
 
 export type ProductInput = {
   name: string
-  sku: string
-  barcode: string
+  sku?: string
+  barcode?: string
   categoryId: string
   unit: string
-  costPrice: number
+  purchaseUnit?: string
+  purchaseConversionQty?: number
+  purchaseCost?: number
+  costPrice?: number
+  costSource?: CostSource
   sellingPrice: number
-  wholesalePrice: number
+  wholesalePrice?: number
   agentPrice?: number
-  reorderLevel: number
-  trackBatch: boolean
-  trackExpiry: boolean
-  status: ProductStatus
+  reorderLevel?: number
+  trackBatch?: boolean
+  trackExpiry?: boolean
+  status?: ProductStatus
 }
 
 export type SaleInput = {

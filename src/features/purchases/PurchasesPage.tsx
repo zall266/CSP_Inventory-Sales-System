@@ -149,15 +149,15 @@ export function NewPurchasePage() {
                   value={line.productId}
                   onChange={(e) => {
                     const next = state.products.find((x) => x.id === e.target.value)
-                    setLines(lines.map((l, i) => i === index ? { ...l, productId: e.target.value, price: next?.costPrice ?? l.price } : l))
+                    setLines(lines.map((l, i) => i === index ? { ...l, productId: e.target.value, price: next?.purchaseCost ?? next?.costPrice ?? l.price } : l))
                   }}
                 >
                   {state.products.map((prod) => <option key={prod.id} value={prod.id}>{prod.name}</option>)}
                 </Select>
                 <Input placeholder="Batch" value={line.batchNo} onChange={(e) => setLines(lines.map((l, i) => i === index ? { ...l, batchNo: e.target.value } : l))} />
                 <Input type="date" value={line.expiry} onChange={(e) => setLines(lines.map((l, i) => i === index ? { ...l, expiry: e.target.value } : l))} />
-                <Input type="number" value={line.qty} onChange={(e) => setLines(lines.map((l, i) => i === index ? { ...l, qty: Number(e.target.value) } : l))} />
-                <Input value={p?.unit ?? ''} readOnly />
+                <Input type="number" step="any" value={line.qty} onChange={(e) => setLines(lines.map((l, i) => i === index ? { ...l, qty: Number(e.target.value) } : l))} />
+                <Input value={p?.purchaseUnit ?? p?.unit ?? ''} readOnly />
                 <Input type="number" step="0.01" value={line.price} onChange={(e) => setLines(lines.map((l, i) => i === index ? { ...l, price: Number(e.target.value) } : l))} />
                 <div className="flex items-center justify-between gap-2">
                   <div className="text-sm tabular">{formatMoney(line.qty * line.price - line.discount)}</div>

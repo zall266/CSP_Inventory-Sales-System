@@ -12,6 +12,7 @@ import {
   WAREHOUSE_MAP_KEYS,
 } from '@/features/warehouse/warehouseModel'
 import { AGENT_PERMISSION_KEYS, agentBankDetailsComplete, agentLinkedWarehouseName, calcAgentSaleEarnings, canUserRequestWithdrawalForAgent, companyWarehouses, configuredAgentPrice, hasSaleEarningLedger, hasWithdrawalCancelledLedger, hasWithdrawalPaidLedger, hasWithdrawalPendingLedger, isAgentWarehouseId, isCompanyWarehouseId, linkedAgentForUser, nextAgentWarehouseId, parseAgentPriceWrite, parseWithdrawalAmount, parseWithdrawalPaymentDate, parseWithdrawalPaymentReference, parseWithdrawalReceipt, SALE_EARNING_KIND, saleIsAgentSale, snapshotAgentBankDetails, summarizeAgentEarnings, WITHDRAWAL_CANCELLED_KIND, WITHDRAWAL_PAID_KIND, WITHDRAWAL_PENDING_KIND } from '@/features/agent/agentModel'
+import { applyBomCosts, hydrateProducts, normalizeUnit, parseNonNegativeMoney, productHasBom, productIsUsed, purchaseQtyToBaseQty, resolveProductSku, skuIsUnique, validatePurchaseConversion } from '@/features/products/masterData'
 import { bomLinesForQty, consumptionCost, hasShortage, materialAvailability } from '@/features/manufacturing/helpers'
 import { buildSessionPlan, canEditSession, currentUser, mergePicking } from '@/features/manufacturing/sessionPlan'
 import {
@@ -63,6 +64,7 @@ import type {
   PaymentMethod,
   PermissionKey,
   ProductInput,
+  ProductStatus,
   ProductionInput,
   ProductionWastage,
   PurchaseInput,
@@ -165,10 +167,13 @@ function hydrateData(data: AppData): AppData {
       ...warehouse,
       kind: warehouse.kind === 'agent' ? 'agent' : 'company',
     })),
-    products: (data.products ?? []).map((product) => ({
-      ...product,
-      agentPrice: product.agentPrice,
-    })),
+    products: hydrateProducts(
+      (data.products ?? []).map((product) => ({
+        ...product,
+        agentPrice: product.agentPrice,
+      })),
+      data.boms ?? [],
+    ),
     sales: (data.sales ?? []).map((sale) => ({
       ...sale,
       shipping: sale.shipping ?? 0,
@@ -1043,8 +1048,49 @@ export const db = {
   },
 
   createProduct(input: ProductInput) {
-    if (state.products.some((p) => p.sku.toLowerCase() === input.sku.toLowerCase())) {
-      toast('SKU already exists', `${input.sku} is already used.`, 'danger')
+    const name = input.name.trim()
+    if (!name) {
+      toast('Product name is required', undefined, 'warning')
+      return null
+    }
+    const unit = normalizeUnit(input.unit) || input.unit.trim()
+    if (!unit) {
+      toast('Base Unit is required.', undefined, 'warning')
+      return null
+    }
+    const purchaseUnit = normalizeUnit(input.purchaseUnit || unit) || unit
+    const conversion = validatePurchaseConversion({
+      baseUnit: unit,
+      purchaseUnit,
+      conversionQty: input.purchaseConversionQty ?? 1,
+    })
+    if (!conversion.ok) {
+      toast(conversion.reason, undefined, 'warning')
+      return null
+    }
+    const selling = parseNonNegativeMoney(input.sellingPrice)
+    if (!selling.ok) {
+      toast('Selling Price cannot be negative.', undefined, 'warning')
+      return null
+    }
+    const wholesale = parseNonNegativeMoney(input.wholesalePrice ?? 0)
+    if (!wholesale.ok) {
+      toast('Wholesale price cannot be negative.', undefined, 'warning')
+      return null
+    }
+    const enteredCost = input.purchaseCost ?? input.costPrice ?? 0
+    const purchaseCost = parseNonNegativeMoney(enteredCost)
+    if (!purchaseCost.ok) {
+      toast('Cost Price cannot be negative.', undefined, 'warning')
+      return null
+    }
+    const skuResult = resolveProductSku(input.sku, state.products.map((product) => product.sku))
+    if (!skuResult.ok) {
+      toast('Unable to generate a unique SKU', skuResult.reason, 'danger')
+      return null
+    }
+    if (!skuIsUnique(skuResult.sku, state.products)) {
+      toast('SKU already exists', `${skuResult.sku} is already used.`, 'danger')
       return null
     }
     let agentPrice = input.agentPrice
@@ -1060,22 +1106,40 @@ export const db = {
       }
       agentPrice = parsed.value
     }
+    const costPrice = round2(purchaseCost.value / conversion.value)
     const product = {
-      ...input,
-      agentPrice,
       id: uid('prd'),
+      name,
+      sku: skuResult.sku,
+      barcode: input.barcode?.trim() ?? '',
+      categoryId: input.categoryId,
+      unit,
+      purchaseUnit,
+      purchaseConversionQty: conversion.value,
+      purchaseCost: purchaseCost.value,
+      costPrice,
+      costSource: 'manual' as const,
+      sellingPrice: selling.value,
+      wholesalePrice: wholesale.value,
+      agentPrice,
+      reorderLevel: input.reorderLevel ?? 0,
+      trackBatch: Boolean(input.trackBatch),
+      trackExpiry: Boolean(input.trackExpiry),
+      status: input.status ?? 'active',
       accent: '#4F46E5',
     }
     const inventory = [
       ...state.inventory,
       ...companyWarehouses(state.warehouses).map((warehouse) => ({ productId: product.id, warehouseId: warehouse.id, qty: 0 })),
     ]
-    setData({ products: [product, ...state.products], inventory })
-    toast('Product added', `${product.name} is now in the catalogue.`)
+    setData({ products: applyBomCosts([product, ...state.products], state.boms), inventory })
+    toast('Product added', skuResult.generated ? `${product.name} · SKU ${product.sku}` : `${product.name} is now in the catalogue.`)
     return product
   },
 
   updateProduct(id: string, patch: Partial<ProductInput>) {
+    const current = state.products.find((product) => product.id === id)
+    if (!current) return false
     if (Object.prototype.hasOwnProperty.call(patch, 'agentPrice')) {
       if (!hasPermission(state, 'agent.manage')) {
         toast('Permission denied', 'You cannot change Agent Price.', 'danger')
@@ -1088,14 +1152,113 @@ export const db = {
       }
       patch = { ...patch, agentPrice: parsed.value }
     }
+    const name = patch.name !== undefined ? patch.name.trim() : current.name
+    if (!name) {
+      toast('Product name is required', undefined, 'warning')
+      return false
+    }
+    let sku = current.sku
+    if (Object.prototype.hasOwnProperty.call(patch, 'sku')) {
+      const nextSku = (patch.sku ?? '').trim()
+      if (nextSku && nextSku !== current.sku) {
+        if (productIsUsed(state, id)) {
+          toast('SKU cannot be changed', 'This product is already used in transactions.', 'warning')
+          return false
+        }
+        if (!skuIsUnique(nextSku, state.products, id)) {
+          toast('SKU already exists', `${nextSku} is already used.`, 'danger')
+          return false
+        }
+        sku = nextSku
+      }
+    }
+    if (patch.sellingPrice !== undefined) {
+      const selling = parseNonNegativeMoney(patch.sellingPrice)
+      if (!selling.ok) {
+        toast('Selling Price cannot be negative.', undefined, 'warning')
+        return false
+      }
+      patch = { ...patch, sellingPrice: selling.value }
+    }
+    if (patch.wholesalePrice !== undefined) {
+      const wholesale = parseNonNegativeMoney(patch.wholesalePrice)
+      if (!wholesale.ok) {
+        toast('Wholesale price cannot be negative.', undefined, 'warning')
+        return false
+      }
+      patch = { ...patch, wholesalePrice: wholesale.value }
+    }
+    const unitTouched = ['unit', 'purchaseUnit', 'purchaseConversionQty', 'purchaseCost', 'costPrice'].some((key) =>
+      Object.prototype.hasOwnProperty.call(patch, key),
+    )
+    const unit = normalizeUnit(patch.unit ?? current.unit) || (patch.unit ?? current.unit)
+    const purchaseUnit = normalizeUnit(patch.purchaseUnit ?? current.purchaseUnit ?? unit) || unit
+    const conversion = validatePurchaseConversion({
+      baseUnit: unit,
+      purchaseUnit,
+      conversionQty: patch.purchaseConversionQty ?? current.purchaseConversionQty ?? 1,
+    })
+    if (!conversion.ok) {
+      toast(conversion.reason, undefined, 'warning')
+      return false
+    }
+    const hasBom = productHasBom(state.boms, id)
+    let purchaseCost = current.purchaseCost ?? current.costPrice
+    let costPrice = current.costPrice
+    let costSource = hasBom ? ('bom' as const) : ('manual' as const)
+    if (!hasBom && unitTouched) {
+      if (patch.purchaseCost !== undefined) {
+        const parsedCost = parseNonNegativeMoney(patch.purchaseCost)
+        if (!parsedCost.ok) {
+          toast('Cost Price cannot be negative.', undefined, 'warning')
+          return false
+        }
+        purchaseCost = parsedCost.value
+        costPrice = round2(purchaseCost / conversion.value)
+      } else if (patch.costPrice !== undefined) {
+        const parsedCost = parseNonNegativeMoney(patch.costPrice)
+        if (!parsedCost.ok) {
+          toast('Cost Price cannot be negative.', undefined, 'warning')
+          return false
+        }
+        costPrice = parsedCost.value
+        purchaseCost = round2(costPrice * conversion.value)
+      } else {
+        purchaseCost = current.purchaseCost ?? current.costPrice
+        costPrice = round2(purchaseCost / conversion.value)
+      }
+    }
+    const next = {
+      ...current,
+      ...patch,
+      name,
+      sku,
+      unit: unitTouched ? unit : current.unit,
+      purchaseUnit: unitTouched ? purchaseUnit : current.purchaseUnit ?? current.unit,
+      purchaseConversionQty: unitTouched ? conversion.value : current.purchaseConversionQty ?? 1,
+      purchaseCost: hasBom ? current.purchaseCost ?? current.costPrice : unitTouched ? purchaseCost : current.purchaseCost ?? current.costPrice,
+      costPrice: hasBom ? current.costPrice : unitTouched ? costPrice : current.costPrice,
+      costSource,
+      barcode: patch.barcode !== undefined ? patch.barcode : current.barcode,
+      sellingPrice: patch.sellingPrice ?? current.sellingPrice,
+      wholesalePrice: patch.wholesalePrice ?? current.wholesalePrice,
+      agentPrice: Object.prototype.hasOwnProperty.call(patch, 'agentPrice') ? patch.agentPrice : current.agentPrice,
+      reorderLevel: patch.reorderLevel ?? current.reorderLevel,
+      trackBatch: patch.trackBatch ?? current.trackBatch,
+      trackExpiry: patch.trackExpiry ?? current.trackExpiry,
+      status: patch.status ?? current.status,
+    }
     setData({
-      products: state.products.map((product) => (product.id === id ? { ...product, ...patch } : product)),
+      products: applyBomCosts(
+        state.products.map((product) => (product.id === id ? next : product)),
+        state.boms,
+      ),
     })
     toast('Product updated')
     return true
   },
 
-  setProductStatus(id: string, status: ProductInput['status']) {
+  setProductStatus(id: string, status: ProductStatus) {
     setData({
       products: state.products.map((product) => (product.id === id ? { ...product, status } : product)),
     })
@@ -2171,13 +2334,15 @@ export const db = {
     let movements = state.stockMovements
     if (input.receive) {
       for (const item of items) {
+        const product = productById(item.productId)
+        const stockIn = purchaseQtyToBaseQty(item.qty, product ?? { unit: 'PCS', purchaseUnit: 'PCS', purchaseConversionQty: 1 })
         const applied = addMovement(movements, inventory, {
           date,
           reference: purchaseNo,
           productId: item.productId,
           warehouseId: input.warehouseId,
           type: 'purchase',
-          stockIn: item.qty,
+          stockIn,
           stockOut: 0,
         })
         inventory = applied.inventory
@@ -2215,13 +2380,15 @@ export const db = {
     let inventory = state.inventory
     let movements = state.stockMovements
     for (const item of purchase.items) {
+      const product = productById(item.productId)
+      const stockIn = purchaseQtyToBaseQty(item.qty, product ?? { unit: 'PCS', purchaseUnit: 'PCS', purchaseConversionQty: 1 })
       const applied = addMovement(movements, inventory, {
         date: nowIso(),
         reference: purchase.purchaseNo,
         productId: item.productId,
         warehouseId: purchase.warehouseId,
         type: 'purchase',
-        stockIn: item.qty,
+        stockIn,
         stockOut: 0,
       })
       inventory = applied.inventory
@@ -2742,7 +2909,7 @@ export const db = {
         notes: item.notes,
       })),
     }
-    setData({ boms: [bom, ...state.boms] })
+    setData({ boms: [bom, ...state.boms], products: applyBomCosts(state.products, [bom, ...state.boms]) })
     toast('BOM created', bom.name)
     return bom
   },
@@ -2750,35 +2917,39 @@ export const db = {
   updateBom(id: string, input: BomInput) {
     const existing = state.boms.find((bom) => bom.id === id)
     if (!existing) return
+    const boms = state.boms.map((bom) =>
+      bom.id === id
+        ? {
+            ...bom,
+            name: input.name,
+            productId: input.productId,
+            outputQty: input.outputQty,
+            outputUnit: input.outputUnit,
+            bulkYieldGrams: input.bulkYieldGrams ?? bom.bulkYieldGrams,
+            notes: input.notes,
+            items: input.items.filter((item) => item.qty > 0).map((item) => ({
+              id: uid('bi'),
+              productId: item.productId,
+              qty: item.qty,
+              unit: item.unit,
+              wastagePct: item.wastagePct,
+              notes: item.notes,
+            })),
+          }
+        : bom,
+    )
     setData({
-      boms: state.boms.map((bom) =>
-        bom.id === id
-          ? {
-              ...bom,
-              name: input.name,
-              productId: input.productId,
-              outputQty: input.outputQty,
-              outputUnit: input.outputUnit,
-              bulkYieldGrams: input.bulkYieldGrams ?? bom.bulkYieldGrams,
-              notes: input.notes,
-              items: input.items.filter((item) => item.qty > 0).map((item) => ({
-                id: uid('bi'),
-                productId: item.productId,
-                qty: item.qty,
-                unit: item.unit,
-                wastagePct: item.wastagePct,
-                notes: item.notes,
-              })),
-            }
-          : bom,
-      ),
+      boms,
+      products: applyBomCosts(state.products, boms),
     })
     toast('BOM updated')
   },
 
   setBomStatus(id: string, status: 'active' | 'inactive') {
+    const boms = state.boms.map((bom) => (bom.id === id ? { ...bom, status } : bom))
     setData({
-      boms: state.boms.map((bom) => (bom.id === id ? { ...bom, status } : bom)),
+      boms,
+      products: applyBomCosts(state.products, boms),
     })
     toast(status === 'inactive' ? 'BOM deactivated' : 'BOM activated')
   },

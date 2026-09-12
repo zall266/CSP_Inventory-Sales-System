@@ -1,9 +1,12 @@
 import { useMemo, useState } from 'react'
 import { Plus } from 'lucide-react'
-import { Button, Card, FilterRow, Input, PageHeader, Select, StatusBadge } from '@/components/ui'
+import { Button, Card, FilterRow, Input, Modal, PageHeader, Select, StatusBadge } from '@/components/ui'
 import { ProductMark } from '@/components/ProductMark'
+import { ProductForm } from '@/features/products/ProductForm'
+import { baseUnitCost, formatUnit, productHasBom } from '@/features/products/masterData'
 import { useApi, useLookups, useStore } from '@/store/hooks'
 import { formatMoney, formatQty } from '@/utils/format'
+import type { Product } from '@/types'
 
 export function ProductsPage() {
   const state = useStore()
@@ -51,6 +54,7 @@ export function ProductsPage() {
                 <th>SKU</th>
                 <th>Category</th>
                 <th>Cost</th>
+                <th>Source</th>
                 <th>Selling price</th>
                 <th>Stock</th>
                 <th>Status</th>
@@ -69,6 +73,7 @@ export function ProductsPage() {
                   <td>{p.sku}</td>
                   <td>{categoryName(p.categoryId)}</td>
                   <td className="tabular">{formatMoney(p.costPrice)}</td>
+                  <td>{productHasBom(state.boms, p.id) ? 'BOM' : 'Manual'}</td>
                   <td className="tabular">{formatMoney(p.sellingPrice)}</td>
                   <td className="tabular">{formatQty(api.getProductQty(p.id))} {p.unit}</td>
                   <td><StatusBadge status={api.getProductStockStatus(p.id) === 'out_of_stock' && p.status === 'active' ? api.getProductStockStatus(p.id) : p.status} /></td>
@@ -91,6 +96,105 @@ export function ProductsPage() {
           </table>
         </div>
       </Card>
+    </div>
+  )
+}
+
+export function RawMaterialsPage() {
+  const state = useStore()
+  const api = useApi()
+  const { categoryName } = useLookups()
+  const [query, setQuery] = useState('')
+  const [creating, setCreating] = useState(false)
+  const [editing, setEditing] = useState<Product | null>(null)
+
+  const rows = useMemo(
+    () =>
+      state.products.filter((product) => {
+        if (productHasBom(state.boms, product.id)) return false
+        if (query && !`${product.name} ${product.sku}`.toLowerCase().includes(query.toLowerCase())) return false
+        return true
+      }),
+    [state.products, state.boms, query],
+  )
+
+  return (
+    <div>
+      <PageHeader
+        title="Raw Materials"
+        subtitle="Base unit, purchase unit, conversion and current cost."
+        actions={<Button onClick={() => setCreating(true)}><Plus size={16} /> Add raw material</Button>}
+      />
+      <FilterRow>
+        <Input placeholder="Search material or SKU" value={query} onChange={(event) => setQuery(event.target.value)} />
+        <div /><div /><div />
+      </FilterRow>
+      <Card>
+        <div className="sf-table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Material</th>
+                <th>SKU</th>
+                <th>Category</th>
+                <th>Base unit</th>
+                <th>Purchase unit</th>
+                <th>Conversion</th>
+                <th>Purchase cost</th>
+                <th>Base cost</th>
+                <th>Status</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((product) => (
+                <tr key={product.id} onClick={() => setEditing(product)}>
+                  <td>
+                    <div className="flex items-center gap-3">
+                      <ProductMark product={product} size="sm" />
+                      <span className="font-medium">{product.name}</span>
+                    </div>
+                  </td>
+                  <td>{product.sku}</td>
+                  <td>{categoryName(product.categoryId)}</td>
+                  <td>{formatUnit(product.unit)}</td>
+                  <td>{formatUnit(product.purchaseUnit ?? product.unit)}</td>
+                  <td className="tabular">1 {formatUnit(product.purchaseUnit ?? product.unit)} = {product.purchaseConversionQty ?? 1} {formatUnit(product.unit)}</td>
+                  <td className="tabular">{formatMoney(product.purchaseCost ?? product.costPrice)}</td>
+                  <td className="tabular">{formatMoney(baseUnitCost(product))} / {formatUnit(product.unit)}</td>
+                  <td><StatusBadge status={product.status} /></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </Card>
+      <Modal open={creating} onClose={() => setCreating(false)} title="Add Raw Material" width="max-w-2xl">
+        <ProductForm
+          material
+          submitLabel="Save raw material"
+          onCancel={() => setCreating(false)}
+          onSubmit={(input) => {
+            const created = api.createProduct(input)
+            if (!created) return false
+            setCreating(false)
+          }}
+        />
+      </Modal>
+      <Modal open={Boolean(editing)} onClose={() => setEditing(null)} title="Edit Raw Material" width="max-w-2xl">
+        {editing && (
+          <ProductForm
+            material
+            product={editing}
+            submitLabel="Save changes"
+            onCancel={() => setEditing(null)}
+            onSubmit={(input) => {
+              const ok = api.updateProduct(editing.id, input)
+              if (!ok) return false
+              setEditing(null)
+            }}
+          />
+        )}
+      </Modal>
     </div>
   )
 }
