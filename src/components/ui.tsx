@@ -421,6 +421,7 @@ export function ConfirmDialog({
   title,
   message,
   confirmLabel = 'Confirm',
+  confirmDisabled = false,
   tone = 'primary',
   onConfirm,
   onClose,
@@ -429,6 +430,7 @@ export function ConfirmDialog({
   title: string
   message: string
   confirmLabel?: string
+  confirmDisabled?: boolean
   tone?: 'primary' | 'danger'
   onConfirm: () => void
   onClose: () => void
@@ -437,10 +439,10 @@ export function ConfirmDialog({
     <Modal open={open} onClose={onClose} title={title} width="max-w-md" layer="z-[80]">
       <p className="whitespace-pre-line text-sm text-slate-600">{message}</p>
       <div className="mt-6 flex justify-end gap-2">
-        <Button variant="secondary" onClick={onClose}>
+        <Button variant="secondary" onClick={onClose} disabled={confirmDisabled}>
           Cancel
         </Button>
-        <Button variant={tone === 'danger' ? 'danger' : 'primary'} onClick={onConfirm}>
+        <Button variant={tone === 'danger' ? 'danger' : 'primary'} onClick={onConfirm} disabled={confirmDisabled} size="lg">
           {confirmLabel}
         </Button>
       </div>

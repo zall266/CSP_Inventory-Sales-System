@@ -116,7 +116,14 @@ export function agentStockRows(state: Pick<AppState, 'inventory' | 'products'>, 
       return product ? { ...row, product } : null
     })
     .filter((row): row is { productId: string; warehouseId: string; qty: number; product: Product } => Boolean(row))
-    .sort((a, b) => a.product.name.localeCompare(b.product.name))
+    .sort((a, b) => a.product.name.localeCompare(b.product.name) || a.product.sku.localeCompare(b.product.sku))
+}
+
+export function agentSalesForAgent<T extends { agentId: string; date: string; createdAt: string }>(sales: T[], agentId: string) {
+  return sales
+    .filter((sale) => sale.agentId === agentId)
+    .slice()
+    .sort((a, b) => b.date.localeCompare(a.date) || b.createdAt.localeCompare(a.createdAt))
 }
 
 export function activeAgents<T extends { status: string }>(agents: T[]) {

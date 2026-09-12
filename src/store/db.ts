@@ -11,7 +11,7 @@ import {
   unplacedPacks,
   WAREHOUSE_MAP_KEYS,
 } from '@/features/warehouse/warehouseModel'
-import { AGENT_PERMISSION_KEYS, agentLinkedWarehouseName, companyWarehouses, isAgentWarehouseId, isCompanyWarehouseId, nextAgentWarehouseId } from '@/features/agent/agentModel'
+import { AGENT_PERMISSION_KEYS, agentLinkedWarehouseName, calcAgentSaleEarnings, companyWarehouses, isAgentWarehouseId, isCompanyWarehouseId, nextAgentWarehouseId } from '@/features/agent/agentModel'
 import { bomLinesForQty, consumptionCost, hasShortage, materialAvailability } from '@/features/manufacturing/helpers'
 import { buildSessionPlan, canEditSession, currentUser, mergePicking } from '@/features/manufacturing/sessionPlan'
 import {
@@ -44,6 +44,7 @@ import type {
   AdjustmentType,
   Agent,
   AgentInput,
+  AgentSale,
   AgentStatus,
   BomInput,
   DeliveryOrder,
@@ -71,6 +72,7 @@ import type {
   Role,
   RolePermissions,
   RoleStatus,
+  Sale,
   SaleInput,
   SaleStatus,
   Settings,
@@ -425,6 +427,185 @@ function maybeStockAlerts(productId: string, warehouseId: string, qty: number) {
   } else if (qty <= product.reorderLevel) {
     notify('low_stock', 'Low stock', `${product.name} is below reorder level.`, '/inventory')
   }
+}
+
+let agentSaleInFlight = false
+let lastAgentSale: { key: string; sale: Sale; at: number } | null = null
+
+function agentSaleRequestKey(input: {
+  agentId: string
+  productId: string
+  qty: number
+  sellingPrice: number
+  customerId?: string
+  paymentMethod?: PaymentMethod
+  notes?: string
+}) {
+  return [input.agentId, input.productId, input.qty, input.sellingPrice, input.customerId ?? '', input.paymentMethod ?? '', input.notes ?? ''].join('|')
+}
+
+function postAgentSale(input: {
+  agentId: string
+  productId: string
+  qty: number
+  sellingPrice: number
+  customerId?: string
+  paymentMethod?: PaymentMethod
+  notes?: string
+}) {
+  const requestKey = agentSaleRequestKey(input)
+  if (lastAgentSale && lastAgentSale.key === requestKey && Date.now() - lastAgentSale.at < 1500) {
+    return lastAgentSale.sale
+  }
+  if (!hasPermission(state, 'agent.sale.create')) {
+    toast('Permission denied', 'You cannot create an agent sale.', 'danger')
+    return null
+  }
+  const agent = (state.agents ?? []).find((item) => item.id === input.agentId)
+  if (!agent) {
+    toast('Unable to complete sale. Please try again.', undefined, 'danger')
+    return null
+  }
+  if (agent.status !== 'active') {
+    toast('This agent is inactive and cannot create a sale.', undefined, 'warning')
+    return null
+  }
+  if (!isAgentWarehouseId(state.warehouses, agent.warehouseId)) {
+    toast('Unable to complete sale. Please try again.', undefined, 'danger')
+    return null
+  }
+  if (!input.productId) {
+    toast('Please select a product.', undefined, 'warning')
+    return null
+  }
+  const product = productById(input.productId)
+  if (!product) {
+    toast('Please select a product.', undefined, 'warning')
+    return null
+  }
+  const qty = Number(input.qty)
+  if (!Number.isFinite(qty) || !(qty > 0)) {
+    toast('Quantity must be greater than 0.', undefined, 'warning')
+    return null
+  }
+  const sellingPrice = Number(input.sellingPrice)
+  if (!Number.isFinite(sellingPrice) || sellingPrice < 0) {
+    toast('Unable to complete sale. Please try again.', undefined, 'warning')
+    return null
+  }
+  const available = getQty(product.id, agent.warehouseId)
+  if (qty > available) {
+    toast('Insufficient stock.', `Available: ${formatQty(available)}.`, 'danger')
+    return null
+  }
+  const customerId = input.customerId?.trim() || state.settings.defaultCustomerId
+  if (!state.customers.some((customer) => customer.id === customerId)) {
+    toast('Unable to complete sale. Please try again.', undefined, 'warning')
+    return null
+  }
+  const paymentMethod = input.paymentMethod ?? 'cash'
+  const total = round2(qty * sellingPrice)
+  const date = nowIso()
+  const invoiceNo = nextDocNo(
+    state.sales.filter((sale) => sale.invoiceNo.startsWith('SAL-')).map((sale) => sale.invoiceNo),
+    'SAL-',
+  )
+  const lines = makeLines([{ productId: product.id, qty, price: sellingPrice }])
+  const sale = {
+    id: uid('sal'),
+    invoiceNo,
+    date,
+    customerId,
+    warehouseId: agent.warehouseId,
+    salesperson: currentUser(state).name,
+    items: lines,
+    subtotal: total,
+    discount: 0,
+    tax: 0,
+    shipping: 0,
+    total,
+    paid: total,
+    balance: 0,
+    status: 'paid' as SaleStatus,
+    paymentMethod,
+    notes: input.notes?.trim() || undefined,
+  }
+  const applied = addMovement(state.stockMovements, state.inventory, {
+    date,
+    reference: invoiceNo,
+    productId: product.id,
+    warehouseId: agent.warehouseId,
+    type: 'sale',
+    stockIn: 0,
+    stockOut: qty,
+    notes: `Agent sale · ${agent.name}`,
+  })
+  const earnings = calcAgentSaleEarnings({
+    agentPrice: product.agentPrice ?? 0,
+    sellingPrice,
+    qty,
+    delivery: 0,
+  })
+  const agentSale: AgentSale = {
+    id: uid('ags'),
+    saleId: sale.id,
+    agentId: agent.id,
+    warehouseId: agent.warehouseId,
+    date,
+    customerId,
+    items: [
+      {
+        productId: product.id,
+        qty,
+        agentPrice: product.agentPrice ?? 0,
+        sellingPrice,
+        productMarkup: earnings.productMarkup,
+      },
+    ],
+    cspAmount: earnings.cspAmount,
+    productMarkup: earnings.productMarkup,
+    deliveryEarnings: 0,
+    totalEarnings: earnings.totalEarnings,
+    customerPaid: earnings.customerPays,
+    notes: sale.notes,
+    createdAt: date,
+  }
+  const payments = [...state.payments]
+  if (total > 0) {
+    payments.unshift({
+      id: uid('pay'),
+      paymentNo: nextDocNo(state.payments.map((payment) => payment.paymentNo), 'PAY-'),
+      date,
+      partyType: 'customer',
+      partyId: customerId,
+      invoiceId: sale.id,
+      invoiceNo,
+      method: paymentMethod,
+      amount: total,
+      status: 'completed',
+    })
+  }
+  const audit = makeDocAudit({
+    action: 'agent_sale_created',
+    documentType: 'agent_sale',
+    documentId: sale.id,
+    documentNo: invoiceNo,
+    field: 'CREATE_AGENT_SALE',
+    newValue: `${agent.name} · ${product.name} · ${formatQty(qty)} ${product.unit}`,
+  })
+  state = {
+    ...state,
+    sales: [sale, ...state.sales],
+    agentSales: [agentSale, ...(state.agentSales ?? [])],
+    inventory: applied.inventory,
+    stockMovements: applied.movements,
+    payments,
+    documentAuditLogs: pushDocAudit(audit),
+  }
+  emit()
+  lastAgentSale = { key: requestKey, sale, at: Date.now() }
+  toast('Sale completed', invoiceNo)
+  return sale
 }
 
 export const db = {
@@ -1777,6 +1958,27 @@ export const db = {
     })
     toast('Stock transferred successfully.')
     return true
+  },
+
+  createAgentSale(input: {
+    agentId: string
+    productId: string
+    qty: number
+    sellingPrice: number
+    customerId?: string
+    paymentMethod?: PaymentMethod
+    notes?: string
+  }) {
+    if (agentSaleInFlight) {
+      toast('Unable to complete sale. Please try again.', undefined, 'warning')
+      return null
+    }
+    agentSaleInFlight = true
+    try {
+      return postAgentSale(input)
+    } finally {
+      agentSaleInFlight = false
+    }
   },
 
   completeStockCount(input: { warehouseId: string; counts: Array<{ productId: string; countedQty: number }> }) {

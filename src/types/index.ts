@@ -391,11 +391,12 @@ export type DocumentAuditAction =
   | 'delivery_delivered'
   | 'quotation_printed'
   | 'delivery_printed'
+  | 'agent_sale_created'
 
 export type DocumentAuditLog = {
   id: string
   action: DocumentAuditAction
-  documentType: 'quotation' | 'invoice' | 'delivery'
+  documentType: 'quotation' | 'invoice' | 'delivery' | 'agent_sale'
   documentId: string
   documentNo: string
   field: string

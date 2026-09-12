@@ -1,4 +1,4 @@
-import { useMemo, useState, type FormEvent } from 'react'
+import { useMemo, useRef, useState, type FormEvent } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { Plus } from 'lucide-react'
 import {
@@ -15,12 +15,13 @@ import {
   StatusBadge,
   Textarea,
 } from '@/components/ui'
+import { paymentLabel } from '@/components/ProductMark'
 import { PermissionDenied } from '@/features/documents/A4Sheet'
-import { activeAgents, agentStockRows, agentStockTotal, companyWarehouses } from '@/features/agent/agentModel'
+import { activeAgents, agentSalesForAgent, agentStockRows, agentStockTotal, companyWarehouses } from '@/features/agent/agentModel'
 import { hasPermission } from '@/features/settings/permissions'
 import { useApi, useLookups, useStore } from '@/store/hooks'
-import { formatQty } from '@/utils/format'
-import type { Agent, AgentInput } from '@/types'
+import { formatDate, formatMoney, formatQty, round2 } from '@/utils/format'
+import type { Agent, AgentInput, PaymentMethod, Product } from '@/types'
 
 type AgentForm = {
   name: string
@@ -60,6 +61,157 @@ function toInput(form: AgentForm): AgentInput {
     accountHolder: form.accountHolder,
     bankAccount: form.bankAccount,
   }
+}
+
+function productOptionLabel(product: Product) {
+  return `${product.name} · ${product.sku} · ${product.unit}`
+}
+
+function AgentSaleModal({
+  open,
+  agentId,
+  onClose,
+}: {
+  open: boolean
+  agentId: string
+  onClose: () => void
+}) {
+  const state = useStore()
+  const api = useApi()
+  const agent = (state.agents ?? []).find((item) => item.id === agentId)
+  const products = state.products.filter((product) => product.status === 'active')
+  const stockedId = products.find((product) => api.getProductQty(product.id, agent?.warehouseId) > 0)?.id
+  const defaultProductId = stockedId ?? products.find((product) => product.id === 'p-pack-mt')?.id ?? products[0]?.id ?? ''
+  const methods = state.settings.enabledPaymentMethods
+  const [productId, setProductId] = useState(defaultProductId)
+  const [qty, setQty] = useState(0)
+  const [sellingPrice, setSellingPrice] = useState(() => products.find((item) => item.id === defaultProductId)?.sellingPrice ?? 0)
+  const [customerId, setCustomerId] = useState(state.settings.defaultCustomerId)
+  const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>(methods.includes('cash') ? 'cash' : methods[0] ?? 'cash')
+  const [notes, setNotes] = useState('')
+  const [confirm, setConfirm] = useState(false)
+  const [submitting, setSubmitting] = useState(false)
+  const submittingRef = useRef(false)
+
+  const product = products.find((item) => item.id === productId)
+  const available = productId && agent?.warehouseId ? api.getProductQty(productId, agent.warehouseId) : 0
+  const total = round2((Number(qty) || 0) * (Number(sellingPrice) || 0))
+  const afterQty = round2(available - (Number(qty) || 0))
+  const agentLabel = agent ? (state.warehouses.find((warehouse) => warehouse.id === agent.warehouseId)?.name ?? agent.name) : '—'
+
+  const chooseProduct = (nextId: string) => {
+    setProductId(nextId)
+    const next = products.find((item) => item.id === nextId)
+    setSellingPrice(next?.sellingPrice ?? 0)
+  }
+
+  const submit = (event: FormEvent) => {
+    event.preventDefault()
+    if (!productId) {
+      api.toast('Please select a product.', undefined, 'warning')
+      return
+    }
+    if (!Number.isFinite(qty) || !(qty > 0)) {
+      api.toast('Quantity must be greater than 0.', undefined, 'warning')
+      return
+    }
+    if (qty > available) {
+      api.toast('Insufficient stock.', `Available: ${formatQty(available)}.`, 'danger')
+      return
+    }
+    setConfirm(true)
+  }
+
+  const confirmSale = () => {
+    if (submittingRef.current) return
+    submittingRef.current = true
+    setSubmitting(true)
+    const sale = api.createAgentSale({
+      agentId,
+      productId,
+      qty,
+      sellingPrice,
+      customerId,
+      paymentMethod,
+      notes,
+    })
+    submittingRef.current = false
+    setSubmitting(false)
+    setConfirm(false)
+    if (sale) {
+      setQty(0)
+      setNotes('')
+      onClose()
+    }
+  }
+
+  const close = () => {
+    if (submittingRef.current) return
+    setConfirm(false)
+    onClose()
+  }
+
+  return (
+    <>
+      <Modal open={open} onClose={close} title="Create Sale" width="max-w-xl">
+        <form className="grid gap-4 sm:grid-cols-2" onSubmit={submit}>
+          <Field label="Agent" className="sm:col-span-2">
+            <Input disabled value={agentLabel} />
+          </Field>
+          <Field label="Product" className="sm:col-span-2">
+            <Select value={productId} onChange={(event) => chooseProduct(event.target.value)}>
+              <option value="">Select product</option>
+              {products.map((item) => (
+                <option key={item.id} value={item.id}>{productOptionLabel(item)}</option>
+              ))}
+            </Select>
+          </Field>
+          <Field label="Available stock">
+            <Input disabled value={product ? `${formatQty(available)} ${product.unit}` : '—'} />
+          </Field>
+          <Field label="Quantity">
+            <Input type="number" min={0} step="0.01" value={qty || ''} onChange={(event) => setQty(Number(event.target.value))} />
+          </Field>
+          <Field label="Selling price">
+            <Input type="number" min={0} step="0.01" value={sellingPrice} onChange={(event) => setSellingPrice(Number(event.target.value))} />
+          </Field>
+          <Field label="Total">
+            <Input disabled value={formatMoney(total)} />
+          </Field>
+          <Field label="Customer">
+            <Select value={customerId} onChange={(event) => setCustomerId(event.target.value)}>
+              {state.customers.filter((customer) => customer.status === 'active').map((customer) => (
+                <option key={customer.id} value={customer.id}>{customer.name}</option>
+              ))}
+            </Select>
+          </Field>
+          <Field label="Payment method">
+            <Select value={paymentMethod} onChange={(event) => setPaymentMethod(event.target.value as PaymentMethod)}>
+              {methods.map((method) => (
+                <option key={method} value={method}>{paymentLabel(method)}</option>
+              ))}
+            </Select>
+          </Field>
+          <Field label="Notes" className="sm:col-span-2">
+            <Textarea rows={2} value={notes} onChange={(event) => setNotes(event.target.value)} />
+          </Field>
+          <div className="flex justify-end gap-2 sm:col-span-2">
+            <Button type="button" variant="secondary" onClick={close}>Cancel</Button>
+            <Button type="submit" size="lg">Create Sale</Button>
+          </div>
+        </form>
+      </Modal>
+      <ConfirmDialog
+        open={confirm}
+        onClose={() => { if (!submittingRef.current) setConfirm(false) }}
+        title="Confirm Agent Sale?"
+        message={`Agent:\n${agentLabel}\nProduct:\n${product ? productOptionLabel(product) : '—'}\nAvailable:\n${formatQty(available)} ${product?.unit ?? ''}\nSale Quantity:\n${formatQty(qty)} ${product?.unit ?? ''}\nAfter Sale:\n${formatQty(afterQty)} ${product?.unit ?? ''}\nSelling Price:\n${formatMoney(sellingPrice)}\nTotal:\n${formatMoney(total)}`}
+        confirmLabel={submitting ? 'Processing...' : 'Confirm Sale'}
+        confirmDisabled={submitting}
+        onConfirm={confirmSale}
+      />
+    </>
+  )
 }
 
 function AgentTransferModal({
@@ -398,6 +550,7 @@ export function AgentDetailPage() {
   const canManage = hasPermission(state, 'agent.manage')
   const canStock = hasPermission(state, 'agent.stock.view') || canManage
   const canTransfer = hasPermission(state, 'agent.stock.transfer')
+  const canSale = hasPermission(state, 'agent.sale.create')
   const agent = (state.agents ?? []).find((item) => item.id === id)
   const warehouse = state.warehouses.find((item) => item.id === agent?.warehouseId)
   const linkedUser = state.users.find((user) => user.id === agent?.userId)
@@ -405,6 +558,7 @@ export function AgentDetailPage() {
   const [editing, setEditing] = useState(false)
   const [statusOpen, setStatusOpen] = useState(false)
   const [transferOpen, setTransferOpen] = useState(false)
+  const [saleOpen, setSaleOpen] = useState(false)
 
   if (!canView) return <PermissionDenied subtitle="You do not have access to Agent." />
   if (!agent) return <PageHeader title="Agent" subtitle="Not found." />
@@ -427,6 +581,9 @@ export function AgentDetailPage() {
             <Link to="/sales/agents"><Button variant="secondary">Back</Button></Link>
             {canTransfer && agent.status === 'active' && (
               <Button onClick={() => setTransferOpen(true)}>Transfer Stock</Button>
+            )}
+            {canSale && agent.status === 'active' && (
+              <Button onClick={() => setSaleOpen(true)} size="lg">Create Sale</Button>
             )}
             {canManage && <Button variant="secondary" onClick={() => { setForm(formFromAgent(agent)); setEditing(true) }}>Edit</Button>}
             {canManage && (
@@ -503,7 +660,10 @@ export function AgentDetailPage() {
               <tbody>
                 {stockRows.map((row) => (
                   <tr key={row.productId} className="cursor-default">
-                    <td className="font-medium">{row.product.name}</td>
+                    <td>
+                      <div className="font-medium">{row.product.name}</div>
+                      <div className="text-xs text-slate-400">{row.product.sku}</div>
+                    </td>
                     <td className="tabular">{formatQty(row.qty)} {row.product.unit}</td>
                   </tr>
                 ))}
@@ -513,8 +673,56 @@ export function AgentDetailPage() {
           </div>
         </Card>
       )}
+      <Card className="mt-5">
+        <div className="border-b border-slate-100 px-5 py-4">
+          <div className="text-sm font-semibold">Agent sales</div>
+          <div className="text-xs text-slate-400">Confirmed sales from this agent warehouse.</div>
+        </div>
+        <div className="sf-table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Date</th>
+                <th>Reference</th>
+                <th>Product</th>
+                <th>Qty</th>
+                <th>Total</th>
+                <th>Payment</th>
+                <th>User</th>
+              </tr>
+            </thead>
+            <tbody>
+              {agentSalesForAgent(state.agentSales ?? [], agent.id).map((agentSale) => {
+                const sale = state.sales.find((item) => item.id === agentSale.saleId)
+                const line = agentSale.items[0]
+                const lineProduct = line ? state.products.find((item) => item.id === line.productId) : undefined
+                return (
+                  <tr key={agentSale.id} className="cursor-default">
+                    <td>{formatDate(agentSale.date)}</td>
+                    <td className="font-medium">{sale?.invoiceNo ?? '—'}</td>
+                    <td>
+                      <div>{lineProduct?.name ?? '—'}</div>
+                      <div className="text-xs text-slate-400">{lineProduct?.sku ?? line?.productId}</div>
+                    </td>
+                    <td className="tabular">{line ? `${formatQty(line.qty)} ${lineProduct?.unit ?? ''}` : '—'}</td>
+                    <td className="tabular">{formatMoney(sale?.total ?? agentSale.customerPaid)}</td>
+                    <td>{paymentLabel(sale?.paymentMethod)}</td>
+                    <td>{sale?.salesperson ?? '—'}</td>
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
+          {!agentSalesForAgent(state.agentSales ?? [], agent.id).length && (
+            <EmptyState title="No agent sales yet" hint={canSale && agent.status === 'active' ? 'Create a sale from this agent stock.' : undefined} />
+          )}
+        </div>
+      </Card>
       {canTransfer && (
         <AgentTransferModal open={transferOpen} agentId={agent.id} onClose={() => setTransferOpen(false)} />
+      )}
+      {canSale && (
+        <AgentSaleModal open={saleOpen} agentId={agent.id} onClose={() => setSaleOpen(false)} />
       )}
       <AgentFormModal
         open={editing}
