@@ -15,7 +15,10 @@ export const WAREHOUSE_MAP_KEYS = [
   'warehouse_map.move',
   'warehouse_map.layout.edit',
   'warehouse_map.location.manage',
+  'warehouse_map.balance.use',
 ] as const
+
+export const BALANCE_USAGE_REASONS = ['Content', 'Sample', 'R&D / Testing', 'Internal Use', 'Waste', 'Other'] as const
 
 export function isFinishedPack(product: Product | undefined) {
   return Boolean(product && product.unit.toLowerCase() === 'packs')
@@ -192,6 +195,26 @@ export function seedWarehouseOccupancy(createdAt: string, placedBy: string): {
     reason: 'Opening warehouse layout',
   }))
   return { slotOccupancies: occupancies, placementLogs: logs }
+}
+
+export function formatProductionDate(iso: string) {
+  if (!iso) return ''
+  const date = new Date(iso)
+  if (Number.isNaN(date.getTime())) return ''
+  const parts = new Intl.DateTimeFormat('en-GB', {
+    timeZone: 'Asia/Kuala_Lumpur',
+    year: '2-digit',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(date)
+  const pick = (type: string) => parts.find((part) => part.type === type)?.value ?? ''
+  return `${pick('day')}/${pick('month')}/${pick('year')}`
+}
+
+export function balanceProductionDate(state: AppState, productionDate: string, productionReference: string) {
+  if (productionDate) return productionDate
+  const session = state.productionSessions.find((row) => row.reference === productionReference)
+  return session?.productionDate || session?.completedAt || ''
 }
 
 export function latestProductionRef(state: AppState, productId: string) {

@@ -1,6 +1,6 @@
-import { useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { MapPin, Search } from 'lucide-react'
-import { Button, Card, ConfirmDialog, Field, Input, Modal, PageHeader, Select } from '@/components/ui'
+import { Button, Card, ConfirmDialog, Field, Input, Modal, PageHeader, Select, Textarea } from '@/components/ui'
 import { hasPermission } from '@/features/settings/permissions'
 import {
   contrastText,
@@ -12,10 +12,13 @@ import {
   slotLabel,
   unplacedPacks,
   latestProductionRef,
+  BALANCE_USAGE_REASONS,
+  balanceProductionDate,
+  formatProductionDate,
 } from '@/features/warehouse/warehouseModel'
 import { useApi, useStore } from '@/store/hooks'
-import { formatQty } from '@/utils/format'
-import type { PlacementLog, Product, SlotOccupancy, StorageLocation, StorageSlot } from '@/types'
+import { formatDateTime, formatQty } from '@/utils/format'
+import type { BalanceUsageLog, BalanceUsageReason, PlacementLog, Product, SlotOccupancy, StorageLocation, StorageSlot } from '@/types'
 
 type PlaceMode = { kind: 'place'; productId: string } | { kind: 'move'; fromSlotId: string } | null
 
@@ -40,6 +43,7 @@ export function WarehouseMapPage() {
   const canMove = hasPermission(state, 'warehouse_map.move')
   const canManage = hasPermission(state, 'warehouse_map.location.manage')
   const canLayout = hasPermission(state, 'warehouse_map.layout.edit')
+  const canUseBalance = hasPermission(state, 'warehouse_map.balance.use')
   const [query, setQuery] = useState('')
   const [highlightId, setHighlightId] = useState('')
   const [mode, setMode] = useState<PlaceMode>(null)
@@ -48,6 +52,7 @@ export function WarehouseMapPage() {
   const [showTemp, setShowTemp] = useState(false)
   const [showRack, setShowRack] = useState(false)
   const [historyOpen, setHistoryOpen] = useState(false)
+  const [balanceHistoryOpen, setBalanceHistoryOpen] = useState(false)
   const [deactivateId, setDeactivateId] = useState('')
   const [dragFromId, setDragFromId] = useState('')
   const [dragOverId, setDragOverId] = useState('')
@@ -97,6 +102,11 @@ export function WarehouseMapPage() {
     if (mode?.kind === 'place') {
       if (occupancy) return
       if (!canPlace) return
+      const location = state.storageLocations.find((row) => row.id === slot.locationId)
+      if (location?.type === 'DISPLAY' || location?.type === 'BALANCE_AREA') {
+        api.toast('Display is sale-ready stock', 'Place finished packs on a rack, then top up Display from the rack.', 'warning')
+        return
+      }
       setSelectedSlotId(slot.id)
       const remaining = unplacedPacks(state, mode.productId, warehouseId)
       setQty(Math.min(20, remaining) || remaining)
@@ -221,6 +231,7 @@ export function WarehouseMapPage() {
         actions={
           <div className="flex flex-wrap gap-2">
             <Button variant="secondary" onClick={() => setHistoryOpen(true)}>Placement history</Button>
+            <Button variant="secondary" onClick={() => setBalanceHistoryOpen(true)}>Balance usage</Button>
             {canManage && <Button variant="secondary" onClick={() => setShowTemp(true)}>+ Temporary location</Button>}
             {canLayout && <Button variant="secondary" onClick={() => setShowRack(true)}>+ Rack</Button>}
           </div>
@@ -270,6 +281,7 @@ export function WarehouseMapPage() {
           )}
           <Card className="p-4">
             <div className="mb-3 text-sm font-semibold">Ready to place</div>
+            <p className="mb-3 text-[11px] text-slate-400">Place onto warehouse racks or temporary storage. Display is sale-ready stock only.</p>
             {unplaced.filter((row) => row.qty > 0).length === 0 ? (
               <p className="text-sm text-slate-500">No finished goods waiting for placement.</p>
             ) : (
@@ -337,8 +349,9 @@ export function WarehouseMapPage() {
           </div>
 
           {displays.map((location) => (
+            <div key={location.id}>
+              <p className="mb-2 text-[11px] text-slate-400">Sale-ready stock. Top up from a rack — not from production putaway.</p>
               <GenericStrip
-                key={location.id}
                 title="Display rack"
                 slots={state.storageSlots.filter((row) => row.locationId === location.id && row.active)}
               occupancies={occupancies}
@@ -349,6 +362,7 @@ export function WarehouseMapPage() {
               onClick={clickSlot}
               dnd={dnd}
             />
+            </div>
           ))}
 
           {overflow.length > 0 && (
@@ -375,7 +389,7 @@ export function WarehouseMapPage() {
           )}
 
           {balances.map((location) => (
-            <BalanceStrip key={location.id} location={location} slots={state.storageSlots.filter((row) => row.locationId === location.id && row.active)} />
+            <BalanceStrip key={location.id} location={location} slots={state.storageSlots.filter((row) => row.locationId === location.id && row.active)} canUse={canUseBalance} />
           ))}
         </div>
       </div>
@@ -422,6 +436,7 @@ export function WarehouseMapPage() {
       <TempLocationModal open={showTemp} onClose={() => setShowTemp(false)} warehouseId={warehouseId} />
       <RackModal open={showRack} onClose={() => setShowRack(false)} warehouseId={warehouseId} />
       <HistoryModal open={historyOpen} onClose={() => setHistoryOpen(false)} logs={state.placementLogs} />
+      <BalanceUsageHistoryModal open={balanceHistoryOpen} onClose={() => setBalanceHistoryOpen(false)} logs={state.balanceUsageLogs ?? []} />
       <ConfirmDialog
         open={Boolean(deactivateId)}
         title="Deactivate location?"
@@ -609,25 +624,34 @@ function GenericStrip({
   )
 }
 
-function BalanceStrip({ location, slots }: { location: StorageLocation; slots: StorageSlot[] }) {
+function BalanceStrip({ location, slots, canUse }: { location: StorageLocation; slots: StorageSlot[]; canUse: boolean }) {
   const state = useStore()
+  const [useId, setUseId] = useState('')
   return (
     <div>
       <div className="mb-2 text-xs font-semibold uppercase tracking-[0.14em] text-slate-400">{location.name}</div>
+      <p className="mb-2 text-[11px] text-slate-400">Leftover production stock in grams. Using balance does not change pack inventory.</p>
       <div className="flex flex-wrap gap-2">
         {slots.sort((a, b) => a.slotNo - b.slotNo).map((slot) => {
           const rows = state.productionBalances.filter(
-            (row) => row.status === 'available' && row.warehouseId === location.warehouseId && row.container === `Box ${slot.slotNo}`,
+            (row) => row.status === 'available' && row.quantity > 0 && row.warehouseId === location.warehouseId && row.container === `Box ${slot.slotNo}`,
           )
           return (
-            <div key={slot.id} className="min-w-[120px] rounded-xl border border-dashed border-slate-300 bg-slate-50 px-3 py-2">
+            <div key={slot.id} className="min-w-[160px] rounded-xl border border-dashed border-slate-300 bg-slate-50 px-3 py-2">
               <div className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">Box {slot.slotNo}</div>
               {rows.length ? rows.map((row) => {
                 const product = state.products.find((item) => item.id === row.productId)
+                const produced = formatProductionDate(balanceProductionDate(state, row.productionDate, row.productionReference))
                 return (
-                  <div key={row.id} className="mt-1 text-xs text-slate-700">
-                    {shortProductName(product?.name ?? 'Balance')}
-                    <div className="tabular text-slate-500">{formatQty(row.quantity)}{row.unit}</div>
+                  <div key={row.id} className="mt-2 border-t border-slate-200/80 pt-2 first:mt-1 first:border-t-0 first:pt-0">
+                    <div className="text-xs font-medium text-slate-800">{shortProductName(product?.name ?? 'Balance')}</div>
+                    <div className="tabular text-sm text-slate-700">{formatQty(row.quantity)}{row.unit}</div>
+                    {produced ? <div className="mt-0.5 text-[11px] text-slate-500">Production Date: {produced}</div> : null}
+                    {canUse && (
+                      <Button size="sm" variant="secondary" className="mt-1.5" onClick={() => setUseId(row.id)}>
+                        Use balance
+                      </Button>
+                    )}
                   </div>
                 )
               }) : <div className="mt-1 text-xs text-slate-400">Empty</div>}
@@ -635,6 +659,7 @@ function BalanceStrip({ location, slots }: { location: StorageLocation; slots: S
           )
         })}
       </div>
+      <UseBalanceModal balanceId={useId} onClose={() => setUseId('')} />
     </div>
   )
 }
@@ -809,6 +834,99 @@ function HistoryModal({ open, onClose, logs }: { open: boolean; onClose: () => v
                 {row.toSlotId ? slotLabel(state, row.toSlotId) : 'Unplaced'}
                 {' · '}{row.performedBy}
               </div>
+            </div>
+          )
+        })}
+      </div>
+    </Modal>
+  )
+}
+
+function UseBalanceModal({ balanceId, onClose }: { balanceId: string; onClose: () => void }) {
+  const state = useStore()
+  const api = useApi()
+  const balance = state.productionBalances.find((row) => row.id === balanceId)
+  const product = balance ? state.products.find((row) => row.id === balance.productId) : undefined
+  const [qty, setQty] = useState(0)
+  const [reason, setReason] = useState<BalanceUsageReason>('Content')
+  const [notes, setNotes] = useState('')
+  useEffect(() => {
+    setQty(0)
+    setReason('Content')
+    setNotes('')
+  }, [balanceId])
+  const produced = balance ? formatProductionDate(balanceProductionDate(state, balance.productionDate, balance.productionReference)) : ''
+  return (
+    <Modal open={Boolean(balance)} onClose={onClose} title="Use balance">
+      {balance && (
+        <div className="space-y-3">
+          <Field label="Product">
+            <div className="text-sm font-medium">{product?.name ?? 'Balance'}</div>
+          </Field>
+          <Field label="Available">
+            <div className="text-sm tabular">{formatQty(balance.quantity)} {balance.unit}</div>
+          </Field>
+          {produced ? (
+            <Field label="Production Date">
+              <div className="text-sm text-slate-600">{produced}</div>
+            </Field>
+          ) : null}
+          {balance.productionReference ? (
+            <Field label="Batch">
+              <div className="text-sm text-slate-600">{balance.productionReference}</div>
+            </Field>
+          ) : null}
+          <Field label="Quantity used">
+            <Input type="number" min={0.01} step="0.01" value={qty || ''} onChange={(e) => setQty(Number(e.target.value))} />
+          </Field>
+          <Field label="Reason">
+            <Select value={reason} onChange={(e) => setReason(e.target.value as BalanceUsageReason)}>
+              {BALANCE_USAGE_REASONS.map((item) => (
+                <option key={item} value={item}>{item}</option>
+              ))}
+            </Select>
+          </Field>
+          <Field label="Notes">
+            <Textarea rows={2} value={notes} onChange={(e) => setNotes(e.target.value)} />
+          </Field>
+          <div className="flex justify-end gap-2">
+            <Button variant="secondary" onClick={onClose}>Cancel</Button>
+            <Button
+              onClick={() => {
+                if (api.useProductionBalance({ balanceId: balance.id, qty, reason, notes })) onClose()
+              }}
+            >
+              Confirm use
+            </Button>
+          </div>
+        </div>
+      )}
+    </Modal>
+  )
+}
+
+function BalanceUsageHistoryModal({ open, onClose, logs }: { open: boolean; onClose: () => void; logs: BalanceUsageLog[] }) {
+  const state = useStore()
+  return (
+    <Modal open={open} onClose={onClose} title="Balance usage" width="max-w-2xl">
+      <div className="max-h-[60vh] space-y-2 overflow-y-auto">
+        {logs.length === 0 && <p className="text-sm text-slate-500">No balance usage yet.</p>}
+        {logs.slice(0, 80).map((row) => {
+          const product = state.products.find((item) => item.id === row.productId)
+          const produced = formatProductionDate(row.productionDate)
+          return (
+            <div key={row.id} className="rounded-lg border border-slate-100 px-3 py-2 text-sm">
+              <div className="font-medium text-slate-800">
+                {shortProductName(product?.name ?? 'Product')} · {formatQty(row.quantity)}{row.unit} · {row.reason}
+              </div>
+              <div className="text-xs text-slate-500">
+                {row.container || row.location}
+                {produced ? ` · Production Date: ${produced}` : ''}
+                {row.productionReference ? ` · ${row.productionReference}` : ''}
+                {' · '}{row.performedBy}
+                {' · '}{formatDateTime(row.performedAt)}
+              </div>
+              {row.notes ? <div className="mt-1 text-xs text-slate-500">{row.notes}</div> : null}
             </div>
           )
         })}
