@@ -1,10 +1,11 @@
-import { useEffect, useState, type FormEvent } from 'react'
-import { Button, Field, Input, Modal, Select, Textarea, Toggle } from '@/components/ui'
+import { useEffect, useState } from 'react'
+import { Button, Field, Input, Modal, Select, Textarea } from '@/components/ui'
 import { useApi, useStore } from '@/store/hooks'
-import type { ExpenseCategory, PaymentMethod, ProductStatus, UserStatus } from '@/types'
+import { ProductForm } from '@/features/products/ProductForm'
 import { paymentLabel } from '@/components/ProductMark'
 import { BomModal } from '@/features/manufacturing/BomPages'
-import { assignableRoles, hasPermission, isOwnerRole } from '@/features/settings/permissions'
+import { assignableRoles, isOwnerRole } from '@/features/settings/permissions'
+import type { ExpenseCategory, PaymentMethod, UserStatus } from '@/types'
 
 const methods: PaymentMethod[] = ['cash', 'bank_transfer', 'duitnow', 'card', 'ewallet']
 const expenseCats: ExpenseCategory[] = ['Rent', 'Utilities', 'Salary', 'Transport', 'Packaging', 'Marketing', 'Maintenance', 'Office', 'Other']
@@ -27,111 +28,19 @@ export function GlobalModals() {
 }
 
 export function ProductModal({ open, onClose }: { open: boolean; onClose: () => void }) {
-  const state = useStore()
   const api = useApi()
-  const canEditAgentPrice = hasPermission(state, 'agent.manage')
-  const [form, setForm] = useState({
-    name: '',
-    sku: '',
-    barcode: '',
-    categoryId: state.categories[0]?.id ?? '',
-    unit: 'KG',
-    costPrice: 0,
-    sellingPrice: 0,
-    wholesalePrice: 0,
-    agentPrice: '' as number | '',
-    reorderLevel: 10,
-    trackBatch: false,
-    trackExpiry: false,
-    status: 'active' as ProductStatus,
-  })
-
-  const submit = (event: FormEvent) => {
-    event.preventDefault()
-    const created = api.createProduct({
-      ...form,
-      agentPrice: form.agentPrice === '' ? undefined : Number(form.agentPrice),
-    })
-    if (created) {
-      setForm({
-        name: '',
-        sku: '',
-        barcode: '',
-        categoryId: state.categories[0]?.id ?? '',
-        unit: 'KG',
-        costPrice: 0,
-        sellingPrice: 0,
-        wholesalePrice: 0,
-        agentPrice: '',
-        reorderLevel: 10,
-        trackBatch: false,
-        trackExpiry: false,
-        status: 'active',
-      })
-      onClose()
-    }
-  }
-
+  if (!open) return null
   return (
     <Modal open={open} onClose={onClose} title="Add Product" width="max-w-2xl">
-      <form className="grid gap-4 sm:grid-cols-2" onSubmit={submit}>
-        <Field label="Product name" className="sm:col-span-2">
-          <Input required value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
-        </Field>
-        <Field label="SKU">
-          <Input required value={form.sku} onChange={(e) => setForm({ ...form, sku: e.target.value })} />
-        </Field>
-        <Field label="Barcode">
-          <Input value={form.barcode} onChange={(e) => setForm({ ...form, barcode: e.target.value })} />
-        </Field>
-        <Field label="Category">
-          <Select value={form.categoryId} onChange={(e) => setForm({ ...form, categoryId: e.target.value })}>
-            {state.categories.map((c) => (
-              <option key={c.id} value={c.id}>{c.name}</option>
-            ))}
-          </Select>
-        </Field>
-        <Field label="Unit">
-          <Input value={form.unit} onChange={(e) => setForm({ ...form, unit: e.target.value })} />
-        </Field>
-        <Field label="Cost price">
-          <Input type="number" step="0.01" value={form.costPrice} onChange={(e) => setForm({ ...form, costPrice: Number(e.target.value) })} />
-        </Field>
-        <Field label="Selling price">
-          <Input type="number" step="0.01" value={form.sellingPrice} onChange={(e) => setForm({ ...form, sellingPrice: Number(e.target.value) })} />
-        </Field>
-        <Field label="Wholesale price">
-          <Input type="number" step="0.01" value={form.wholesalePrice} onChange={(e) => setForm({ ...form, wholesalePrice: Number(e.target.value) })} />
-        </Field>
-        {canEditAgentPrice && (
-          <Field label="Agent price">
-            <Input
-              type="number"
-              min={0}
-              step="0.01"
-              value={form.agentPrice}
-              onChange={(e) => setForm({ ...form, agentPrice: e.target.value === '' ? '' : Number(e.target.value) })}
-            />
-          </Field>
-        )}
-        <Field label="Reorder level">
-          <Input type="number" value={form.reorderLevel} onChange={(e) => setForm({ ...form, reorderLevel: Number(e.target.value) })} />
-        </Field>
-        <div className="flex items-center gap-6 sm:col-span-2">
-          <Toggle checked={form.trackBatch} onChange={(trackBatch) => setForm({ ...form, trackBatch })} label="Track batch" />
-          <Toggle checked={form.trackExpiry} onChange={(trackExpiry) => setForm({ ...form, trackExpiry })} label="Track expiry" />
-        </div>
-        <Field label="Status">
-          <Select value={form.status} onChange={(e) => setForm({ ...form, status: e.target.value as ProductStatus })}>
-            <option value="active">Active</option>
-            <option value="inactive">Inactive</option>
-          </Select>
-        </Field>
-        <div className="flex justify-end gap-2 sm:col-span-2">
-          <Button type="button" variant="secondary" onClick={onClose}>Cancel</Button>
-          <Button type="submit">Save product</Button>
-        </div>
-      </form>
+      <ProductForm
+        submitLabel="Save product"
+        onCancel={onClose}
+        onSubmit={(input) => {
+          const created = api.createProduct(input)
+          if (!created) return false
+          onClose()
+        }}
+      />
     </Modal>
   )
 }

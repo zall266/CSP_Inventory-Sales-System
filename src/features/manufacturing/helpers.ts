@@ -1,4 +1,5 @@
 import type { AppState, Bom, BomItem, ProductionConsumption, ProductionOrder } from '@/types'
+import { bomMaterialCostFromProducts, qtyToBaseUnit, baseUnitCost } from '@/features/products/masterData'
 import { round2 } from '@/utils/format'
 
 export function scaleFactor(bom: Bom, plannedQty: number) {
@@ -25,20 +26,15 @@ export function bomLinesForQty(bom: Bom, plannedQty: number): ProductionConsumpt
 }
 
 export function bomMaterialCost(state: AppState, bom: Bom, qty = bom.outputQty) {
-  const factor = scaleFactor(bom, qty)
-  return round2(
-    bom.items.reduce((sum, item) => {
-      const cost = state.products.find((p) => p.id === item.productId)?.costPrice ?? 0
-      return sum + scaledRequiredQty(item, factor, true) * cost
-    }, 0),
-  )
+  return bomMaterialCostFromProducts(state.products, bom, qty, true)
 }
 
 export function consumptionCost(state: AppState, consumptions: ProductionConsumption[]) {
   return round2(
     consumptions.reduce((sum, line) => {
-      const cost = state.products.find((p) => p.id === line.productId)?.costPrice ?? 0
-      return sum + line.actualQty * cost
+      const product = state.products.find((p) => p.id === line.productId)
+      const qty = product ? qtyToBaseUnit(line.actualQty, line.unit, product) ?? line.actualQty : line.actualQty
+      return sum + qty * baseUnitCost(product ?? { costPrice: 0, unit: line.unit })
     }, 0),
   )
 }

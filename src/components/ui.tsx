@@ -80,11 +80,22 @@ export function Select({ className, ...props }: SelectHTMLAttributes<HTMLSelectE
   )
 }
 
-export function Field({ label, children, className }: { label: string; children: ReactNode; className?: string }) {
+export function Field({
+  label,
+  hint,
+  children,
+  className,
+}: {
+  label: string
+  hint?: string
+  children: ReactNode
+  className?: string
+}) {
   return (
     <label className={cn('block space-y-1.5', className)}>
       <span className="text-xs font-medium text-slate-500">{label}</span>
       {children}
+      {hint ? <span className="block text-[11px] text-slate-400">{hint}</span> : null}
     </label>
   )
 }

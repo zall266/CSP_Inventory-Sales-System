@@ -6,6 +6,8 @@ import { useApi, useLookups, useStore, customerOutstanding, customerSalesTotal, 
 import { formatDate, formatMoney, formatQty } from '@/utils/format'
 import { BomDetail } from '@/features/manufacturing/BomPages'
 import { ProductionOrderDetail } from '@/features/manufacturing/ProductionOrdersPage'
+import { ProductForm } from '@/features/products/ProductForm'
+import { formatUnit, productHasBom } from '@/features/products/masterData'
 import { isCompanyWarehouseId, saleIsAgentSale } from '@/features/agent/agentModel'
 import { hasPermission } from '@/features/settings/permissions'
 
@@ -30,6 +32,7 @@ function ProductDrawer({ id, onClose }: { id: string; onClose: () => void }) {
   const api = useApi()
   const item = product(id)
   const [tab, setTab] = useState('overview')
+  const [editing, setEditing] = useState(false)
   if (!item) return null
   const rows = state.inventory.filter((row) => row.productId === id && isCompanyWarehouseId(state.warehouses, row.warehouseId))
   const qty = rows.reduce((sum, row) => sum + row.qty, 0)
@@ -42,6 +45,7 @@ function ProductDrawer({ id, onClose }: { id: string; onClose: () => void }) {
   const purchases = state.purchases.filter((p) => p.items.some((line) => line.productId === id))
   const batches = state.batches.filter((b) => b.productId === id)
   const productions = state.productionOrders.filter((o) => o.productId === id)
+  const fromBom = productHasBom(state.boms, item.id)
 
   return (
     <Drawer open onClose={onClose} width="max-w-2xl" title={item.name} subtitle={`${item.sku} · ${item.barcode}`}>
@@ -51,11 +55,12 @@ function ProductDrawer({ id, onClose }: { id: string; onClose: () => void }) {
           <div className="flex-1">
             <div className="text-sm text-slate-500">{categoryName(item.categoryId)}</div>
             <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-4">
-              <Mini label="Current stock" value={`${formatQty(qty)} ${item.unit}`} />
+              <Mini label="Current stock" value={`${formatQty(qty)} ${formatUnit(item.unit)}`} />
               <Mini label="Inventory value" value={formatMoney(value)} />
-              <Mini label="Average cost" value={`${formatMoney(item.costPrice)} / ${item.unit}`} />
-              <Mini label="Selling price" value={`${formatMoney(item.sellingPrice)} / ${item.unit}`} />
-              <Mini label="Agent price" value={item.agentPrice === undefined || item.agentPrice === null ? 'Not configured' : `${formatMoney(item.agentPrice)} / ${item.unit}`} />
+              <Mini label="Cost price" value={`${formatMoney(item.costPrice)} / ${formatUnit(item.unit)}`} />
+              <Mini label="Selling price" value={`${formatMoney(item.sellingPrice)} / ${formatUnit(item.unit)}`} />
+              <Mini label="Agent price" value={item.agentPrice === undefined || item.agentPrice === null ? 'Not configured' : `${formatMoney(item.agentPrice)} / ${formatUnit(item.unit)}`} />
+              <Mini label="Cost source" value={fromBom ? 'BOM' : 'Manual'} />
             </div>
           </div>
         </div>
@@ -87,7 +92,7 @@ function ProductDrawer({ id, onClose }: { id: string; onClose: () => void }) {
                 {rows.map((row) => (
                   <tr key={row.warehouseId} className="cursor-default">
                     <td>{warehouseName(row.warehouseId)}</td>
-                    <td className="tabular">{formatQty(row.qty)} {item.unit}</td>
+                    <td className="tabular">{formatQty(row.qty)} {formatUnit(item.unit)}</td>
                     <td className="tabular">{formatMoney(row.qty * item.costPrice)}</td>
                     <td>
                       <StatusBadge status={row.qty <= 0 ? 'out_of_stock' : row.qty <= item.reorderLevel ? 'low_stock' : 'in_stock'} />
@@ -98,6 +103,33 @@ function ProductDrawer({ id, onClose }: { id: string; onClose: () => void }) {
             </table>
             </div>
             <AgentPriceEditor productId={item.id} agentPrice={item.agentPrice} />
+            <div className="rounded-xl border border-slate-100 p-4">
+              <div className="mb-3 flex items-center justify-between gap-3">
+                <div className="text-sm font-semibold">{editing ? 'Edit product' : 'Product details'}</div>
+                {!editing && (
+                  <Button type="button" size="sm" variant="secondary" onClick={() => setEditing(true)}>Edit</Button>
+                )}
+              </div>
+              {editing ? (
+                <ProductForm
+                  product={item}
+                  submitLabel="Save changes"
+                  onCancel={() => setEditing(false)}
+                  onSubmit={(input) => {
+                    const ok = api.updateProduct(item.id, input)
+                    if (!ok) return false
+                    setEditing(false)
+                  }}
+                />
+              ) : (
+                <div className="grid gap-2 text-sm sm:grid-cols-2">
+                  <div><span className="text-slate-400">SKU</span><div className="font-medium">{item.sku}</div></div>
+                  <div><span className="text-slate-400">Base unit</span><div className="font-medium">{formatUnit(item.unit)}</div></div>
+                  <div><span className="text-slate-400">Purchase unit</span><div className="font-medium">{formatUnit(item.purchaseUnit ?? item.unit)}</div></div>
+                  <div><span className="text-slate-400">Conversion</span><div className="font-medium">1 {formatUnit(item.purchaseUnit ?? item.unit)} = {item.purchaseConversionQty ?? 1} {formatUnit(item.unit)}</div></div>
+                </div>
+              )}
+            </div>
           </div>
         )}
         {tab === 'card' && (
