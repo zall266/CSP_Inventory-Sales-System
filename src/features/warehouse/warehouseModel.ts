@@ -217,6 +217,24 @@ export function balanceProductionDate(state: AppState, productionDate: string, p
   return session?.productionDate || session?.completedAt || ''
 }
 
+export function occupancyProductionIso(state: AppState, occupancy: Pick<SlotOccupancy, 'batchRef' | 'productionSessionRef'>) {
+  const refs = [occupancy.productionSessionRef, occupancy.batchRef].filter(Boolean)
+  for (const ref of refs) {
+    const session = state.productionSessions.find((row) => row.reference === ref)
+    if (session?.productionDate) return session.productionDate
+  }
+  for (const ref of refs) {
+    const stamped = ref.match(/PROD-(\d{4})(\d{2})(\d{2})/)
+    if (stamped) return `${stamped[1]}-${stamped[2]}-${stamped[3]}`
+  }
+  return ''
+}
+
+export function occupancyProductionLabel(state: AppState, occupancy: Pick<SlotOccupancy, 'batchRef' | 'productionSessionRef'>) {
+  const iso = occupancyProductionIso(state, occupancy)
+  return iso ? formatProductionDate(iso) : '—'
+}
+
 export function latestProductionRef(state: AppState, productId: string) {
   if (!productId) return ''
   const sessions = state.productionSessions
