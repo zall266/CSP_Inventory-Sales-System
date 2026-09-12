@@ -582,48 +582,24 @@ function PalletStockPanel({
                     )}
                   </div>
                 </div>
-                <div className="min-w-0 flex-1">
-                  {card.rows.length === 0 ? (
-                    <p className="text-sm text-slate-400">Empty</p>
-                  ) : (
-                    <div className="space-y-2">
-                      {card.rows.map((row) => {
-                        const produced = occupancyProductionLabel(state, row.occupancy)
-                        const color = row.product?.accent || '#e2e8f0'
-                        return (
-                          <button
-                            key={row.occupancy.id}
-                            type="button"
-                            draggable={dnd.enabled}
-                            onDragStart={(event) => {
-                              if (!dnd.enabled) {
-                                event.preventDefault()
-                                return
-                              }
-                              event.dataTransfer.effectAllowed = 'move'
-                              event.dataTransfer.setData('text/plain', row.slot.id)
-                              dnd.markDrag()
-                              dnd.setFrom(row.slot.id)
-                            }}
-                            onDragEnd={() => dnd.end()}
-                            onClick={() => {
-                              if (dnd.consumedClick()) return
-                              onClickSlot(row.slot, row.occupancy)
-                            }}
-                            className={`block w-full max-w-xs rounded-xl border px-3 py-2 text-left ${
-                              highlightedSlotIds.has(row.slot.id) ? 'ring-2 ring-indigo-500' : ''
-                            } ${selectedSlotId === row.slot.id ? 'ring-2 ring-emerald-500' : ''}`}
-                            style={{ background: color, color: contrastText(color), borderColor: color }}
-                          >
-                            <div className="text-sm font-semibold uppercase tracking-wide">{shortProductName(row.product?.name ?? 'Product')}</div>
-                            <div className="mt-0.5 tabular text-sm font-medium">{formatQty(row.occupancy.quantityPacks)} PACK</div>
-                            <div className="text-[11px] opacity-80">{produced}</div>
-                            <div className="mt-1 text-[10px] font-semibold uppercase tracking-wide opacity-80">1 carton</div>
-                          </button>
-                        )
-                      })}
-                    </div>
-                  )}
+                <div className="flex min-w-0 flex-col gap-1.5">
+                  {card.slots.map((slot) => {
+                    const occupancy = occupancies[slot.id]
+                    const highlighted = highlightedSlotIds.has(slot.id)
+                    return (
+                      <SlotCell
+                        key={slot.id}
+                        slot={slot}
+                        occupancy={occupancy}
+                        product={occupancy ? productById(occupancy.productId) : undefined}
+                        highlighted={highlighted}
+                        selected={selectedSlotId === slot.id}
+                        dimmed={Boolean(q && occupancy && !highlighted)}
+                        onClick={() => onClickSlot(slot, occupancy)}
+                        dnd={dnd}
+                      />
+                    )
+                  })}
                 </div>
               </div>
             </div>
