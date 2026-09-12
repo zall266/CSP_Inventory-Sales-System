@@ -3,7 +3,7 @@ import { AppLayout } from '@/components/layout/AppLayout'
 import { DashboardPage } from '@/features/dashboard/DashboardPage'
 import { PosPage } from '@/features/pos/PosPage'
 import { SalesPage } from '@/features/sales/SalesPage'
-import { CategoriesPage, ProductsPage } from '@/features/products/ProductsPage'
+import { CategoriesPage, ProductsPage, RawMaterialsPage } from '@/features/products/ProductsPage'
 import { InventoryPage } from '@/features/inventory/InventoryPage'
 import { WarehouseMapPage } from '@/features/warehouse/WarehouseMapPage'
 import { StockAdjustmentPage, StockCountPage, StockMovementsPage, StockTransferPage } from '@/features/inventory/StockPages'
@@ -64,6 +64,7 @@ export default function App() {
           <Route path="/stock-transfer" element={<StockTransferPage />} />
           <Route path="/stock-count" element={<StockCountPage />} />
           <Route path="/products" element={<ProductsPage />} />
+          <Route path="/products/raw-materials" element={<RawMaterialsPage />} />
           <Route path="/categories" element={<CategoriesPage />} />
           <Route path="/manufacturing" element={<ManufacturingDashboardPage />} />
           <Route path="/manufacturing/today" element={<TodaysProductionPage />} />

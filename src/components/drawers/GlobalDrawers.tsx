@@ -1,12 +1,14 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Drawer, StatusBadge, Tabs, Button, Badge } from '@/components/ui'
+import { Drawer, StatusBadge, Tabs, Button, Badge, Field, Input } from '@/components/ui'
 import { ProductMark, movementLabel, paymentLabel } from '@/components/ProductMark'
 import { useApi, useLookups, useStore, customerOutstanding, customerSalesTotal, supplierOutstanding, supplierPurchaseTotal } from '@/store/hooks'
 import { formatDate, formatMoney, formatQty } from '@/utils/format'
 import { BomDetail } from '@/features/manufacturing/BomPages'
 import { ProductionOrderDetail } from '@/features/manufacturing/ProductionOrdersPage'
-import { isCompanyWarehouseId } from '@/features/agent/agentModel'
+import { ProductForm } from '@/features/products/ProductForm'
+import { formatUnit, productHasBom } from '@/features/products/masterData'
+import { isCompanyWarehouseId, saleIsAgentSale } from '@/features/agent/agentModel'
 import { hasPermission } from '@/features/settings/permissions'
 
 export function GlobalDrawers() {
@@ -30,6 +32,7 @@ function ProductDrawer({ id, onClose }: { id: string; onClose: () => void }) {
   const api = useApi()
   const item = product(id)
   const [tab, setTab] = useState('overview')
+  const [editing, setEditing] = useState(false)
   if (!item) return null
   const rows = state.inventory.filter((row) => row.productId === id && isCompanyWarehouseId(state.warehouses, row.warehouseId))
   const qty = rows.reduce((sum, row) => sum + row.qty, 0)
@@ -42,6 +45,7 @@ function ProductDrawer({ id, onClose }: { id: string; onClose: () => void }) {
   const purchases = state.purchases.filter((p) => p.items.some((line) => line.productId === id))
   const batches = state.batches.filter((b) => b.productId === id)
   const productions = state.productionOrders.filter((o) => o.productId === id)
+  const fromBom = productHasBom(state.boms, item.id)
 
   return (
     <Drawer open onClose={onClose} width="max-w-2xl" title={item.name} subtitle={`${item.sku} · ${item.barcode}`}>
@@ -51,10 +55,12 @@ function ProductDrawer({ id, onClose }: { id: string; onClose: () => void }) {
           <div className="flex-1">
             <div className="text-sm text-slate-500">{categoryName(item.categoryId)}</div>
             <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-4">
-              <Mini label="Current stock" value={`${formatQty(qty)} ${item.unit}`} />
+              <Mini label="Current stock" value={`${formatQty(qty)} ${formatUnit(item.unit)}`} />
               <Mini label="Inventory value" value={formatMoney(value)} />
-              <Mini label="Average cost" value={`${formatMoney(item.costPrice)} / ${item.unit}`} />
-              <Mini label="Selling price" value={`${formatMoney(item.sellingPrice)} / ${item.unit}`} />
+              <Mini label="Cost price" value={`${formatMoney(item.costPrice)} / ${formatUnit(item.unit)}`} />
+              <Mini label="Selling price" value={`${formatMoney(item.sellingPrice)} / ${formatUnit(item.unit)}`} />
+              <Mini label="Agent price" value={item.agentPrice === undefined || item.agentPrice === null ? 'Not configured' : `${formatMoney(item.agentPrice)} / ${formatUnit(item.unit)}`} />
+              <Mini label="Cost source" value={fromBom ? 'BOM' : 'Manual'} />
             </div>
           </div>
         </div>
@@ -71,7 +77,8 @@ function ProductDrawer({ id, onClose }: { id: string; onClose: () => void }) {
           ]}
         />
         {tab === 'overview' && (
-          <div className="sf-table-wrap rounded-xl border border-slate-100">
+          <div className="space-y-4">
+            <div className="sf-table-wrap rounded-xl border border-slate-100">
             <table>
               <thead>
                 <tr>
@@ -85,7 +92,7 @@ function ProductDrawer({ id, onClose }: { id: string; onClose: () => void }) {
                 {rows.map((row) => (
                   <tr key={row.warehouseId} className="cursor-default">
                     <td>{warehouseName(row.warehouseId)}</td>
-                    <td className="tabular">{formatQty(row.qty)} {item.unit}</td>
+                    <td className="tabular">{formatQty(row.qty)} {formatUnit(item.unit)}</td>
                     <td className="tabular">{formatMoney(row.qty * item.costPrice)}</td>
                     <td>
                       <StatusBadge status={row.qty <= 0 ? 'out_of_stock' : row.qty <= item.reorderLevel ? 'low_stock' : 'in_stock'} />
@@ -94,6 +101,35 @@ function ProductDrawer({ id, onClose }: { id: string; onClose: () => void }) {
                 ))}
               </tbody>
             </table>
+            </div>
+            <AgentPriceEditor productId={item.id} agentPrice={item.agentPrice} />
+            <div className="rounded-xl border border-slate-100 p-4">
+              <div className="mb-3 flex items-center justify-between gap-3">
+                <div className="text-sm font-semibold">{editing ? 'Edit product' : 'Product details'}</div>
+                {!editing && (
+                  <Button type="button" size="sm" variant="secondary" onClick={() => setEditing(true)}>Edit</Button>
+                )}
+              </div>
+              {editing ? (
+                <ProductForm
+                  product={item}
+                  submitLabel="Save changes"
+                  onCancel={() => setEditing(false)}
+                  onSubmit={(input) => {
+                    const ok = api.updateProduct(item.id, input)
+                    if (!ok) return false
+                    setEditing(false)
+                  }}
+                />
+              ) : (
+                <div className="grid gap-2 text-sm sm:grid-cols-2">
+                  <div><span className="text-slate-400">SKU</span><div className="font-medium">{item.sku}</div></div>
+                  <div><span className="text-slate-400">Base unit</span><div className="font-medium">{formatUnit(item.unit)}</div></div>
+                  <div><span className="text-slate-400">Purchase unit</span><div className="font-medium">{formatUnit(item.purchaseUnit ?? item.unit)}</div></div>
+                  <div><span className="text-slate-400">Conversion</span><div className="font-medium">1 {formatUnit(item.purchaseUnit ?? item.unit)} = {item.purchaseConversionQty ?? 1} {formatUnit(item.unit)}</div></div>
+                </div>
+              )}
+            </div>
           </div>
         )}
         {tab === 'card' && (
@@ -197,7 +233,40 @@ function Mini({ label, value }: { label: string; value: string }) {
   return (
     <div className="rounded-xl bg-slate-50 p-3">
       <div className="text-[11px] uppercase tracking-wide text-slate-400">{label}</div>
-      <div className="mt-1 text-sm font-semibold text-slate-900">{value}</div>
+      <div className="mt-1 font-medium">{value}</div>
+    </div>
+  )
+}
+
+function AgentPriceEditor({ productId, agentPrice }: { productId: string; agentPrice?: number }) {
+  const state = useStore()
+  const api = useApi()
+  const canEdit = hasPermission(state, 'agent.manage')
+  const [draft, setDraft] = useState(agentPrice === undefined || agentPrice === null ? '' : String(agentPrice))
+  if (!canEdit) return null
+  const save = () => {
+    const next = draft === '' ? undefined : Number(draft)
+    if (next !== undefined && (!Number.isFinite(next) || next < 0)) {
+      api.toast('Agent Price cannot be negative.', undefined, 'warning')
+      return
+    }
+    api.updateProduct(productId, { agentPrice: next })
+  }
+  return (
+    <div className="rounded-xl border border-slate-100 p-4">
+      <Field label="Agent price">
+        <div className="flex gap-2">
+          <Input
+            type="number"
+            min={0}
+            step="0.01"
+            value={draft}
+            onChange={(event) => setDraft(event.target.value)}
+            placeholder="Required for agent sales"
+          />
+          <Button type="button" variant="secondary" onClick={save}>Save</Button>
+        </div>
+      </Field>
     </div>
   )
 }
@@ -238,6 +307,7 @@ function SaleDrawer({ id, onClose }: { id: string; onClose: () => void }) {
   const sale = state.sales.find((item) => item.id === id)
   if (!sale) return null
   const customer = state.customers.find((c) => c.id === sale.customerId)
+  const agentSale = saleIsAgentSale(state, sale)
 
   return (
     <Drawer open onClose={onClose} width="max-w-3xl">
@@ -288,6 +358,7 @@ function SaleDrawer({ id, onClose }: { id: string; onClose: () => void }) {
           </div>
           <div className="ml-auto mt-5 w-full max-w-xs space-y-2 text-sm">
             <Row label="Subtotal" value={formatMoney(sale.subtotal)} />
+            {sale.shipping > 0 && <Row label="Delivery" value={formatMoney(sale.shipping)} />}
             <Row label="Discount" value={formatMoney(sale.discount)} />
             <Row label="Tax" value={formatMoney(sale.tax)} />
             <Row label="Total" value={formatMoney(sale.total)} strong />
@@ -301,8 +372,12 @@ function SaleDrawer({ id, onClose }: { id: string; onClose: () => void }) {
           {hasPermission(state, 'sales.invoice.print') || hasPermission(state, 'sales.invoice.view') || hasPermission(state, 'sales.view') ? (
             <Button className="w-full" variant="secondary" onClick={() => { onClose(); navigate(`/print/invoice/${sale.id}`) }}>Preview / Print</Button>
           ) : null}
-          <Button className="w-full" variant="secondary" onClick={() => { onClose(); navigate(`/sales-returns?invoice=${sale.invoiceNo}`) }}>Return</Button>
-          <Button className="w-full" variant="danger" disabled={sale.status === 'voided'} onClick={() => { api.voidSale(sale.id); onClose() }}>Void</Button>
+          {!agentSale && (
+            <Button className="w-full" variant="secondary" onClick={() => { onClose(); navigate(`/sales-returns?invoice=${sale.invoiceNo}`) }}>Return</Button>
+          )}
+          {!agentSale && (
+            <Button className="w-full" variant="danger" disabled={sale.status === 'voided'} onClick={() => { api.voidSale(sale.id); onClose() }}>Void</Button>
+          )}
           {sale.balance > 0 && sale.status !== 'voided' && (
             <Button className="w-full" onClick={() => api.openPaymentForSale(sale.id)}>Record Payment</Button>
           )}

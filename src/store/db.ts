@@ -11,7 +11,8 @@ import {
   unplacedPacks,
   WAREHOUSE_MAP_KEYS,
 } from '@/features/warehouse/warehouseModel'
-import { AGENT_PERMISSION_KEYS, agentLinkedWarehouseName, companyWarehouses, isAgentWarehouseId, isCompanyWarehouseId, nextAgentWarehouseId } from '@/features/agent/agentModel'
+import { AGENT_PERMISSION_KEYS, agentBankDetailsComplete, agentLinkedWarehouseName, calcAgentSaleEarnings, canUserRequestWithdrawalForAgent, companyWarehouses, configuredAgentPrice, hasSaleEarningLedger, hasWithdrawalCancelledLedger, hasWithdrawalPaidLedger, hasWithdrawalPendingLedger, isAgentWarehouseId, isCompanyWarehouseId, linkedAgentForUser, nextAgentWarehouseId, parseAgentPriceWrite, parseWithdrawalAmount, parseWithdrawalPaymentDate, parseWithdrawalPaymentReference, parseWithdrawalReceipt, SALE_EARNING_KIND, saleIsAgentSale, snapshotAgentBankDetails, summarizeAgentEarnings, WITHDRAWAL_CANCELLED_KIND, WITHDRAWAL_PAID_KIND, WITHDRAWAL_PENDING_KIND } from '@/features/agent/agentModel'
+import { applyBomCosts, hydrateProducts, normalizeUnit, parseNonNegativeMoney, productHasBom, productIsUsed, purchaseQtyToBaseQty, resolveProductSku, skuIsUnique, validatePurchaseConversion } from '@/features/products/masterData'
 import { bomLinesForQty, consumptionCost, hasShortage, materialAvailability } from '@/features/manufacturing/helpers'
 import { buildSessionPlan, canEditSession, currentUser, mergePicking } from '@/features/manufacturing/sessionPlan'
 import {
@@ -43,8 +44,11 @@ import type {
   AppState,
   AdjustmentType,
   Agent,
+  AgentEarningLedger,
   AgentInput,
+  AgentSale,
   AgentStatus,
+  AgentWithdrawal,
   BomInput,
   DeliveryOrder,
   DeliveryOrderInput,
@@ -60,6 +64,7 @@ import type {
   PaymentMethod,
   PermissionKey,
   ProductInput,
+  ProductStatus,
   ProductionInput,
   ProductionWastage,
   PurchaseInput,
@@ -71,6 +76,7 @@ import type {
   Role,
   RolePermissions,
   RoleStatus,
+  Sale,
   SaleInput,
   SaleStatus,
   Settings,
@@ -85,7 +91,7 @@ import type {
   WastageKind,
   BalanceUsageReason,
 } from '@/types'
-import { nextDatedDocNo, nextDocNo, PROTOTYPE_TODAY, formatQty, round2, stockStatus, uid } from '@/utils/format'
+import { nextDatedDocNo, nextDocNo, PROTOTYPE_TODAY, formatMoney, formatQty, round2, stockStatus, uid } from '@/utils/format'
 
 const STORAGE_KEY = 'stockflow-prototype-v8'
 
@@ -161,10 +167,13 @@ function hydrateData(data: AppData): AppData {
       ...warehouse,
       kind: warehouse.kind === 'agent' ? 'agent' : 'company',
     })),
-    products: (data.products ?? []).map((product) => ({
-      ...product,
-      agentPrice: product.agentPrice,
-    })),
+    products: hydrateProducts(
+      (data.products ?? []).map((product) => ({
+        ...product,
+        agentPrice: product.agentPrice,
+      })),
+      data.boms ?? [],
+    ),
     sales: (data.sales ?? []).map((sale) => ({
       ...sale,
       shipping: sale.shipping ?? 0,
@@ -172,7 +181,17 @@ function hydrateData(data: AppData): AppData {
     agents: data.agents ?? [],
     agentSales: data.agentSales ?? [],
     agentEarningLedgers: data.agentEarningLedgers ?? [],
-    agentWithdrawals: data.agentWithdrawals ?? [],
+    agentWithdrawals: (data.agentWithdrawals ?? []).map((row) => ({
+      ...row,
+      bankName: row.bankName ?? '',
+      accountHolder: row.accountHolder ?? '',
+      accountNumber: row.accountNumber ?? '',
+      requestedBy: row.requestedBy ?? '',
+      paymentReference: row.paymentReference,
+      paymentDate: row.paymentDate,
+      receiptUrl: row.receiptUrl,
+      receiptName: row.receiptName,
+    })),
     quotations: data.quotations ?? [],
     deliveryOrders: data.deliveryOrders ?? [],
     documentAuditLogs: data.documentAuditLogs ?? [],
@@ -427,6 +446,523 @@ function maybeStockAlerts(productId: string, warehouseId: string, qty: number) {
   }
 }
 
+let agentSaleInFlight = false
+let lastAgentSale: { key: string; sale: Sale; at: number } | null = null
+
+function agentSaleRequestKey(input: {
+  agentId: string
+  productId: string
+  qty: number
+  sellingPrice: number
+  delivery?: number
+  customerId?: string
+  paymentMethod?: PaymentMethod
+  notes?: string
+  requestId?: string
+}) {
+  return input.requestId?.trim() || ''
+}
+
+function withSaleEarningLedger(ledgers: AgentEarningLedger[], row: AgentEarningLedger) {
+  const agentSaleId = row.relatedAgentSaleId
+  if (!agentSaleId || hasSaleEarningLedger(ledgers, agentSaleId)) return ledgers
+  return [row, ...ledgers]
+}
+
+function postAgentSale(input: {
+  agentId: string
+  productId: string
+  qty: number
+  sellingPrice: number
+  delivery?: number
+  customerId?: string
+  paymentMethod?: PaymentMethod
+  notes?: string
+  requestId?: string
+}) {
+  const requestKey = agentSaleRequestKey(input)
+  if (requestKey && lastAgentSale && lastAgentSale.key === requestKey) {
+    return lastAgentSale.sale
+  }
+  if (!hasPermission(state, 'agent.sale.create')) {
+    toast('Permission denied', 'You cannot create an agent sale.', 'danger')
+    return null
+  }
+  const agent = (state.agents ?? []).find((item) => item.id === input.agentId)
+  if (!agent) {
+    toast('Unable to complete sale. Please try again.', undefined, 'danger')
+    return null
+  }
+  if (agent.status !== 'active') {
+    toast('This agent is inactive and cannot create a sale.', undefined, 'warning')
+    return null
+  }
+  if (!isAgentWarehouseId(state.warehouses, agent.warehouseId)) {
+    toast('Unable to complete sale. Please try again.', undefined, 'danger')
+    return null
+  }
+  if (!input.productId) {
+    toast('Please select a product.', undefined, 'warning')
+    return null
+  }
+  const product = productById(input.productId)
+  if (!product) {
+    toast('Please select a product.', undefined, 'warning')
+    return null
+  }
+  const rawAgentPrice = product.agentPrice
+  if (rawAgentPrice !== undefined && rawAgentPrice !== null && Number.isFinite(rawAgentPrice) && rawAgentPrice < 0) {
+    toast('Agent Price cannot be negative.', undefined, 'warning')
+    return null
+  }
+  const agentPrice = configuredAgentPrice(product)
+  if (agentPrice === null) {
+    toast('Agent Price must be configured', 'Set Agent Price on the product before creating an agent sale.', 'warning')
+    return null
+  }
+  const qty = Number(input.qty)
+  if (!Number.isFinite(qty) || !(qty > 0)) {
+    toast('Quantity must be greater than 0.', undefined, 'warning')
+    return null
+  }
+  const sellingPrice = round2(Number(input.sellingPrice))
+  if (!Number.isFinite(sellingPrice) || sellingPrice < 0) {
+    toast('Unable to complete sale. Please try again.', undefined, 'warning')
+    return null
+  }
+  if (sellingPrice < agentPrice) {
+    toast('Selling price cannot be lower than Agent Price.', undefined, 'warning')
+    return null
+  }
+  const deliveryRaw = Number(input.delivery ?? 0)
+  if (!Number.isFinite(deliveryRaw) || deliveryRaw < 0) {
+    toast('Unable to complete sale. Please try again.', undefined, 'warning')
+    return null
+  }
+  const delivery = round2(deliveryRaw)
+  const available = getQty(product.id, agent.warehouseId)
+  if (qty > available) {
+    toast('Insufficient stock.', `Available: ${formatQty(available)}.`, 'danger')
+    return null
+  }
+  const customerId = input.customerId?.trim() || state.settings.defaultCustomerId
+  if (!state.customers.some((customer) => customer.id === customerId)) {
+    toast('Unable to complete sale. Please try again.', undefined, 'warning')
+    return null
+  }
+  const paymentMethod = input.paymentMethod ?? 'cash'
+  const earnings = calcAgentSaleEarnings({
+    agentPrice,
+    sellingPrice,
+    qty,
+    delivery,
+  })
+  const productSubtotal = round2(sellingPrice * qty)
+  const customerTotal = earnings.customerPays
+  const date = nowIso()
+  const invoiceNo = nextDocNo(
+    state.sales.filter((sale) => sale.invoiceNo.startsWith('SAL-')).map((sale) => sale.invoiceNo),
+    'SAL-',
+  )
+  const lines = makeLines([{ productId: product.id, qty, price: sellingPrice }])
+  const sale = {
+    id: uid('sal'),
+    invoiceNo,
+    date,
+    customerId,
+    warehouseId: agent.warehouseId,
+    salesperson: currentUser(state).name,
+    items: lines,
+    subtotal: productSubtotal,
+    discount: 0,
+    tax: 0,
+    shipping: delivery,
+    total: customerTotal,
+    paid: customerTotal,
+    balance: 0,
+    status: 'paid' as SaleStatus,
+    paymentMethod,
+    notes: input.notes?.trim() || undefined,
+  }
+  const applied = addMovement(state.stockMovements, state.inventory, {
+    date,
+    reference: invoiceNo,
+    productId: product.id,
+    warehouseId: agent.warehouseId,
+    type: 'sale',
+    stockIn: 0,
+    stockOut: qty,
+    notes: `Agent sale · ${agent.name}`,
+  })
+  const agentSale: AgentSale = {
+    id: uid('ags'),
+    saleId: sale.id,
+    agentId: agent.id,
+    warehouseId: agent.warehouseId,
+    date,
+    customerId,
+    items: [
+      {
+        productId: product.id,
+        qty,
+        agentPrice,
+        sellingPrice,
+        productMarkup: earnings.productMarkup,
+      },
+    ],
+    cspAmount: earnings.cspAmount,
+    productMarkup: earnings.productMarkup,
+    deliveryEarnings: earnings.deliveryEarnings,
+    totalEarnings: earnings.totalEarnings,
+    customerPaid: earnings.customerPays,
+    notes: sale.notes,
+    createdAt: date,
+  }
+  const ledger: AgentEarningLedger = {
+    id: uid('ael'),
+    agentId: agent.id,
+    date,
+    kind: SALE_EARNING_KIND,
+    amount: earnings.totalEarnings,
+    availableDelta: earnings.totalEarnings,
+    pendingDelta: 0,
+    paidDelta: 0,
+    relatedSaleId: sale.id,
+    relatedAgentSaleId: agentSale.id,
+    notes: `Sale earning · ${invoiceNo}`,
+    createdAt: date,
+  }
+  const payments = [...state.payments]
+  if (customerTotal > 0) {
+    payments.unshift({
+      id: uid('pay'),
+      paymentNo: nextDocNo(state.payments.map((payment) => payment.paymentNo), 'PAY-'),
+      date,
+      partyType: 'customer',
+      partyId: customerId,
+      invoiceId: sale.id,
+      invoiceNo,
+      method: paymentMethod,
+      amount: customerTotal,
+      status: 'completed',
+    })
+  }
+  const audit = makeDocAudit({
+    action: 'agent_sale_created',
+    documentType: 'agent_sale',
+    documentId: sale.id,
+    documentNo: invoiceNo,
+    field: 'CREATE_AGENT_SALE',
+    newValue: `${agent.name} · ${product.name} · ${formatQty(qty)} ${product.unit}`,
+  })
+  state = {
+    ...state,
+    sales: [sale, ...state.sales],
+    agentSales: [agentSale, ...(state.agentSales ?? [])],
+    inventory: applied.inventory,
+    stockMovements: applied.movements,
+    payments,
+    agentEarningLedgers: withSaleEarningLedger(state.agentEarningLedgers ?? [], ledger),
+    documentAuditLogs: pushDocAudit(audit),
+  }
+  emit()
+  lastAgentSale = { key: requestKey, sale, at: Date.now() }
+  toast('Sale completed', invoiceNo)
+  return sale
+}
+
+let agentWithdrawalInFlight = false
+let lastAgentWithdrawal: { key: string; withdrawal: AgentWithdrawal; at: number } | null = null
+
+function agentWithdrawalRequestKey(input: { requestId?: string }) {
+  return input.requestId?.trim() || ''
+}
+
+function withWithdrawalPendingLedger(ledgers: AgentEarningLedger[], row: AgentEarningLedger) {
+  const withdrawalId = row.relatedWithdrawalId
+  if (!withdrawalId || hasWithdrawalPendingLedger(ledgers, withdrawalId)) return ledgers
+  return [row, ...ledgers]
+}
+
+function postAgentWithdrawal(input: {
+  agentId: string
+  amount: number
+  notes?: string
+  requestId?: string
+}) {
+  const requestKey = agentWithdrawalRequestKey(input)
+  if (requestKey && lastAgentWithdrawal && lastAgentWithdrawal.key === requestKey) {
+    return lastAgentWithdrawal.withdrawal
+  }
+  if (!hasPermission(state, 'agent.withdrawal.create')) {
+    toast('Permission denied', 'You cannot request an agent withdrawal.', 'danger')
+    return null
+  }
+  const agent = (state.agents ?? []).find((item) => item.id === input.agentId)
+  if (!agent) {
+    toast('Agent not found', undefined, 'warning')
+    return null
+  }
+  const actor = currentUser(state)
+  if (!canUserRequestWithdrawalForAgent(state.agents ?? [], actor.id, agent.id)) {
+    toast('You can only request a withdrawal for your own agent.', undefined, 'danger')
+    return null
+  }
+  if (agent.status !== 'active') {
+    toast('This agent is inactive and cannot request a withdrawal.', undefined, 'warning')
+    return null
+  }
+  if (!agentBankDetailsComplete(agent)) {
+    toast(
+      'Complete bank/payment information first',
+      'Add bank name, account holder, and account number on the agent profile before requesting a withdrawal.',
+      'warning',
+    )
+    return null
+  }
+  const parsed = parseWithdrawalAmount(input.amount)
+  if (!parsed.ok) {
+    toast('Withdrawal amount must be greater than 0.', undefined, 'warning')
+    return null
+  }
+  const amount = parsed.value
+  const earnings = summarizeAgentEarnings(state.agentEarningLedgers ?? [], agent.id)
+  if (amount > earnings.available) {
+    toast('Withdrawal amount cannot exceed available earnings.', `Available: ${formatMoney(earnings.available)}.`, 'danger')
+    return null
+  }
+  const date = nowIso()
+  const bank = snapshotAgentBankDetails(agent)
+  const withdrawal: AgentWithdrawal = {
+    id: uid('agw'),
+    agentId: agent.id,
+    amount,
+    status: 'requested',
+    bankName: bank.bankName,
+    accountHolder: bank.accountHolder,
+    accountNumber: bank.accountNumber,
+    requestedAt: date,
+    requestedBy: actor.id,
+    notes: input.notes?.trim() || undefined,
+    createdAt: date,
+    updatedAt: date,
+  }
+  const ledger: AgentEarningLedger = {
+    id: uid('ael'),
+    agentId: agent.id,
+    date,
+    kind: WITHDRAWAL_PENDING_KIND,
+    amount,
+    availableDelta: round2(-amount),
+    pendingDelta: amount,
+    paidDelta: 0,
+    relatedWithdrawalId: withdrawal.id,
+    notes: `Withdrawal pending · ${formatMoney(amount)}`,
+    createdAt: date,
+  }
+  state = {
+    ...state,
+    agentWithdrawals: [withdrawal, ...(state.agentWithdrawals ?? [])],
+    agentEarningLedgers: withWithdrawalPendingLedger(state.agentEarningLedgers ?? [], ledger),
+  }
+  emit()
+  lastAgentWithdrawal = { key: requestKey, withdrawal, at: Date.now() }
+  toast('Withdrawal requested', formatMoney(amount))
+  return withdrawal
+}
+
+function canProcessAgentWithdrawals() {
+  if (!hasPermission(state, 'agent.withdrawal.process')) return false
+  return !linkedAgentForUser(state.agents ?? [], currentUser(state).id)
+}
+
+function withWithdrawalKindLedger(
+  ledgers: AgentEarningLedger[],
+  row: AgentEarningLedger,
+  exists: (entries: AgentEarningLedger[], withdrawalId: string) => boolean,
+) {
+  const withdrawalId = row.relatedWithdrawalId
+  if (!withdrawalId || exists(ledgers, withdrawalId)) return ledgers
+  return [row, ...ledgers]
+}
+
+let agentWithdrawalPayInFlight = false
+let lastAgentWithdrawalPay: { key: string; withdrawal: AgentWithdrawal; at: number } | null = null
+let agentWithdrawalCancelInFlight = false
+let lastAgentWithdrawalCancel: { key: string; withdrawal: AgentWithdrawal; at: number } | null = null
+
+function postPayAgentWithdrawal(input: {
+  withdrawalId: string
+  paymentReference: string
+  paymentDate: string
+  receiptUrl: string
+  receiptName?: string
+  requestId?: string
+}) {
+  const requestKey = input.requestId?.trim() || ''
+  if (requestKey && lastAgentWithdrawalPay && lastAgentWithdrawalPay.key === requestKey) {
+    return lastAgentWithdrawalPay.withdrawal
+  }
+  if (!canProcessAgentWithdrawals()) {
+    toast('Permission denied', 'You cannot process agent withdrawals.', 'danger')
+    return null
+  }
+  const current = (state.agentWithdrawals ?? []).find((row) => row.id === input.withdrawalId)
+  if (!current) {
+    toast('Withdrawal not found', undefined, 'warning')
+    return null
+  }
+  const paidLedger = (state.agentEarningLedgers ?? []).find(
+    (row) => row.kind === WITHDRAWAL_PAID_KIND && row.relatedWithdrawalId === current.id,
+  )
+  if (current.status === 'paid' || paidLedger) {
+    return current.status === 'paid' ? current : { ...current, status: 'paid' as const }
+  }
+  if (current.status === 'cancelled' || hasWithdrawalCancelledLedger(state.agentEarningLedgers ?? [], current.id)) {
+    toast('This withdrawal cannot be paid.', undefined, 'warning')
+    return null
+  }
+  if (current.status !== 'requested') {
+    toast('Only requested withdrawals can be paid.', undefined, 'warning')
+    return null
+  }
+  const reference = parseWithdrawalPaymentReference(input.paymentReference)
+  if (!reference.ok) {
+    toast('Payment reference is required.', undefined, 'warning')
+    return null
+  }
+  const paymentDate = parseWithdrawalPaymentDate(input.paymentDate)
+  if (!paymentDate.ok) {
+    toast('Payment date is required.', undefined, 'warning')
+    return null
+  }
+  const receipt = parseWithdrawalReceipt(input.receiptUrl, input.receiptName)
+  if (!receipt.ok) {
+    toast('Payment receipt is required.', 'Upload a PNG, JPG or WebP image up to 5 MB.', 'warning')
+    return null
+  }
+  const date = nowIso()
+  const actor = currentUser(state)
+  const amount = round2(current.amount)
+  const next: AgentWithdrawal = {
+    ...current,
+    status: 'paid',
+    paymentReference: reference.value,
+    paymentDate: paymentDate.value,
+    receiptUrl: receipt.url,
+    receiptName: receipt.name,
+    processedAt: date,
+    paidAt: date,
+    processedBy: actor.id,
+    updatedAt: date,
+  }
+  const ledger: AgentEarningLedger = {
+    id: uid('ael'),
+    agentId: current.agentId,
+    date,
+    kind: WITHDRAWAL_PAID_KIND,
+    amount,
+    availableDelta: 0,
+    pendingDelta: round2(-amount),
+    paidDelta: amount,
+    relatedWithdrawalId: current.id,
+    notes: `Withdrawal paid · ${reference.value}`,
+    createdAt: date,
+  }
+  const audit = makeDocAudit({
+    action: 'agent_withdrawal_paid',
+    documentType: 'agent_withdrawal',
+    documentId: current.id,
+    documentNo: current.id,
+    field: 'PAY_AGENT_WITHDRAWAL',
+    oldValue: 'requested',
+    newValue: `${formatMoney(amount)} · ${reference.value} · ${paymentDate.value}`,
+  })
+  state = {
+    ...state,
+    agentWithdrawals: (state.agentWithdrawals ?? []).map((row) => (row.id === current.id ? next : row)),
+    agentEarningLedgers: withWithdrawalKindLedger(state.agentEarningLedgers ?? [], ledger, hasWithdrawalPaidLedger),
+    documentAuditLogs: pushDocAudit(audit),
+  }
+  emit()
+  lastAgentWithdrawalPay = { key: requestKey, withdrawal: next, at: Date.now() }
+  toast('Withdrawal paid', formatMoney(amount))
+  return next
+}
+
+function postCancelAgentWithdrawal(input: { withdrawalId: string; requestId?: string }) {
+  const requestKey = input.requestId?.trim() || ''
+  if (requestKey && lastAgentWithdrawalCancel && lastAgentWithdrawalCancel.key === requestKey) {
+    return lastAgentWithdrawalCancel.withdrawal
+  }
+  if (!canProcessAgentWithdrawals()) {
+    toast('Permission denied', 'You cannot process agent withdrawals.', 'danger')
+    return null
+  }
+  const current = (state.agentWithdrawals ?? []).find((row) => row.id === input.withdrawalId)
+  if (!current) {
+    toast('Withdrawal not found', undefined, 'warning')
+    return null
+  }
+  const cancelledLedger = (state.agentEarningLedgers ?? []).find(
+    (row) => row.kind === WITHDRAWAL_CANCELLED_KIND && row.relatedWithdrawalId === current.id,
+  )
+  if (current.status === 'cancelled' || cancelledLedger) {
+    return current.status === 'cancelled' ? current : { ...current, status: 'cancelled' as const }
+  }
+  if (current.status === 'paid' || hasWithdrawalPaidLedger(state.agentEarningLedgers ?? [], current.id)) {
+    toast('This withdrawal cannot be cancelled.', undefined, 'warning')
+    return null
+  }
+  if (current.status !== 'requested') {
+    toast('Only requested withdrawals can be cancelled.', undefined, 'warning')
+    return null
+  }
+  const date = nowIso()
+  const actor = currentUser(state)
+  const amount = round2(current.amount)
+  const next: AgentWithdrawal = {
+    ...current,
+    status: 'cancelled',
+    cancelledAt: date,
+    processedAt: date,
+    processedBy: actor.id,
+    updatedAt: date,
+  }
+  const ledger: AgentEarningLedger = {
+    id: uid('ael'),
+    agentId: current.agentId,
+    date,
+    kind: WITHDRAWAL_CANCELLED_KIND,
+    amount,
+    availableDelta: amount,
+    pendingDelta: round2(-amount),
+    paidDelta: 0,
+    relatedWithdrawalId: current.id,
+    notes: `Withdrawal cancelled · ${formatMoney(amount)}`,
+    createdAt: date,
+  }
+  const audit = makeDocAudit({
+    action: 'agent_withdrawal_cancelled',
+    documentType: 'agent_withdrawal',
+    documentId: current.id,
+    documentNo: current.id,
+    field: 'CANCEL_AGENT_WITHDRAWAL',
+    oldValue: 'requested',
+    newValue: formatMoney(amount),
+  })
+  state = {
+    ...state,
+    agentWithdrawals: (state.agentWithdrawals ?? []).map((row) => (row.id === current.id ? next : row)),
+    agentEarningLedgers: withWithdrawalKindLedger(state.agentEarningLedgers ?? [], ledger, hasWithdrawalCancelledLedger),
+    documentAuditLogs: pushDocAudit(audit),
+  }
+  emit()
+  lastAgentWithdrawalCancel = { key: requestKey, withdrawal: next, at: Date.now() }
+  toast('Withdrawal cancelled', formatMoney(amount))
+  return next
+}
+
 export const db = {
   subscribe(listener: () => void) {
     listeners.add(listener)
@@ -512,32 +1048,217 @@ export const db = {
   },
 
   createProduct(input: ProductInput) {
-    if (state.products.some((p) => p.sku.toLowerCase() === input.sku.toLowerCase())) {
-      toast('SKU already exists', `${input.sku} is already used.`, 'danger')
+    const name = input.name.trim()
+    if (!name) {
+      toast('Product name is required', undefined, 'warning')
       return null
     }
+    const unit = normalizeUnit(input.unit) || input.unit.trim()
+    if (!unit) {
+      toast('Base Unit is required.', undefined, 'warning')
+      return null
+    }
+    const purchaseUnit = normalizeUnit(input.purchaseUnit || unit) || unit
+    const conversion = validatePurchaseConversion({
+      baseUnit: unit,
+      purchaseUnit,
+      conversionQty: input.purchaseConversionQty ?? 1,
+    })
+    if (!conversion.ok) {
+      toast(conversion.reason, undefined, 'warning')
+      return null
+    }
+    const selling = parseNonNegativeMoney(input.sellingPrice)
+    if (!selling.ok) {
+      toast('Selling Price cannot be negative.', undefined, 'warning')
+      return null
+    }
+    const wholesale = parseNonNegativeMoney(input.wholesalePrice ?? 0)
+    if (!wholesale.ok) {
+      toast('Wholesale price cannot be negative.', undefined, 'warning')
+      return null
+    }
+    const enteredCost = input.purchaseCost ?? input.costPrice ?? 0
+    const purchaseCost = parseNonNegativeMoney(enteredCost)
+    if (!purchaseCost.ok) {
+      toast('Cost Price cannot be negative.', undefined, 'warning')
+      return null
+    }
+    const skuResult = resolveProductSku(input.sku, state.products.map((product) => product.sku))
+    if (!skuResult.ok) {
+      toast('Unable to generate a unique SKU', skuResult.reason, 'danger')
+      return null
+    }
+    if (!skuIsUnique(skuResult.sku, state.products)) {
+      toast('SKU already exists', `${skuResult.sku} is already used.`, 'danger')
+      return null
+    }
+    let agentPrice = input.agentPrice
+    if (agentPrice !== undefined) {
+      if (!hasPermission(state, 'agent.manage')) {
+        toast('Permission denied', 'You cannot change Agent Price.', 'danger')
+        return null
+      }
+      const parsed = parseAgentPriceWrite(agentPrice)
+      if (!parsed.ok) {
+        toast('Agent Price cannot be negative.', undefined, 'warning')
+        return null
+      }
+      agentPrice = parsed.value
+    }
+    const costPrice = round2(purchaseCost.value / conversion.value)
     const product = {
-      ...input,
       id: uid('prd'),
+      name,
+      sku: skuResult.sku,
+      barcode: input.barcode?.trim() ?? '',
+      categoryId: input.categoryId,
+      unit,
+      purchaseUnit,
+      purchaseConversionQty: conversion.value,
+      purchaseCost: purchaseCost.value,
+      costPrice,
+      costSource: 'manual' as const,
+      sellingPrice: selling.value,
+      wholesalePrice: wholesale.value,
+      agentPrice,
+      reorderLevel: input.reorderLevel ?? 0,
+      trackBatch: Boolean(input.trackBatch),
+      trackExpiry: Boolean(input.trackExpiry),
+      status: input.status ?? 'active',
       accent: '#4F46E5',
     }
     const inventory = [
       ...state.inventory,
       ...companyWarehouses(state.warehouses).map((warehouse) => ({ productId: product.id, warehouseId: warehouse.id, qty: 0 })),
     ]
-    setData({ products: [product, ...state.products], inventory })
-    toast('Product added', `${product.name} is now in the catalogue.`)
+    setData({ products: applyBomCosts([product, ...state.products], state.boms), inventory })
+    toast('Product added', skuResult.generated ? `${product.name} · SKU ${product.sku}` : `${product.name} is now in the catalogue.`)
     return product
   },
 
   updateProduct(id: string, patch: Partial<ProductInput>) {
+    const current = state.products.find((product) => product.id === id)
+    if (!current) return false
+    if (Object.prototype.hasOwnProperty.call(patch, 'agentPrice')) {
+      if (!hasPermission(state, 'agent.manage')) {
+        toast('Permission denied', 'You cannot change Agent Price.', 'danger')
+        return false
+      }
+      const parsed = parseAgentPriceWrite(patch.agentPrice)
+      if (!parsed.ok) {
+        toast('Agent Price cannot be negative.', undefined, 'warning')
+        return false
+      }
+      patch = { ...patch, agentPrice: parsed.value }
+    }
+    const name = patch.name !== undefined ? patch.name.trim() : current.name
+    if (!name) {
+      toast('Product name is required', undefined, 'warning')
+      return false
+    }
+    let sku = current.sku
+    if (Object.prototype.hasOwnProperty.call(patch, 'sku')) {
+      const nextSku = (patch.sku ?? '').trim()
+      if (nextSku && nextSku !== current.sku) {
+        if (productIsUsed(state, id)) {
+          toast('SKU cannot be changed', 'This product is already used in transactions.', 'warning')
+          return false
+        }
+        if (!skuIsUnique(nextSku, state.products, id)) {
+          toast('SKU already exists', `${nextSku} is already used.`, 'danger')
+          return false
+        }
+        sku = nextSku
+      }
+    }
+    if (patch.sellingPrice !== undefined) {
+      const selling = parseNonNegativeMoney(patch.sellingPrice)
+      if (!selling.ok) {
+        toast('Selling Price cannot be negative.', undefined, 'warning')
+        return false
+      }
+      patch = { ...patch, sellingPrice: selling.value }
+    }
+    if (patch.wholesalePrice !== undefined) {
+      const wholesale = parseNonNegativeMoney(patch.wholesalePrice)
+      if (!wholesale.ok) {
+        toast('Wholesale price cannot be negative.', undefined, 'warning')
+        return false
+      }
+      patch = { ...patch, wholesalePrice: wholesale.value }
+    }
+    const unitTouched = ['unit', 'purchaseUnit', 'purchaseConversionQty', 'purchaseCost', 'costPrice'].some((key) =>
+      Object.prototype.hasOwnProperty.call(patch, key),
+    )
+    const unit = normalizeUnit(patch.unit ?? current.unit) || (patch.unit ?? current.unit)
+    const purchaseUnit = normalizeUnit(patch.purchaseUnit ?? current.purchaseUnit ?? unit) || unit
+    const conversion = validatePurchaseConversion({
+      baseUnit: unit,
+      purchaseUnit,
+      conversionQty: patch.purchaseConversionQty ?? current.purchaseConversionQty ?? 1,
+    })
+    if (!conversion.ok) {
+      toast(conversion.reason, undefined, 'warning')
+      return false
+    }
+    const hasBom = productHasBom(state.boms, id)
+    let purchaseCost = current.purchaseCost ?? current.costPrice
+    let costPrice = current.costPrice
+    let costSource = hasBom ? ('bom' as const) : ('manual' as const)
+    if (!hasBom && unitTouched) {
+      if (patch.purchaseCost !== undefined) {
+        const parsedCost = parseNonNegativeMoney(patch.purchaseCost)
+        if (!parsedCost.ok) {
+          toast('Cost Price cannot be negative.', undefined, 'warning')
+          return false
+        }
+        purchaseCost = parsedCost.value
+        costPrice = round2(purchaseCost / conversion.value)
+      } else if (patch.costPrice !== undefined) {
+        const parsedCost = parseNonNegativeMoney(patch.costPrice)
+        if (!parsedCost.ok) {
+          toast('Cost Price cannot be negative.', undefined, 'warning')
+          return false
+        }
+        costPrice = parsedCost.value
+        purchaseCost = round2(costPrice * conversion.value)
+      } else {
+        purchaseCost = current.purchaseCost ?? current.costPrice
+        costPrice = round2(purchaseCost / conversion.value)
+      }
+    }
+    const next = {
+      ...current,
+      ...patch,
+      name,
+      sku,
+      unit: unitTouched ? unit : current.unit,
+      purchaseUnit: unitTouched ? purchaseUnit : current.purchaseUnit ?? current.unit,
+      purchaseConversionQty: unitTouched ? conversion.value : current.purchaseConversionQty ?? 1,
+      purchaseCost: hasBom ? current.purchaseCost ?? current.costPrice : unitTouched ? purchaseCost : current.purchaseCost ?? current.costPrice,
+      costPrice: hasBom ? current.costPrice : unitTouched ? costPrice : current.costPrice,
+      costSource,
+      barcode: patch.barcode !== undefined ? patch.barcode : current.barcode,
+      sellingPrice: patch.sellingPrice ?? current.sellingPrice,
+      wholesalePrice: patch.wholesalePrice ?? current.wholesalePrice,
+      agentPrice: Object.prototype.hasOwnProperty.call(patch, 'agentPrice') ? patch.agentPrice : current.agentPrice,
+      reorderLevel: patch.reorderLevel ?? current.reorderLevel,
+      trackBatch: patch.trackBatch ?? current.trackBatch,
+      trackExpiry: patch.trackExpiry ?? current.trackExpiry,
+      status: patch.status ?? current.status,
+    }
     setData({
-      products: state.products.map((product) => (product.id === id ? { ...product, ...patch } : product)),
+      products: applyBomCosts(
+        state.products.map((product) => (product.id === id ? next : product)),
+        state.boms,
+      ),
     })
     toast('Product updated')
+    return true
   },
 
-  setProductStatus(id: string, status: ProductInput['status']) {
+  setProductStatus(id: string, status: ProductStatus) {
     setData({
       products: state.products.map((product) => (product.id === id ? { ...product, status } : product)),
     })
@@ -1534,6 +2255,10 @@ export const db = {
   voidSale(id: string) {
     const sale = state.sales.find((item) => item.id === id)
     if (!sale || sale.status === 'voided') return
+    if (saleIsAgentSale(state, sale)) {
+      toast('Agent sales cannot be voided in this version.', undefined, 'warning')
+      return
+    }
     let inventory = state.inventory
     let movements = state.stockMovements
     for (const item of sale.items) {
@@ -1609,13 +2334,15 @@ export const db = {
     let movements = state.stockMovements
     if (input.receive) {
       for (const item of items) {
+        const product = productById(item.productId)
+        const stockIn = purchaseQtyToBaseQty(item.qty, product ?? { unit: 'PCS', purchaseUnit: 'PCS', purchaseConversionQty: 1 })
         const applied = addMovement(movements, inventory, {
           date,
           reference: purchaseNo,
           productId: item.productId,
           warehouseId: input.warehouseId,
           type: 'purchase',
-          stockIn: item.qty,
+          stockIn,
           stockOut: 0,
         })
         inventory = applied.inventory
@@ -1653,13 +2380,15 @@ export const db = {
     let inventory = state.inventory
     let movements = state.stockMovements
     for (const item of purchase.items) {
+      const product = productById(item.productId)
+      const stockIn = purchaseQtyToBaseQty(item.qty, product ?? { unit: 'PCS', purchaseUnit: 'PCS', purchaseConversionQty: 1 })
       const applied = addMovement(movements, inventory, {
         date: nowIso(),
         reference: purchase.purchaseNo,
         productId: item.productId,
         warehouseId: purchase.warehouseId,
         type: 'purchase',
-        stockIn: item.qty,
+        stockIn,
         stockOut: 0,
       })
       inventory = applied.inventory
@@ -1779,6 +2508,112 @@ export const db = {
     return true
   },
 
+  createAgentSale(input: {
+    agentId: string
+    productId: string
+    qty: number
+    sellingPrice: number
+    delivery?: number
+    customerId?: string
+    paymentMethod?: PaymentMethod
+    notes?: string
+    requestId?: string
+  }) {
+    if (agentSaleInFlight) {
+      toast('Unable to complete sale. Please try again.', undefined, 'warning')
+      return null
+    }
+    agentSaleInFlight = true
+    try {
+      return postAgentSale(input)
+    } finally {
+      agentSaleInFlight = false
+    }
+  },
+
+  creditAgentSaleEarning(agentSaleId: string) {
+    const existing = (state.agentEarningLedgers ?? []).find(
+      (row) => row.kind === SALE_EARNING_KIND && row.relatedAgentSaleId === agentSaleId,
+    )
+    if (existing) return existing
+    return null
+  },
+
+  requestAgentWithdrawal(input: {
+    agentId: string
+    amount: number
+    notes?: string
+    requestId?: string
+  }) {
+    if (agentWithdrawalInFlight) {
+      toast('Unable to complete withdrawal. Please try again.', undefined, 'warning')
+      return null
+    }
+    agentWithdrawalInFlight = true
+    try {
+      return postAgentWithdrawal(input)
+    } finally {
+      agentWithdrawalInFlight = false
+    }
+  },
+
+  creditAgentWithdrawalPending(withdrawalId: string) {
+    const existing = (state.agentEarningLedgers ?? []).find(
+      (row) => row.kind === WITHDRAWAL_PENDING_KIND && row.relatedWithdrawalId === withdrawalId,
+    )
+    if (existing) return existing
+    return null
+  },
+
+  payAgentWithdrawal(input: {
+    withdrawalId: string
+    paymentReference: string
+    paymentDate: string
+    receiptUrl: string
+    receiptName?: string
+    requestId?: string
+  }) {
+    if (agentWithdrawalPayInFlight) {
+      toast('Unable to complete payout. Please try again.', undefined, 'warning')
+      return null
+    }
+    agentWithdrawalPayInFlight = true
+    try {
+      return postPayAgentWithdrawal(input)
+    } finally {
+      agentWithdrawalPayInFlight = false
+    }
+  },
+
+  cancelAgentWithdrawal(input: { withdrawalId: string; requestId?: string }) {
+    if (agentWithdrawalCancelInFlight) {
+      toast('Unable to cancel withdrawal. Please try again.', undefined, 'warning')
+      return null
+    }
+    agentWithdrawalCancelInFlight = true
+    try {
+      return postCancelAgentWithdrawal(input)
+    } finally {
+      agentWithdrawalCancelInFlight = false
+    }
+  },
+
+  creditAgentWithdrawalPaid(withdrawalId: string) {
+    const existing = (state.agentEarningLedgers ?? []).find(
+      (row) => row.kind === WITHDRAWAL_PAID_KIND && row.relatedWithdrawalId === withdrawalId,
+    )
+    if (existing) return existing
+    return null
+  },
+
+  creditAgentWithdrawalCancelled(withdrawalId: string) {
+    const existing = (state.agentEarningLedgers ?? []).find(
+      (row) => row.kind === WITHDRAWAL_CANCELLED_KIND && row.relatedWithdrawalId === withdrawalId,
+    )
+    if (existing) return existing
+    return null
+  },
+
   completeStockCount(input: { warehouseId: string; counts: Array<{ productId: string; countedQty: number }> }) {
     let inventory = state.inventory
     let movements = state.stockMovements
@@ -1819,6 +2654,10 @@ export const db = {
     }
     const sale = state.sales.find((item) => item.id === input.saleId)
     if (!sale) return null
+    if (saleIsAgentSale(state, sale)) {
+      toast('Agent sales cannot be returned in this version.', undefined, 'warning')
+      return null
+    }
     const returning = input.items.filter((item) => item.qty > 0)
     if (!returning.length) {
       toast('Select quantities to return', undefined, 'warning')
@@ -2070,7 +2909,7 @@ export const db = {
         notes: item.notes,
       })),
     }
-    setData({ boms: [bom, ...state.boms] })
+    setData({ boms: [bom, ...state.boms], products: applyBomCosts(state.products, [bom, ...state.boms]) })
     toast('BOM created', bom.name)
     return bom
   },
@@ -2078,35 +2917,39 @@ export const db = {
   updateBom(id: string, input: BomInput) {
     const existing = state.boms.find((bom) => bom.id === id)
     if (!existing) return
+    const boms = state.boms.map((bom) =>
+      bom.id === id
+        ? {
+            ...bom,
+            name: input.name,
+            productId: input.productId,
+            outputQty: input.outputQty,
+            outputUnit: input.outputUnit,
+            bulkYieldGrams: input.bulkYieldGrams ?? bom.bulkYieldGrams,
+            notes: input.notes,
+            items: input.items.filter((item) => item.qty > 0).map((item) => ({
+              id: uid('bi'),
+              productId: item.productId,
+              qty: item.qty,
+              unit: item.unit,
+              wastagePct: item.wastagePct,
+              notes: item.notes,
+            })),
+          }
+        : bom,
+    )
     setData({
-      boms: state.boms.map((bom) =>
-        bom.id === id
-          ? {
-              ...bom,
-              name: input.name,
-              productId: input.productId,
-              outputQty: input.outputQty,
-              outputUnit: input.outputUnit,
-              bulkYieldGrams: input.bulkYieldGrams ?? bom.bulkYieldGrams,
-              notes: input.notes,
-              items: input.items.filter((item) => item.qty > 0).map((item) => ({
-                id: uid('bi'),
-                productId: item.productId,
-                qty: item.qty,
-                unit: item.unit,
-                wastagePct: item.wastagePct,
-                notes: item.notes,
-              })),
-            }
-          : bom,
-      ),
+      boms,
+      products: applyBomCosts(state.products, boms),
     })
     toast('BOM updated')
   },
 
   setBomStatus(id: string, status: 'active' | 'inactive') {
+    const boms = state.boms.map((bom) => (bom.id === id ? { ...bom, status } : bom))
     setData({
-      boms: state.boms.map((bom) => (bom.id === id ? { ...bom, status } : bom)),
+      boms,
+      products: applyBomCosts(state.products, boms),
     })
     toast(status === 'inactive' ? 'BOM deactivated' : 'BOM activated')
   },

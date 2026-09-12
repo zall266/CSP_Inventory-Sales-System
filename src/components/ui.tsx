@@ -80,11 +80,22 @@ export function Select({ className, ...props }: SelectHTMLAttributes<HTMLSelectE
   )
 }
 
-export function Field({ label, children, className }: { label: string; children: ReactNode; className?: string }) {
+export function Field({
+  label,
+  hint,
+  children,
+  className,
+}: {
+  label: string
+  hint?: string
+  children: ReactNode
+  className?: string
+}) {
   return (
     <label className={cn('block space-y-1.5', className)}>
       <span className="text-xs font-medium text-slate-500">{label}</span>
       {children}
+      {hint ? <span className="block text-[11px] text-slate-400">{hint}</span> : null}
     </label>
   )
 }
@@ -183,6 +194,7 @@ export function StatusBadge({ status }: { status: string }) {
     returned: { label: 'Returned', tone: 'sky' },
     received: { label: 'Received', tone: 'sky' },
     pending: { label: 'Pending', tone: 'amber' },
+    requested: { label: 'Requested', tone: 'amber' },
     draft: { label: 'Draft', tone: 'slate' },
     completed: { label: 'Completed', tone: 'emerald' },
     planned: { label: 'Planned', tone: 'indigo' },
@@ -421,6 +433,7 @@ export function ConfirmDialog({
   title,
   message,
   confirmLabel = 'Confirm',
+  confirmDisabled = false,
   tone = 'primary',
   onConfirm,
   onClose,
@@ -429,6 +442,7 @@ export function ConfirmDialog({
   title: string
   message: string
   confirmLabel?: string
+  confirmDisabled?: boolean
   tone?: 'primary' | 'danger'
   onConfirm: () => void
   onClose: () => void
@@ -437,10 +451,10 @@ export function ConfirmDialog({
     <Modal open={open} onClose={onClose} title={title} width="max-w-md" layer="z-[80]">
       <p className="whitespace-pre-line text-sm text-slate-600">{message}</p>
       <div className="mt-6 flex justify-end gap-2">
-        <Button variant="secondary" onClick={onClose}>
+        <Button variant="secondary" onClick={onClose} disabled={confirmDisabled}>
           Cancel
         </Button>
-        <Button variant={tone === 'danger' ? 'danger' : 'primary'} onClick={onConfirm}>
+        <Button variant={tone === 'danger' ? 'danger' : 'primary'} onClick={onConfirm} disabled={confirmDisabled} size="lg">
           {confirmLabel}
         </Button>
       </div>

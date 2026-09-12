@@ -90,6 +90,8 @@ export type Category = {
   name: string
 }
 
+export type CostSource = 'bom' | 'manual'
+
 export type Product = {
   id: string
   name: string
@@ -97,7 +99,11 @@ export type Product = {
   barcode: string
   categoryId: string
   unit: string
+  purchaseUnit?: string
+  purchaseConversionQty?: number
+  purchaseCost?: number
   costPrice: number
+  costSource?: CostSource
   sellingPrice: number
   wholesalePrice: number
   agentPrice?: number
@@ -276,6 +282,7 @@ export type AgentSale = {
 }
 
 export type AgentEarningKind =
+  | 'sale_earning'
   | 'product_markup'
   | 'delivery_earnings'
   | 'withdrawal_pending'
@@ -305,10 +312,16 @@ export type AgentWithdrawal = {
   agentId: string
   amount: number
   status: AgentWithdrawalStatus
+  bankName: string
+  accountHolder: string
+  accountNumber: string
   requestedAt: string
+  requestedBy: string
   processedAt?: string
   paidAt?: string
   cancelledAt?: string
+  paymentReference?: string
+  paymentDate?: string
   receiptUrl?: string
   receiptName?: string
   processedBy?: string
@@ -391,11 +404,14 @@ export type DocumentAuditAction =
   | 'delivery_delivered'
   | 'quotation_printed'
   | 'delivery_printed'
+  | 'agent_sale_created'
+  | 'agent_withdrawal_paid'
+  | 'agent_withdrawal_cancelled'
 
 export type DocumentAuditLog = {
   id: string
   action: DocumentAuditAction
-  documentType: 'quotation' | 'invoice' | 'delivery'
+  documentType: 'quotation' | 'invoice' | 'delivery' | 'agent_sale' | 'agent_withdrawal'
   documentId: string
   documentNo: string
   field: string
@@ -924,18 +940,22 @@ export type AppState = AppData & {
 
 export type ProductInput = {
   name: string
-  sku: string
-  barcode: string
+  sku?: string
+  barcode?: string
   categoryId: string
   unit: string
-  costPrice: number
+  purchaseUnit?: string
+  purchaseConversionQty?: number
+  purchaseCost?: number
+  costPrice?: number
+  costSource?: CostSource
   sellingPrice: number
-  wholesalePrice: number
+  wholesalePrice?: number
   agentPrice?: number
-  reorderLevel: number
-  trackBatch: boolean
-  trackExpiry: boolean
-  status: ProductStatus
+  reorderLevel?: number
+  trackBatch?: boolean
+  trackExpiry?: boolean
+  status?: ProductStatus
 }
 
 export type SaleInput = {

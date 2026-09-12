@@ -95,6 +95,7 @@ export const navGroups: NavGroup[] = [
     label: 'PRODUCTS',
     items: [
       { to: '/products', label: 'Products', icon: Package },
+      { to: '/products/raw-materials', label: 'Raw Materials', icon: FlaskConical },
       { to: '/categories', label: 'Categories', icon: Tags },
     ],
   },
@@ -136,6 +137,7 @@ function pathActive(pathname: string, to: string) {
   if (to === '/sales') return pathname === '/sales' || pathname.startsWith('/sales/invoices')
   if (to === '/manufacturing') return pathname === '/manufacturing'
   if (to === '/inventory') return pathname === '/inventory'
+  if (to === '/products') return pathname === '/products'
   if (to === '/manufacturing/today') return pathname === '/manufacturing/today' || pathname.startsWith('/manufacturing/today/')
   return pathname === to || pathname.startsWith(`${to}/`)
 }

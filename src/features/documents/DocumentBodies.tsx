@@ -155,6 +155,7 @@ export function InvoiceA4({ state, sale }: { state: AppState; sale: Sale }) {
         </div>
         <div className="a4-avoid-break w-56 space-y-1 text-[11px]">
           <Row label="Subtotal" value={money(sale.subtotal)} />
+          {sale.shipping > 0 && <Row label="Delivery" value={money(sale.shipping)} />}
           <Row label="Discount" value={money(sale.discount)} />
           <Row label="Tax" value={money(sale.tax)} />
           <Row label="Grand total" value={money(sale.total)} strong />

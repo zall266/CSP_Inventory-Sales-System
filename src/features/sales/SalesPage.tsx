@@ -17,8 +17,9 @@ export function SalesPage() {
   const [salesperson, setSalesperson] = useState('all')
   const todayStart = startOfDay(PROTOTYPE_TODAY)
   const todayEnd = addDays(todayStart, 1)
+  const isCompanySale = (sale: (typeof state.sales)[number]) => isCompanyWarehouseId(state.warehouses, sale.warehouseId)
 
-  const todaySales = state.sales.filter((s) => s.status !== 'voided' && inRange(s.date, todayStart, todayEnd))
+  const todaySales = state.sales.filter((s) => s.status !== 'voided' && inRange(s.date, todayStart, todayEnd) && isCompanySale(s))
   const rows = useMemo(() => {
     return state.sales.filter((sale) => {
       if (query && !sale.invoiceNo.toLowerCase().includes(query.toLowerCase()) && !customerName(sale.customerId).toLowerCase().includes(query.toLowerCase())) return false
@@ -45,8 +46,8 @@ export function SalesPage() {
       />
       <div className="mb-5 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
         <KpiCard label="Today's sales" value={formatMoney(round2(todaySales.reduce((s, x) => s + x.total, 0)), { compact: true })} />
-        <KpiCard label="Paid" value={String(state.sales.filter((s) => s.status === 'paid').length)} tone="success" />
-        <KpiCard label="Unpaid" value={String(state.sales.filter((s) => s.status === 'unpaid' || s.status === 'partial').length)} tone="warning" />
+        <KpiCard label="Paid" value={String(state.sales.filter((s) => s.status === 'paid' && isCompanySale(s)).length)} tone="success" />
+        <KpiCard label="Unpaid" value={String(state.sales.filter((s) => (s.status === 'unpaid' || s.status === 'partial') && isCompanySale(s)).length)} tone="warning" />
         <KpiCard label="Returns" value={String(state.salesReturns.length)} />
       </div>
       <FilterRow>
