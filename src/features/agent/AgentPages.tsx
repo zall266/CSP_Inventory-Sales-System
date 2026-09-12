@@ -27,15 +27,18 @@ import {
   canUserRequestWithdrawalForAgent,
   companyWarehouses,
   configuredAgentPrice,
+  isAllowedWithdrawalReceiptFile,
+  linkedAgentForUser,
   saleEarningForAgentSale,
   snapshotAgentBankDetails,
+  sortAgentWithdrawals,
   summarizeAgentEarnings,
   withdrawalsForAgent,
 } from '@/features/agent/agentModel'
 import { hasPermission } from '@/features/settings/permissions'
 import { useApi, useLookups, useStore } from '@/store/hooks'
-import { formatDate, formatMoney, formatQty, round2 } from '@/utils/format'
-import type { Agent, AgentInput, PaymentMethod, Product } from '@/types'
+import { formatDate, formatDateTime, formatMoney, formatQty, round2 } from '@/utils/format'
+import type { Agent, AgentInput, AppState, PaymentMethod, Product } from '@/types'
 
 type AgentForm = {
   name: string
@@ -75,6 +78,10 @@ function toInput(form: AgentForm): AgentInput {
     accountHolder: form.accountHolder,
     bankAccount: form.bankAccount,
   }
+}
+
+function canProcessAgentWithdrawals(state: AppState) {
+  return hasPermission(state, 'agent.withdrawal.process') && !linkedAgentForUser(state.agents ?? [], state.ui.currentUserId)
 }
 
 function productOptionLabel(product: Product) {
@@ -420,6 +427,246 @@ function AgentWithdrawalModal({
   )
 }
 
+function AgentWithdrawalProcessModal({
+  open,
+  withdrawalId,
+  onClose,
+}: {
+  open: boolean
+  withdrawalId: string
+  onClose: () => void
+}) {
+  const state = useStore()
+  const api = useApi()
+  const fileRef = useRef<HTMLInputElement>(null)
+  const canProcess = canProcessAgentWithdrawals(state)
+  const withdrawal = (state.agentWithdrawals ?? []).find((row) => row.id === withdrawalId)
+  const agent = state.agents.find((item) => item.id === withdrawal?.agentId)
+  const [paymentReference, setPaymentReference] = useState('')
+  const [paymentDate, setPaymentDate] = useState('')
+  const [receiptUrl, setReceiptUrl] = useState('')
+  const [receiptName, setReceiptName] = useState('')
+  const [receiptError, setReceiptError] = useState('')
+  const [payConfirm, setPayConfirm] = useState(false)
+  const [rejectConfirm, setRejectConfirm] = useState(false)
+  const [submitting, setSubmitting] = useState(false)
+  const submittingRef = useRef(false)
+  const payRequestRef = useRef('')
+  const cancelRequestRef = useRef('')
+
+  const requested = withdrawal?.status === 'requested'
+  const defaultDate = withdrawal?.requestedAt?.slice(0, 10) || ''
+
+  const pickReceipt = (file: File | undefined) => {
+    setReceiptError('')
+    if (!file) return
+    if (!isAllowedWithdrawalReceiptFile(file)) {
+      setReceiptError('Use a PNG, JPG or WebP image up to 5 MB.')
+      return
+    }
+    const reader = new FileReader()
+    reader.onload = () => {
+      const result = String(reader.result ?? '')
+      if (!result.startsWith('data:image/')) {
+        setReceiptError('That file could not be read as an image.')
+        return
+      }
+      setReceiptUrl(result)
+      setReceiptName(file.name)
+    }
+    reader.onerror = () => setReceiptError('That file could not be read as an image.')
+    reader.readAsDataURL(file)
+  }
+
+  const submitPay = (event: FormEvent) => {
+    event.preventDefault()
+    if (!canProcess || !withdrawal || !requested) return
+    if (!paymentReference.trim()) {
+      api.toast('Payment reference is required.', undefined, 'warning')
+      return
+    }
+    if (!(paymentDate || defaultDate)) {
+      api.toast('Payment date is required.', undefined, 'warning')
+      return
+    }
+    if (!receiptUrl) {
+      api.toast('Payment receipt is required.', 'Upload a PNG, JPG or WebP image up to 5 MB.', 'warning')
+      return
+    }
+    payRequestRef.current = `awp_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`
+    setPayConfirm(true)
+  }
+
+  const confirmPay = () => {
+    if (!withdrawal || submittingRef.current) return
+    submittingRef.current = true
+    setSubmitting(true)
+    const paid = api.payAgentWithdrawal({
+      withdrawalId: withdrawal.id,
+      paymentReference,
+      paymentDate: paymentDate || defaultDate,
+      receiptUrl,
+      receiptName,
+      requestId: payRequestRef.current,
+    })
+    submittingRef.current = false
+    setSubmitting(false)
+    setPayConfirm(false)
+    if (paid) onClose()
+  }
+
+  const confirmReject = () => {
+    if (!withdrawal || submittingRef.current) return
+    submittingRef.current = true
+    setSubmitting(true)
+    cancelRequestRef.current = cancelRequestRef.current || `awc_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`
+    const cancelled = api.cancelAgentWithdrawal({
+      withdrawalId: withdrawal.id,
+      requestId: cancelRequestRef.current,
+    })
+    submittingRef.current = false
+    setSubmitting(false)
+    setRejectConfirm(false)
+    if (cancelled) onClose()
+  }
+
+  const close = () => {
+    if (submittingRef.current) return
+    setPayConfirm(false)
+    setRejectConfirm(false)
+    onClose()
+  }
+
+  return (
+    <>
+      <Modal open={open} onClose={close} title="Withdrawal" width="max-w-xl">
+        {!withdrawal ? (
+          <div className="text-sm text-slate-500">Withdrawal not found.</div>
+        ) : (
+          <form className="grid gap-4 sm:grid-cols-2" onSubmit={submitPay}>
+            <Field label="Agent" className="sm:col-span-2">
+              <Input disabled value={agent?.name ?? '—'} />
+            </Field>
+            <Field label="Withdrawal ID">
+              <Input disabled value={withdrawal.id} />
+            </Field>
+            <Field label="Status">
+              <div className="pt-2"><StatusBadge status={withdrawal.status} /></div>
+            </Field>
+            <Field label="Requested date" className="sm:col-span-2">
+              <Input disabled value={formatDateTime(withdrawal.requestedAt)} />
+            </Field>
+            <Field label="Amount" className="sm:col-span-2">
+              <Input disabled value={formatMoney(withdrawal.amount)} />
+            </Field>
+            <Field label="Bank">
+              <Input disabled value={withdrawal.bankName || '—'} />
+            </Field>
+            <Field label="Account holder">
+              <Input disabled value={withdrawal.accountHolder || '—'} />
+            </Field>
+            <Field label="Account number" className="sm:col-span-2">
+              <Input disabled value={withdrawal.accountNumber || '—'} />
+            </Field>
+            {withdrawal.notes ? (
+              <Field label="Notes" className="sm:col-span-2">
+                <Textarea disabled rows={2} value={withdrawal.notes} />
+              </Field>
+            ) : null}
+            {withdrawal.status === 'paid' && (
+              <>
+                <Field label="Payment reference">
+                  <Input disabled value={withdrawal.paymentReference || '—'} />
+                </Field>
+                <Field label="Payment date">
+                  <Input disabled value={withdrawal.paymentDate || '—'} />
+                </Field>
+                <div className="sm:col-span-2 space-y-2">
+                  <div className="text-xs font-medium text-slate-500">Receipt</div>
+                  {withdrawal.receiptUrl ? (
+                    <img src={withdrawal.receiptUrl} alt={withdrawal.receiptName || 'Receipt'} className="max-h-40 rounded-xl border border-slate-200 object-contain" />
+                  ) : (
+                    <div className="text-sm text-slate-500">Receipt attached</div>
+                  )}
+                </div>
+              </>
+            )}
+            {requested && canProcess && (
+              <>
+                <Field label="Payment reference">
+                  <Input value={paymentReference} onChange={(event) => setPaymentReference(event.target.value)} />
+                </Field>
+                <Field label="Payment date">
+                  <Input type="date" value={paymentDate || defaultDate} onChange={(event) => setPaymentDate(event.target.value)} />
+                </Field>
+                <div className="sm:col-span-2 space-y-2">
+                  <div className="text-xs font-medium text-slate-500">Payment receipt</div>
+                  <input
+                    ref={fileRef}
+                    type="file"
+                    accept="image/png,image/jpeg,image/webp,.png,.jpg,.jpeg,.webp"
+                    className="hidden"
+                    onChange={(event) => {
+                      pickReceipt(event.target.files?.[0])
+                      event.target.value = ''
+                    }}
+                  />
+                  {receiptUrl ? (
+                    <div className="flex items-start gap-3">
+                      <img src={receiptUrl} alt={receiptName || 'Receipt'} className="max-h-24 rounded-xl border border-slate-200 object-contain" />
+                      <div className="text-sm text-slate-600">{receiptName || 'Attached'}</div>
+                    </div>
+                  ) : (
+                    <div className="rounded-xl border border-dashed border-slate-200 px-4 py-4 text-sm text-slate-400">No receipt uploaded</div>
+                  )}
+                  <Button type="button" variant="secondary" onClick={() => fileRef.current?.click()}>
+                    {receiptUrl ? 'Replace receipt' : 'Upload receipt'}
+                  </Button>
+                  {receiptError ? <div className="text-sm text-rose-600">{receiptError}</div> : null}
+                </div>
+                <div className="flex flex-wrap justify-end gap-2 sm:col-span-2">
+                  <Button type="button" variant="secondary" onClick={close}>Close</Button>
+                  <Button type="button" variant="danger" onClick={() => {
+                    cancelRequestRef.current = `awc_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`
+                    setRejectConfirm(true)
+                  }}>
+                    Reject
+                  </Button>
+                  <Button type="submit" size="lg">Confirm Paid</Button>
+                </div>
+              </>
+            )}
+            {!(requested && canProcess) && (
+              <div className="flex justify-end sm:col-span-2">
+                <Button type="button" variant="secondary" onClick={close}>Close</Button>
+              </div>
+            )}
+          </form>
+        )}
+      </Modal>
+      <ConfirmDialog
+        open={payConfirm}
+        onClose={() => { if (!submittingRef.current) setPayConfirm(false) }}
+        title="Mark this withdrawal as PAID?"
+        message={`Agent:\n${agent?.name ?? '—'}\nAmount:\n${formatMoney(withdrawal?.amount ?? 0)}\nBank:\n${withdrawal?.bankName || '—'}\nAccount:\n${withdrawal?.accountNumber || '—'}\nPayment Reference:\n${paymentReference.trim() || '—'}\nPayment Date:\n${paymentDate || defaultDate || '—'}\nReceipt:\nAttached`}
+        confirmLabel="Confirm Paid"
+        confirmDisabled={submitting}
+        onConfirm={confirmPay}
+      />
+      <ConfirmDialog
+        open={rejectConfirm}
+        onClose={() => { if (!submittingRef.current) setRejectConfirm(false) }}
+        title="Cancel this withdrawal request?"
+        message={`Agent:\n${agent?.name ?? '—'}\nAmount:\n${formatMoney(withdrawal?.amount ?? 0)}\nThis will return ${formatMoney(withdrawal?.amount ?? 0)} to Available Earnings.`}
+        confirmLabel="Reject Withdrawal"
+        tone="danger"
+        confirmDisabled={submitting}
+        onConfirm={confirmReject}
+      />
+    </>
+  )
+}
+
 function AgentTransferModal({
   open,
   agentId,
@@ -611,7 +858,10 @@ export function AgentsPage() {
   const canView = hasPermission(state, 'agent.view') || hasPermission(state, 'agent.manage')
   const canManage = hasPermission(state, 'agent.manage')
   const canStock = hasPermission(state, 'agent.stock.view') || canManage
+  const canProcess = canProcessAgentWithdrawals(state)
   const [query, setQuery] = useState('')
+  const [queueFilter, setQueueFilter] = useState<'all' | 'requested' | 'paid' | 'cancelled'>('requested')
+  const [processId, setProcessId] = useState('')
   const [form, setForm] = useState<AgentForm>(emptyForm)
   const [editingId, setEditingId] = useState<string | null>(null)
   const [creating, setCreating] = useState(false)
@@ -637,6 +887,10 @@ export function AgentsPage() {
   const statusTarget = agents.find((agent) => agent.id === statusId)
 
   if (!canView) return <PermissionDenied subtitle="You do not have access to Agent." />
+
+  const queueRows = canProcess
+    ? sortAgentWithdrawals(state.agentWithdrawals ?? []).filter((row) => queueFilter === 'all' || row.status === queueFilter)
+    : []
 
   const openCreate = () => {
     setForm(emptyForm)
@@ -717,6 +971,56 @@ export function AgentsPage() {
           {!rows.length && <EmptyState title="No agents yet" hint={canManage ? 'Add an agent to create an internal stock holder.' : undefined} />}
         </div>
       </Card>
+      {canProcess && (
+        <Card className="mt-5">
+          <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 px-5 py-4">
+            <div>
+              <div className="text-sm font-semibold">Withdrawal Requests</div>
+              <div className="text-xs text-slate-400">Process requested withdrawals. Payout is recorded after the bank transfer.</div>
+            </div>
+            <Select value={queueFilter} onChange={(event) => setQueueFilter(event.target.value as typeof queueFilter)}>
+              <option value="requested">Requested</option>
+              <option value="paid">Paid</option>
+              <option value="cancelled">Cancelled</option>
+              <option value="all">All</option>
+            </Select>
+          </div>
+          <div className="sf-table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Withdrawal ID</th>
+                  <th>Agent</th>
+                  <th>Request Date</th>
+                  <th>Amount</th>
+                  <th>Bank Name</th>
+                  <th>Account Holder</th>
+                  <th>Account Number</th>
+                  <th>Status</th>
+                </tr>
+              </thead>
+              <tbody>
+                {queueRows.map((row) => {
+                  const agentName = agents.find((item) => item.id === row.agentId)?.name ?? row.agentId
+                  return (
+                    <tr key={row.id} onClick={() => setProcessId(row.id)}>
+                      <td className="font-medium">{row.id}</td>
+                      <td>{agentName}</td>
+                      <td>{formatDate(row.requestedAt)}</td>
+                      <td className="tabular">{formatMoney(row.amount)}</td>
+                      <td>{row.bankName || '—'}</td>
+                      <td>{row.accountHolder || '—'}</td>
+                      <td>{row.accountNumber || '—'}</td>
+                      <td><StatusBadge status={row.status} /></td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+            {!queueRows.length && <EmptyState title="No withdrawal requests" hint="Requested withdrawals will appear here for payout." />}
+          </div>
+        </Card>
+      )}
       <AgentFormModal
         open={creating || Boolean(editingId)}
         title={editingId ? 'Edit Agent' : 'Add Agent'}
@@ -743,6 +1047,13 @@ export function AgentsPage() {
           setStatusId('')
         }}
       />
+      {canProcess && (
+        <AgentWithdrawalProcessModal
+          open={Boolean(processId)}
+          withdrawalId={processId}
+          onClose={() => setProcessId('')}
+        />
+      )}
     </div>
   )
 }
@@ -766,6 +1077,7 @@ export function AgentDetailPage() {
   const [transferOpen, setTransferOpen] = useState(false)
   const [saleOpen, setSaleOpen] = useState(false)
   const [withdrawOpen, setWithdrawOpen] = useState(false)
+  const [processId, setProcessId] = useState('')
 
   if (!canView) return <PermissionDenied subtitle="You do not have access to Agent." />
   if (!agent) return <PageHeader title="Agent" subtitle="Not found." />
@@ -775,6 +1087,7 @@ export function AgentDetailPage() {
     hasPermission(state, 'agent.withdrawal.create') &&
     canUserRequestWithdrawalForAgent(state.agents ?? [], state.ui.currentUserId, agent.id)
   const canAdminWithdrawView = hasPermission(state, 'agent.manage') || hasPermission(state, 'agent.withdrawal.process')
+  const canProcess = canProcessAgentWithdrawals(state)
   const stockRows = canStock ? agentStockRows(state, agent.warehouseId) : []
   const earnings = summarizeAgentEarnings(state.agentEarningLedgers ?? [], agent.id)
   const history = agentSalesForAgent(state.agentSales ?? [], agent.id)
@@ -966,7 +1279,7 @@ export function AgentDetailPage() {
       <Card className="mt-5">
         <div className="border-b border-slate-100 px-5 py-4">
           <div className="text-sm font-semibold">Withdrawals</div>
-          <div className="text-xs text-slate-400">Requested withdrawals from available earnings. Payout is processed separately.</div>
+          <div className="text-xs text-slate-400">Withdrawal history from available earnings.</div>
         </div>
         <div className="sf-table-wrap">
           <table>
@@ -979,14 +1292,22 @@ export function AgentDetailPage() {
                 <th>Bank</th>
                 <th>Account Holder</th>
                 {canAdminWithdrawView && <th>Account Number</th>}
+                <th>Payment Reference</th>
+                <th>Payment Date</th>
+                <th>Receipt</th>
                 {canAdminWithdrawView && <th>Requested By</th>}
+                {canProcess && <th>Actions</th>}
               </tr>
             </thead>
             <tbody>
               {withdrawalHistory.map((row) => {
                 const requestedBy = state.users.find((user) => user.id === row.requestedBy)?.name ?? row.requestedBy ?? '—'
                 return (
-                  <tr key={row.id} className="cursor-default">
+                  <tr
+                    key={row.id}
+                    className={canProcess ? 'cursor-pointer' : 'cursor-default'}
+                    onClick={() => { if (canProcess) setProcessId(row.id) }}
+                  >
                     {canAdminWithdrawView && <td className="font-medium">{agent.name}</td>}
                     <td>{formatDate(row.requestedAt)}</td>
                     <td className="tabular">{formatMoney(row.amount)}</td>
@@ -994,7 +1315,31 @@ export function AgentDetailPage() {
                     <td>{row.bankName || '—'}</td>
                     <td>{row.accountHolder || '—'}</td>
                     {canAdminWithdrawView && <td>{row.accountNumber || '—'}</td>}
+                    <td>{row.status === 'paid' ? (row.paymentReference || '—') : '—'}</td>
+                    <td>{row.status === 'paid' ? (row.paymentDate || '—') : '—'}</td>
+                    <td>{row.status === 'paid' && row.receiptUrl ? 'Attached' : '—'}</td>
                     {canAdminWithdrawView && <td>{requestedBy || '—'}</td>}
+                    {canProcess && (
+                      <td>
+                        {row.status === 'requested' ? (
+                          <button
+                            type="button"
+                            className="text-xs font-medium text-indigo-600"
+                            onClick={(event) => { event.stopPropagation(); setProcessId(row.id) }}
+                          >
+                            Process
+                          </button>
+                        ) : (
+                          <button
+                            type="button"
+                            className="text-xs font-medium text-slate-500"
+                            onClick={(event) => { event.stopPropagation(); setProcessId(row.id) }}
+                          >
+                            View
+                          </button>
+                        )}
+                      </td>
+                    )}
                   </tr>
                 )
               })}
@@ -1013,6 +1358,9 @@ export function AgentDetailPage() {
       )}
       {canWithdraw && (
         <AgentWithdrawalModal open={withdrawOpen} agentId={agent.id} onClose={() => setWithdrawOpen(false)} />
+      )}
+      {canProcess && (
+        <AgentWithdrawalProcessModal open={Boolean(processId)} withdrawalId={processId} onClose={() => setProcessId('')} />
       )}
       <AgentFormModal
         open={editing}

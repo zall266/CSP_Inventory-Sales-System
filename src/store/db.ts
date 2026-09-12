@@ -11,7 +11,7 @@ import {
   unplacedPacks,
   WAREHOUSE_MAP_KEYS,
 } from '@/features/warehouse/warehouseModel'
-import { AGENT_PERMISSION_KEYS, agentBankDetailsComplete, agentLinkedWarehouseName, calcAgentSaleEarnings, canUserRequestWithdrawalForAgent, companyWarehouses, configuredAgentPrice, hasSaleEarningLedger, hasWithdrawalPendingLedger, isAgentWarehouseId, isCompanyWarehouseId, nextAgentWarehouseId, parseAgentPriceWrite, parseWithdrawalAmount, SALE_EARNING_KIND, saleIsAgentSale, snapshotAgentBankDetails, summarizeAgentEarnings, WITHDRAWAL_PENDING_KIND } from '@/features/agent/agentModel'
+import { AGENT_PERMISSION_KEYS, agentBankDetailsComplete, agentLinkedWarehouseName, calcAgentSaleEarnings, canUserRequestWithdrawalForAgent, companyWarehouses, configuredAgentPrice, hasSaleEarningLedger, hasWithdrawalCancelledLedger, hasWithdrawalPaidLedger, hasWithdrawalPendingLedger, isAgentWarehouseId, isCompanyWarehouseId, linkedAgentForUser, nextAgentWarehouseId, parseAgentPriceWrite, parseWithdrawalAmount, parseWithdrawalPaymentDate, parseWithdrawalPaymentReference, parseWithdrawalReceipt, SALE_EARNING_KIND, saleIsAgentSale, snapshotAgentBankDetails, summarizeAgentEarnings, WITHDRAWAL_CANCELLED_KIND, WITHDRAWAL_PAID_KIND, WITHDRAWAL_PENDING_KIND } from '@/features/agent/agentModel'
 import { bomLinesForQty, consumptionCost, hasShortage, materialAvailability } from '@/features/manufacturing/helpers'
 import { buildSessionPlan, canEditSession, currentUser, mergePicking } from '@/features/manufacturing/sessionPlan'
 import {
@@ -182,6 +182,10 @@ function hydrateData(data: AppData): AppData {
       accountHolder: row.accountHolder ?? '',
       accountNumber: row.accountNumber ?? '',
       requestedBy: row.requestedBy ?? '',
+      paymentReference: row.paymentReference,
+      paymentDate: row.paymentDate,
+      receiptUrl: row.receiptUrl,
+      receiptName: row.receiptName,
     })),
     quotations: data.quotations ?? [],
     deliveryOrders: data.deliveryOrders ?? [],
@@ -760,6 +764,198 @@ function postAgentWithdrawal(input: {
   lastAgentWithdrawal = { key: requestKey, withdrawal, at: Date.now() }
   toast('Withdrawal requested', formatMoney(amount))
   return withdrawal
+}
+
+function canProcessAgentWithdrawals() {
+  if (!hasPermission(state, 'agent.withdrawal.process')) return false
+  return !linkedAgentForUser(state.agents ?? [], currentUser(state).id)
+}
+
+function withWithdrawalKindLedger(
+  ledgers: AgentEarningLedger[],
+  row: AgentEarningLedger,
+  exists: (entries: AgentEarningLedger[], withdrawalId: string) => boolean,
+) {
+  const withdrawalId = row.relatedWithdrawalId
+  if (!withdrawalId || exists(ledgers, withdrawalId)) return ledgers
+  return [row, ...ledgers]
+}
+
+let agentWithdrawalPayInFlight = false
+let lastAgentWithdrawalPay: { key: string; withdrawal: AgentWithdrawal; at: number } | null = null
+let agentWithdrawalCancelInFlight = false
+let lastAgentWithdrawalCancel: { key: string; withdrawal: AgentWithdrawal; at: number } | null = null
+
+function postPayAgentWithdrawal(input: {
+  withdrawalId: string
+  paymentReference: string
+  paymentDate: string
+  receiptUrl: string
+  receiptName?: string
+  requestId?: string
+}) {
+  const requestKey = input.requestId?.trim() || ''
+  if (requestKey && lastAgentWithdrawalPay && lastAgentWithdrawalPay.key === requestKey) {
+    return lastAgentWithdrawalPay.withdrawal
+  }
+  if (!canProcessAgentWithdrawals()) {
+    toast('Permission denied', 'You cannot process agent withdrawals.', 'danger')
+    return null
+  }
+  const current = (state.agentWithdrawals ?? []).find((row) => row.id === input.withdrawalId)
+  if (!current) {
+    toast('Withdrawal not found', undefined, 'warning')
+    return null
+  }
+  const paidLedger = (state.agentEarningLedgers ?? []).find(
+    (row) => row.kind === WITHDRAWAL_PAID_KIND && row.relatedWithdrawalId === current.id,
+  )
+  if (current.status === 'paid' || paidLedger) {
+    return current.status === 'paid' ? current : { ...current, status: 'paid' as const }
+  }
+  if (current.status === 'cancelled' || hasWithdrawalCancelledLedger(state.agentEarningLedgers ?? [], current.id)) {
+    toast('This withdrawal cannot be paid.', undefined, 'warning')
+    return null
+  }
+  if (current.status !== 'requested') {
+    toast('Only requested withdrawals can be paid.', undefined, 'warning')
+    return null
+  }
+  const reference = parseWithdrawalPaymentReference(input.paymentReference)
+  if (!reference.ok) {
+    toast('Payment reference is required.', undefined, 'warning')
+    return null
+  }
+  const paymentDate = parseWithdrawalPaymentDate(input.paymentDate)
+  if (!paymentDate.ok) {
+    toast('Payment date is required.', undefined, 'warning')
+    return null
+  }
+  const receipt = parseWithdrawalReceipt(input.receiptUrl, input.receiptName)
+  if (!receipt.ok) {
+    toast('Payment receipt is required.', 'Upload a PNG, JPG or WebP image up to 5 MB.', 'warning')
+    return null
+  }
+  const date = nowIso()
+  const actor = currentUser(state)
+  const amount = round2(current.amount)
+  const next: AgentWithdrawal = {
+    ...current,
+    status: 'paid',
+    paymentReference: reference.value,
+    paymentDate: paymentDate.value,
+    receiptUrl: receipt.url,
+    receiptName: receipt.name,
+    processedAt: date,
+    paidAt: date,
+    processedBy: actor.id,
+    updatedAt: date,
+  }
+  const ledger: AgentEarningLedger = {
+    id: uid('ael'),
+    agentId: current.agentId,
+    date,
+    kind: WITHDRAWAL_PAID_KIND,
+    amount,
+    availableDelta: 0,
+    pendingDelta: round2(-amount),
+    paidDelta: amount,
+    relatedWithdrawalId: current.id,
+    notes: `Withdrawal paid · ${reference.value}`,
+    createdAt: date,
+  }
+  const audit = makeDocAudit({
+    action: 'agent_withdrawal_paid',
+    documentType: 'agent_withdrawal',
+    documentId: current.id,
+    documentNo: current.id,
+    field: 'PAY_AGENT_WITHDRAWAL',
+    oldValue: 'requested',
+    newValue: `${formatMoney(amount)} · ${reference.value} · ${paymentDate.value}`,
+  })
+  state = {
+    ...state,
+    agentWithdrawals: (state.agentWithdrawals ?? []).map((row) => (row.id === current.id ? next : row)),
+    agentEarningLedgers: withWithdrawalKindLedger(state.agentEarningLedgers ?? [], ledger, hasWithdrawalPaidLedger),
+    documentAuditLogs: pushDocAudit(audit),
+  }
+  emit()
+  lastAgentWithdrawalPay = { key: requestKey, withdrawal: next, at: Date.now() }
+  toast('Withdrawal paid', formatMoney(amount))
+  return next
+}
+
+function postCancelAgentWithdrawal(input: { withdrawalId: string; requestId?: string }) {
+  const requestKey = input.requestId?.trim() || ''
+  if (requestKey && lastAgentWithdrawalCancel && lastAgentWithdrawalCancel.key === requestKey) {
+    return lastAgentWithdrawalCancel.withdrawal
+  }
+  if (!canProcessAgentWithdrawals()) {
+    toast('Permission denied', 'You cannot process agent withdrawals.', 'danger')
+    return null
+  }
+  const current = (state.agentWithdrawals ?? []).find((row) => row.id === input.withdrawalId)
+  if (!current) {
+    toast('Withdrawal not found', undefined, 'warning')
+    return null
+  }
+  const cancelledLedger = (state.agentEarningLedgers ?? []).find(
+    (row) => row.kind === WITHDRAWAL_CANCELLED_KIND && row.relatedWithdrawalId === current.id,
+  )
+  if (current.status === 'cancelled' || cancelledLedger) {
+    return current.status === 'cancelled' ? current : { ...current, status: 'cancelled' as const }
+  }
+  if (current.status === 'paid' || hasWithdrawalPaidLedger(state.agentEarningLedgers ?? [], current.id)) {
+    toast('This withdrawal cannot be cancelled.', undefined, 'warning')
+    return null
+  }
+  if (current.status !== 'requested') {
+    toast('Only requested withdrawals can be cancelled.', undefined, 'warning')
+    return null
+  }
+  const date = nowIso()
+  const actor = currentUser(state)
+  const amount = round2(current.amount)
+  const next: AgentWithdrawal = {
+    ...current,
+    status: 'cancelled',
+    cancelledAt: date,
+    processedAt: date,
+    processedBy: actor.id,
+    updatedAt: date,
+  }
+  const ledger: AgentEarningLedger = {
+    id: uid('ael'),
+    agentId: current.agentId,
+    date,
+    kind: WITHDRAWAL_CANCELLED_KIND,
+    amount,
+    availableDelta: amount,
+    pendingDelta: round2(-amount),
+    paidDelta: 0,
+    relatedWithdrawalId: current.id,
+    notes: `Withdrawal cancelled · ${formatMoney(amount)}`,
+    createdAt: date,
+  }
+  const audit = makeDocAudit({
+    action: 'agent_withdrawal_cancelled',
+    documentType: 'agent_withdrawal',
+    documentId: current.id,
+    documentNo: current.id,
+    field: 'CANCEL_AGENT_WITHDRAWAL',
+    oldValue: 'requested',
+    newValue: formatMoney(amount),
+  })
+  state = {
+    ...state,
+    agentWithdrawals: (state.agentWithdrawals ?? []).map((row) => (row.id === current.id ? next : row)),
+    agentEarningLedgers: withWithdrawalKindLedger(state.agentEarningLedgers ?? [], ledger, hasWithdrawalCancelledLedger),
+    documentAuditLogs: pushDocAudit(audit),
+  }
+  emit()
+  lastAgentWithdrawalCancel = { key: requestKey, withdrawal: next, at: Date.now() }
+  toast('Withdrawal cancelled', formatMoney(amount))
+  return next
 }
 
 export const db = {
@@ -2197,6 +2393,55 @@ export const db = {
   creditAgentWithdrawalPending(withdrawalId: string) {
     const existing = (state.agentEarningLedgers ?? []).find(
       (row) => row.kind === WITHDRAWAL_PENDING_KIND && row.relatedWithdrawalId === withdrawalId,
+    )
+    if (existing) return existing
+    return null
+  },
+
+  payAgentWithdrawal(input: {
+    withdrawalId: string
+    paymentReference: string
+    paymentDate: string
+    receiptUrl: string
+    receiptName?: string
+    requestId?: string
+  }) {
+    if (agentWithdrawalPayInFlight) {
+      toast('Unable to complete payout. Please try again.', undefined, 'warning')
+      return null
+    }
+    agentWithdrawalPayInFlight = true
+    try {
+      return postPayAgentWithdrawal(input)
+    } finally {
+      agentWithdrawalPayInFlight = false
+    }
+  },
+
+  cancelAgentWithdrawal(input: { withdrawalId: string; requestId?: string }) {
+    if (agentWithdrawalCancelInFlight) {
+      toast('Unable to cancel withdrawal. Please try again.', undefined, 'warning')
+      return null
+    }
+    agentWithdrawalCancelInFlight = true
+    try {
+      return postCancelAgentWithdrawal(input)
+    } finally {
+      agentWithdrawalCancelInFlight = false
+    }
+  },
+
+  creditAgentWithdrawalPaid(withdrawalId: string) {
+    const existing = (state.agentEarningLedgers ?? []).find(
+      (row) => row.kind === WITHDRAWAL_PAID_KIND && row.relatedWithdrawalId === withdrawalId,
+    )
+    if (existing) return existing
+    return null
+  },
+
+  creditAgentWithdrawalCancelled(withdrawalId: string) {
+    const existing = (state.agentEarningLedgers ?? []).find(
+      (row) => row.kind === WITHDRAWAL_CANCELLED_KIND && row.relatedWithdrawalId === withdrawalId,
     )
     if (existing) return existing
     return null
