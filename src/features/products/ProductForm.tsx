@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState, type FormEvent } from 'react'
 import { Button, Field, Input, Select } from '@/components/ui'
-import { activeBomForProduct, baseUnitCost, baseUnitOptions, formatUnit, unitOptions, unitsEqual, validatePurchaseConversion } from '@/features/products/masterData'
+import { activeBomForProduct, baseUnitCost, baseUnitOptions, formatUnit, normalizeUnit, unitOptions, unitsEqual, validatePurchaseConversion } from '@/features/products/masterData'
 import { useStore } from '@/store/hooks'
 import { formatMoney, round2 } from '@/utils/format'
 import type { Product, ProductInput, ProductStatus } from '@/types'
@@ -38,8 +38,8 @@ export function formFromProduct(product: Product): ProductFormValue {
     name: product.name,
     sku: product.sku,
     categoryId: product.categoryId,
-    unit: product.unit,
-    purchaseUnit: product.purchaseUnit ?? product.unit,
+    unit: normalizeUnit(product.unit) || product.unit,
+    purchaseUnit: normalizeUnit(product.purchaseUnit ?? product.unit) || product.purchaseUnit || product.unit,
     purchaseConversionQty: product.purchaseConversionQty ?? 1,
     purchaseCost: product.purchaseCost ?? product.costPrice,
     costPrice: product.costPrice,

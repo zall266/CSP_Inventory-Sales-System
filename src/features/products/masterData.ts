@@ -261,8 +261,8 @@ export function applyBomCosts(products: Product[], boms: Bom[]) {
 }
 
 export function hydrateProduct(product: Product, boms: Bom[]): Product {
-  const unit = product.unit || 'PCS'
-  const purchaseUnit = product.purchaseUnit || unit
+  const unit = normalizeUnit(product.unit) || product.unit || 'PCS'
+  const purchaseUnit = normalizeUnit(product.purchaseUnit || unit) || unit
   const same = unitsEqual(unit, purchaseUnit)
   const conversion = same ? 1 : product.purchaseConversionQty && product.purchaseConversionQty > 0 ? product.purchaseConversionQty : 1
   const purchaseCost =
