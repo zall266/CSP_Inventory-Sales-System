@@ -207,11 +207,17 @@ function Mini({ label, value }: { label: string; value: string }) {
 }
 
 function AgentPriceEditor({ productId, agentPrice }: { productId: string; agentPrice?: number }) {
+  const state = useStore()
   const api = useApi()
+  const canEdit = hasPermission(state, 'agent.manage')
   const [draft, setDraft] = useState(agentPrice === undefined || agentPrice === null ? '' : String(agentPrice))
+  if (!canEdit) return null
   const save = () => {
     const next = draft === '' ? undefined : Number(draft)
-    if (draft !== '' && !Number.isFinite(next)) return
+    if (next !== undefined && (!Number.isFinite(next) || next < 0)) {
+      api.toast('Agent Price cannot be negative.', undefined, 'warning')
+      return
+    }
     api.updateProduct(productId, { agentPrice: next })
   }
   return (
@@ -220,6 +226,7 @@ function AgentPriceEditor({ productId, agentPrice }: { productId: string; agentP
         <div className="flex gap-2">
           <Input
             type="number"
+            min={0}
             step="0.01"
             value={draft}
             onChange={(event) => setDraft(event.target.value)}

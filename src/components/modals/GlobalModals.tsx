@@ -4,7 +4,7 @@ import { useApi, useStore } from '@/store/hooks'
 import type { ExpenseCategory, PaymentMethod, ProductStatus, UserStatus } from '@/types'
 import { paymentLabel } from '@/components/ProductMark'
 import { BomModal } from '@/features/manufacturing/BomPages'
-import { assignableRoles, isOwnerRole } from '@/features/settings/permissions'
+import { assignableRoles, hasPermission, isOwnerRole } from '@/features/settings/permissions'
 
 const methods: PaymentMethod[] = ['cash', 'bank_transfer', 'duitnow', 'card', 'ewallet']
 const expenseCats: ExpenseCategory[] = ['Rent', 'Utilities', 'Salary', 'Transport', 'Packaging', 'Marketing', 'Maintenance', 'Office', 'Other']
@@ -29,6 +29,7 @@ export function GlobalModals() {
 export function ProductModal({ open, onClose }: { open: boolean; onClose: () => void }) {
   const state = useStore()
   const api = useApi()
+  const canEditAgentPrice = hasPermission(state, 'agent.manage')
   const [form, setForm] = useState({
     name: '',
     sku: '',
@@ -102,14 +103,17 @@ export function ProductModal({ open, onClose }: { open: boolean; onClose: () => 
         <Field label="Wholesale price">
           <Input type="number" step="0.01" value={form.wholesalePrice} onChange={(e) => setForm({ ...form, wholesalePrice: Number(e.target.value) })} />
         </Field>
-        <Field label="Agent price">
-          <Input
-            type="number"
-            step="0.01"
-            value={form.agentPrice}
-            onChange={(e) => setForm({ ...form, agentPrice: e.target.value === '' ? '' : Number(e.target.value) })}
-          />
-        </Field>
+        {canEditAgentPrice && (
+          <Field label="Agent price">
+            <Input
+              type="number"
+              min={0}
+              step="0.01"
+              value={form.agentPrice}
+              onChange={(e) => setForm({ ...form, agentPrice: e.target.value === '' ? '' : Number(e.target.value) })}
+            />
+          </Field>
+        )}
         <Field label="Reorder level">
           <Input type="number" value={form.reorderLevel} onChange={(e) => setForm({ ...form, reorderLevel: Number(e.target.value) })} />
         </Field>

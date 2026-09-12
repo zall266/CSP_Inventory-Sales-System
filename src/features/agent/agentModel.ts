@@ -7,8 +7,15 @@ export function configuredAgentPrice(product: { agentPrice?: number | null } | u
   if (!product) return null
   const value = product.agentPrice
   if (value === undefined || value === null) return null
-  if (!Number.isFinite(value)) return null
+  if (!Number.isFinite(value) || value < 0) return null
   return round2(value)
+}
+
+export function parseAgentPriceWrite(value: unknown) {
+  if (value === undefined || value === null || value === '') return { ok: true as const, value: undefined }
+  const amount = Number(value)
+  if (!Number.isFinite(amount) || amount < 0) return { ok: false as const }
+  return { ok: true as const, value: round2(amount) }
 }
 
 export function hasSaleEarningLedger(entries: AgentEarningLedger[], agentSaleId: string) {

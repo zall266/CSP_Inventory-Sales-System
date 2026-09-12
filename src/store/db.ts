@@ -11,7 +11,7 @@ import {
   unplacedPacks,
   WAREHOUSE_MAP_KEYS,
 } from '@/features/warehouse/warehouseModel'
-import { AGENT_PERMISSION_KEYS, agentLinkedWarehouseName, calcAgentSaleEarnings, companyWarehouses, configuredAgentPrice, hasSaleEarningLedger, isAgentWarehouseId, isCompanyWarehouseId, nextAgentWarehouseId, SALE_EARNING_KIND, saleIsAgentSale } from '@/features/agent/agentModel'
+import { AGENT_PERMISSION_KEYS, agentLinkedWarehouseName, calcAgentSaleEarnings, companyWarehouses, configuredAgentPrice, hasSaleEarningLedger, isAgentWarehouseId, isCompanyWarehouseId, nextAgentWarehouseId, parseAgentPriceWrite, SALE_EARNING_KIND, saleIsAgentSale } from '@/features/agent/agentModel'
 import { bomLinesForQty, consumptionCost, hasShortage, materialAvailability } from '@/features/manufacturing/helpers'
 import { buildSessionPlan, canEditSession, currentUser, mergePicking } from '@/features/manufacturing/sessionPlan'
 import {
@@ -494,6 +494,11 @@ function postAgentSale(input: {
     toast('Please select a product.', undefined, 'warning')
     return null
   }
+  const rawAgentPrice = product.agentPrice
+  if (rawAgentPrice !== undefined && rawAgentPrice !== null && Number.isFinite(rawAgentPrice) && rawAgentPrice < 0) {
+    toast('Agent Price cannot be negative.', undefined, 'warning')
+    return null
+  }
   const agentPrice = configuredAgentPrice(product)
   if (agentPrice === null) {
     toast('Agent Price must be configured', 'Set Agent Price on the product before creating an agent sale.', 'warning')
@@ -739,8 +744,22 @@ export const db = {
       toast('SKU already exists', `${input.sku} is already used.`, 'danger')
       return null
     }
+    let agentPrice = input.agentPrice
+    if (agentPrice !== undefined) {
+      if (!hasPermission(state, 'agent.manage')) {
+        toast('Permission denied', 'You cannot change Agent Price.', 'danger')
+        return null
+      }
+      const parsed = parseAgentPriceWrite(agentPrice)
+      if (!parsed.ok) {
+        toast('Agent Price cannot be negative.', undefined, 'warning')
+        return null
+      }
+      agentPrice = parsed.value
+    }
     const product = {
       ...input,
+      agentPrice,
       id: uid('prd'),
       accent: '#4F46E5',
     }
@@ -754,10 +773,23 @@ export const db = {
   },
 
   updateProduct(id: string, patch: Partial<ProductInput>) {
+    if (Object.prototype.hasOwnProperty.call(patch, 'agentPrice')) {
+      if (!hasPermission(state, 'agent.manage')) {
+        toast('Permission denied', 'You cannot change Agent Price.', 'danger')
+        return false
+      }
+      const parsed = parseAgentPriceWrite(patch.agentPrice)
+      if (!parsed.ok) {
+        toast('Agent Price cannot be negative.', undefined, 'warning')
+        return false
+      }
+      patch = { ...patch, agentPrice: parsed.value }
+    }
     setData({
       products: state.products.map((product) => (product.id === id ? { ...product, ...patch } : product)),
     })
     toast('Product updated')
+    return true
   },
 
   setProductStatus(id: string, status: ProductInput['status']) {
