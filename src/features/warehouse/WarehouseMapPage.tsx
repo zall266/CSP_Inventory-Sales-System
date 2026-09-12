@@ -355,6 +355,7 @@ export function WarehouseMapPage() {
                       selectedSlotId={selectedSlotId}
                       searching={Boolean(query.trim())}
                       onClick={clickSlot}
+                      onDeactivate={canManage ? () => setDeactivateId(rack.id) : undefined}
                       dnd={dnd}
                     />
                   ))}
@@ -640,6 +641,7 @@ function RackCard({
   selectedSlotId,
   searching,
   onClick,
+  onDeactivate,
   dnd,
 }: {
   location: StorageLocation
@@ -650,14 +652,21 @@ function RackCard({
   selectedSlotId: string
   searching?: boolean
   onClick: (slot: StorageSlot, occupancy?: SlotOccupancy) => void
+  onDeactivate?: () => void
   dnd: SlotDnd
 }) {
   const levels = [...new Set(slots.map((row) => row.level))].sort((a, b) => a - b)
+  const occupied = slots.some((slot) => occupancies[slot.id])
   return (
     <div className="rounded-2xl border border-slate-200 bg-white p-4">
-      <div className="mb-3 flex items-center gap-2 text-sm font-semibold text-slate-900">
-        <MapPin size={15} className="text-slate-400" />
-        {location.name}
+      <div className="mb-3 flex items-center justify-between gap-2">
+        <div className="flex items-center gap-2 text-sm font-semibold text-slate-900">
+          <MapPin size={15} className="text-slate-400" />
+          {location.name}
+        </div>
+        {onDeactivate && !occupied && (
+          <button type="button" className="text-xs text-rose-600" onClick={onDeactivate}>Deactivate</button>
+        )}
       </div>
       <div className="space-y-4">
         {levels.map((level) => {
