@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Plus } from 'lucide-react'
 import { Button, Card, FilterRow, Input, KpiCard, PageHeader, Select, StatusBadge } from '@/components/ui'
+import { isCompanyWarehouseId } from '@/features/agent/agentModel'
 import { useApi, useLookups, useStore } from '@/store/hooks'
 import { addDays, formatDate, formatMoney, inRange, PROTOTYPE_TODAY, round2, startOfDay } from '@/utils/format'
 
@@ -24,7 +25,11 @@ export function SalesPage() {
       if (customerId !== 'all' && sale.customerId !== customerId) return false
       if (status !== 'all' && sale.status !== status) return false
       if (salesperson !== 'all' && sale.salesperson !== salesperson) return false
-      if (state.ui.warehouseFilter !== 'all' && sale.warehouseId !== state.ui.warehouseFilter) return false
+      if (state.ui.warehouseFilter === 'all') {
+        if (!isCompanyWarehouseId(state.warehouses, sale.warehouseId)) return false
+      } else if (sale.warehouseId !== state.ui.warehouseFilter) {
+        return false
+      }
       return true
     })
   }, [state.sales, query, customerId, status, salesperson, state.ui.warehouseFilter, customerName])

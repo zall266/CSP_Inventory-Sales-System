@@ -6,6 +6,7 @@ import { useApi, useLookups, useStore, customerOutstanding, customerSalesTotal, 
 import { formatDate, formatMoney, formatQty } from '@/utils/format'
 import { BomDetail } from '@/features/manufacturing/BomPages'
 import { ProductionOrderDetail } from '@/features/manufacturing/ProductionOrdersPage'
+import { isCompanyWarehouseId } from '@/features/agent/agentModel'
 import { hasPermission } from '@/features/settings/permissions'
 
 export function GlobalDrawers() {
@@ -30,11 +31,11 @@ function ProductDrawer({ id, onClose }: { id: string; onClose: () => void }) {
   const item = product(id)
   const [tab, setTab] = useState('overview')
   if (!item) return null
-  const rows = state.inventory.filter((row) => row.productId === id)
+  const rows = state.inventory.filter((row) => row.productId === id && isCompanyWarehouseId(state.warehouses, row.warehouseId))
   const qty = rows.reduce((sum, row) => sum + row.qty, 0)
   const value = qty * item.costPrice
   const movements = state.stockMovements
-    .filter((m) => m.productId === id)
+    .filter((m) => m.productId === id && isCompanyWarehouseId(state.warehouses, m.warehouseId))
     .slice()
     .sort((a, b) => a.date.localeCompare(b.date) || a.id.localeCompare(b.id))
   const sales = state.sales.filter((s) => s.items.some((line) => line.productId === id))

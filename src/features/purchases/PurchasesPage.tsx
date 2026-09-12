@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Plus, Trash2 } from 'lucide-react'
 import { Button, Card, Field, FilterRow, Input, KpiCard, PageHeader, Select, StatusBadge } from '@/components/ui'
+import { companyWarehouses, isCompanyWarehouseId } from '@/features/agent/agentModel'
 import { useApi, useLookups, useStore } from '@/store/hooks'
 import { formatDate, formatMoney, round2 } from '@/utils/format'
 
@@ -14,7 +15,11 @@ export function PurchasesPage() {
   const rows = useMemo(
     () =>
       state.purchases.filter((p) => {
-        if (state.ui.warehouseFilter !== 'all' && p.warehouseId !== state.ui.warehouseFilter) return false
+        if (state.ui.warehouseFilter === 'all') {
+          if (!isCompanyWarehouseId(state.warehouses, p.warehouseId)) return false
+        } else if (p.warehouseId !== state.ui.warehouseFilter) {
+          return false
+        }
         if (query && !`${p.purchaseNo} ${p.invoiceNumber} ${supplierName(p.supplierId)}`.toLowerCase().includes(query.toLowerCase())) return false
         return true
       }),
@@ -124,7 +129,7 @@ export function NewPurchasePage() {
         <Field label="Purchase date"><Input type="date" value={date} onChange={(e) => setDate(e.target.value)} /></Field>
         <Field label="Warehouse">
           <Select value={warehouseId} onChange={(e) => setWarehouseId(e.target.value)}>
-            {state.warehouses.map((w) => <option key={w.id} value={w.id}>{w.name}</option>)}
+            {companyWarehouses(state.warehouses).map((w) => <option key={w.id} value={w.id}>{w.name}</option>)}
           </Select>
         </Field>
         <Field label="Invoice number"><Input value={invoiceNumber} onChange={(e) => setInvoiceNumber(e.target.value)} placeholder="Supplier invoice" /></Field>

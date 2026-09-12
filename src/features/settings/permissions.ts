@@ -64,6 +64,15 @@ export const PERMISSION_KEYS: PermissionKey[] = [
   'roles.permissions.manage',
   'settings.view',
   'settings.edit',
+  'agent.view',
+  'agent.manage',
+  'agent.stock.view',
+  'agent.stock.transfer',
+  'agent.sale.create',
+  'agent.sale.view',
+  'agent.earnings.view',
+  'agent.withdrawal.create',
+  'agent.withdrawal.process',
 ]
 
 export const PERMISSION_GROUPS: Array<{ id: string; label: string; keys: PermissionKey[] }> = [
@@ -128,6 +137,21 @@ export const PERMISSION_GROUPS: Array<{ id: string; label: string; keys: Permiss
   { id: 'users', label: 'Users', keys: ['users.view', 'users.create', 'users.edit', 'users.role.change', 'users.deactivate'] },
   { id: 'roles', label: 'Roles', keys: ['roles.view', 'roles.create', 'roles.edit', 'roles.deactivate', 'roles.permissions.manage'] },
   { id: 'settings', label: 'Settings', keys: ['settings.view', 'settings.edit'] },
+  {
+    id: 'agent',
+    label: 'Agent',
+    keys: [
+      'agent.view',
+      'agent.manage',
+      'agent.stock.view',
+      'agent.stock.transfer',
+      'agent.sale.create',
+      'agent.sale.view',
+      'agent.earnings.view',
+      'agent.withdrawal.create',
+      'agent.withdrawal.process',
+    ],
+  },
 ]
 
 export const PERMISSION_LABELS: Record<PermissionKey, string> = {
@@ -194,6 +218,15 @@ export const PERMISSION_LABELS: Record<PermissionKey, string> = {
   'roles.permissions.manage': 'Manage Permissions',
   'settings.view': 'View Settings',
   'settings.edit': 'Edit Settings',
+  'agent.view': 'View Agent Module',
+  'agent.manage': 'Manage Agents',
+  'agent.stock.view': 'View Agent Stock',
+  'agent.stock.transfer': 'Transfer Agent Stock',
+  'agent.sale.create': 'Create Agent Sale',
+  'agent.sale.view': 'View Agent Sales',
+  'agent.earnings.view': 'View Agent Earnings',
+  'agent.withdrawal.create': 'Request Withdrawal',
+  'agent.withdrawal.process': 'Process Withdrawal',
 }
 
 export function emptyPermissions(): RolePermissions {

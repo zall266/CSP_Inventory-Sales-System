@@ -26,6 +26,7 @@ import {
   useStore,
 } from '@/store/hooks'
 import { currentUser } from '@/features/manufacturing/sessionPlan'
+import { isCompanyWarehouseId } from '@/features/agent/agentModel'
 import { formatDate, formatMoney, formatQty, greeting, round2, startOfDay } from '@/utils/format'
 
 export function DashboardPage() {
@@ -45,7 +46,11 @@ export function DashboardPage() {
   const receivables = outstandingReceivables(state)
   const payables = outstandingPayables(state)
 
-  const stockRows = state.inventory.filter((row) => warehouse === 'all' || row.warehouseId === warehouse)
+  const stockRows = state.inventory.filter((row) =>
+    warehouse === 'all'
+      ? isCompanyWarehouseId(state.warehouses, row.warehouseId)
+      : row.warehouseId === warehouse,
+  )
   const low = stockRows.filter((row) => {
     const p = product(row.productId)
     return row.qty > 0 && p && row.qty <= p.reorderLevel
@@ -60,11 +65,19 @@ export function DashboardPage() {
       const key = cursor.toISOString().slice(0, 10)
       const daySales = state.sales
         .filter((s) => s.status !== 'voided' && s.date.slice(0, 10) === key)
-        .filter((s) => warehouse === 'all' || s.warehouseId === warehouse)
+        .filter((s) =>
+          warehouse === 'all'
+            ? isCompanyWarehouseId(state.warehouses, s.warehouseId)
+            : s.warehouseId === warehouse,
+        )
         .reduce((sum, s) => sum + s.total, 0)
       const dayPurchases = state.purchases
         .filter((p) => p.date.slice(0, 10) === key)
-        .filter((p) => warehouse === 'all' || p.warehouseId === warehouse)
+        .filter((p) =>
+          warehouse === 'all'
+            ? isCompanyWarehouseId(state.warehouses, p.warehouseId)
+            : p.warehouseId === warehouse,
+        )
         .reduce((sum, p) => sum + p.total, 0)
       days.push({
         label: cursor.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' }),

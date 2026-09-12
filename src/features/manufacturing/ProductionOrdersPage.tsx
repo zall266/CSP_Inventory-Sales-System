@@ -3,6 +3,7 @@ import { Link, useNavigate, useParams } from 'react-router-dom'
 import { Plus } from 'lucide-react'
 import { Button, Card, ConfirmDialog, Field, FilterRow, Input, PageHeader, Select, StatusBadge, Textarea } from '@/components/ui'
 import { ProductMark } from '@/components/ProductMark'
+import { companyWarehouses, isCompanyWarehouseId } from '@/features/agent/agentModel'
 import { useApi, useLookups, useStore } from '@/store/hooks'
 import { formatDate, formatDateTime, formatMoney, formatQty, round2 } from '@/utils/format'
 import type { ProductionOrder, ProductionStatus, WastageKind } from '@/types'
@@ -30,7 +31,11 @@ export function ProductionOrdersPage() {
 
   const rows = useMemo(() => {
     return state.productionOrders.filter((order) => {
-      if (state.ui.warehouseFilter !== 'all' && order.warehouseId !== state.ui.warehouseFilter) return false
+      if (state.ui.warehouseFilter === 'all') {
+        if (!isCompanyWarehouseId(state.warehouses, order.warehouseId)) return false
+      } else if (order.warehouseId !== state.ui.warehouseFilter) {
+        return false
+      }
       if (status !== 'all' && order.status !== status) return false
       if (productId !== 'all' && order.productId !== productId) return false
       if (query && !`${order.orderNo} ${order.batchNo} ${productName(order.productId)} ${order.operator}`.toLowerCase().includes(query.toLowerCase())) return false
@@ -67,7 +72,7 @@ export function ProductionOrdersPage() {
         </Select>
         <Select value={state.ui.warehouseFilter} onChange={(e) => api.setWarehouseFilter(e.target.value)}>
           <option value="all">All warehouses</option>
-          {state.warehouses.map((w) => <option key={w.id} value={w.id}>{w.name}</option>)}
+          {companyWarehouses(state.warehouses).map((w) => <option key={w.id} value={w.id}>{w.name}</option>)}
         </Select>
       </FilterRow>
       <Card>
@@ -175,7 +180,7 @@ export function NewProductionOrderPage() {
           </Field>
           <Field label="Warehouse">
             <Select value={warehouseId} onChange={(e) => setWarehouseId(e.target.value)}>
-              {state.warehouses.map((w) => <option key={w.id} value={w.id}>{w.name}</option>)}
+              {companyWarehouses(state.warehouses).map((w) => <option key={w.id} value={w.id}>{w.name}</option>)}
             </Select>
           </Field>
           <Field label="Planned quantity">

@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react'
 import { Button, Card, ConfirmDialog, Field, FilterRow, Input, PageHeader, Select } from '@/components/ui'
 import { movementLabel } from '@/components/ProductMark'
+import { companyWarehouses, isCompanyWarehouseId } from '@/features/agent/agentModel'
 import { useApi, useLookups, useStore } from '@/store/hooks'
 import { formatDate, formatQty } from '@/utils/format'
 import type { AdjustmentType } from '@/types'
@@ -15,7 +16,11 @@ export function StockMovementsPage() {
   const users = [...new Set(state.stockMovements.map((m) => m.user))]
   const rows = useMemo(() => {
     return state.stockMovements.filter((m) => {
-      if (state.ui.warehouseFilter !== 'all' && m.warehouseId !== state.ui.warehouseFilter) return false
+      if (state.ui.warehouseFilter === 'all') {
+        if (!isCompanyWarehouseId(state.warehouses, m.warehouseId)) return false
+      } else if (m.warehouseId !== state.ui.warehouseFilter) {
+        return false
+      }
       if (type !== 'all' && m.type !== type) return false
       if (user !== 'all' && m.user !== user) return false
       if (query && !`${m.reference} ${productName(m.productId)}`.toLowerCase().includes(query.toLowerCase())) return false
@@ -36,7 +41,7 @@ export function StockMovementsPage() {
         </Select>
         <Select value={state.ui.warehouseFilter} onChange={(e) => api.setWarehouseFilter(e.target.value)}>
           <option value="all">All warehouses</option>
-          {state.warehouses.map((w) => <option key={w.id} value={w.id}>{w.name}</option>)}
+          {companyWarehouses(state.warehouses).map((w) => <option key={w.id} value={w.id}>{w.name}</option>)}
         </Select>
         <Select value={user} onChange={(e) => setUser(e.target.value)}>
           <option value="all">All users</option>
@@ -101,7 +106,7 @@ export function StockAdjustmentPage() {
       <Card className="space-y-4 p-6">
         <Field label="Warehouse">
           <Select value={warehouseId} onChange={(e) => setWarehouseId(e.target.value)}>
-            {state.warehouses.map((w) => <option key={w.id} value={w.id}>{w.name}</option>)}
+            {companyWarehouses(state.warehouses).map((w) => <option key={w.id} value={w.id}>{w.name}</option>)}
           </Select>
         </Field>
         <Field label="Product">
@@ -167,12 +172,12 @@ export function StockTransferPage() {
         <div className="grid gap-4 sm:grid-cols-2">
           <Field label="From warehouse">
             <Select value={fromWarehouseId} onChange={(e) => setFrom(e.target.value)}>
-              {state.warehouses.map((w) => <option key={w.id} value={w.id}>{w.name}</option>)}
+              {companyWarehouses(state.warehouses).map((w) => <option key={w.id} value={w.id}>{w.name}</option>)}
             </Select>
           </Field>
           <Field label="To warehouse">
             <Select value={toWarehouseId} onChange={(e) => setTo(e.target.value)}>
-              {state.warehouses.map((w) => <option key={w.id} value={w.id}>{w.name}</option>)}
+              {companyWarehouses(state.warehouses).map((w) => <option key={w.id} value={w.id}>{w.name}</option>)}
             </Select>
           </Field>
         </div>
@@ -227,7 +232,7 @@ export function StockCountPage() {
       />
       <div className="mb-4 max-w-xs">
         <Select value={warehouseId} onChange={(e) => { setWarehouseId(e.target.value); setCounts({}) }}>
-          {state.warehouses.map((w) => <option key={w.id} value={w.id}>{w.name}</option>)}
+          {companyWarehouses(state.warehouses).map((w) => <option key={w.id} value={w.id}>{w.name}</option>)}
         </Select>
       </div>
       <Card>

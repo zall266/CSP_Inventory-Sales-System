@@ -18,6 +18,7 @@ import {
   balanceProductionDate,
   formatProductionDate,
 } from '@/features/warehouse/warehouseModel'
+import { companyMapWarehouseId } from '@/features/agent/agentModel'
 import { useApi, useStore } from '@/store/hooks'
 import { formatDateTime, formatQty } from '@/utils/format'
 import type { BalanceUsageLog, BalanceUsageReason, PlacementLog, Product, SlotOccupancy, StorageLocation, StorageSlot } from '@/types'
@@ -39,7 +40,7 @@ type SlotDnd = {
 export function WarehouseMapPage() {
   const state = useStore()
   const api = useApi()
-  const warehouseId = state.ui.warehouseFilter === 'all' ? 'wh-main' : state.ui.warehouseFilter
+  const warehouseId = companyMapWarehouseId(state)
   const canView = hasPermission(state, 'warehouse_map.view')
   const canPlace = hasPermission(state, 'warehouse_map.putaway')
   const canMove = hasPermission(state, 'warehouse_map.move')

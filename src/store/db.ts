@@ -9,7 +9,9 @@ import {
   migrateFinishedGoodsStorage,
   seedWarehouseOccupancy,
   unplacedPacks,
+  WAREHOUSE_MAP_KEYS,
 } from '@/features/warehouse/warehouseModel'
+import { AGENT_PERMISSION_KEYS, companyWarehouses, isAgentWarehouseId, isCompanyWarehouseId } from '@/features/agent/agentModel'
 import { bomLinesForQty, consumptionCost, hasShortage, materialAvailability } from '@/features/manufacturing/helpers'
 import { buildSessionPlan, canEditSession, currentUser, mergePicking } from '@/features/manufacturing/sessionPlan'
 import {
@@ -135,7 +137,7 @@ function hydrateData(data: AppData): AppData {
       const raw = data.settings?.roleMatrix?.[role.id] ?? {}
       const normalized = normalizePermissions(raw)
       const defaults = defaultPermissionsForLegacy(role.legacyRole)
-      for (const key of ['warehouse_map.view', 'warehouse_map.putaway', 'warehouse_map.move', 'warehouse_map.layout.edit', 'warehouse_map.location.manage', 'warehouse_map.balance.use'] as const) {
+      for (const key of [...WAREHOUSE_MAP_KEYS, ...AGENT_PERMISSION_KEYS]) {
         if (raw[key] === undefined) normalized[key] = defaults[key]
       }
       return [role.id, normalized]
@@ -152,6 +154,22 @@ function hydrateData(data: AppData): AppData {
   )
   return {
     ...data,
+    warehouses: (data.warehouses ?? []).map((warehouse) => ({
+      ...warehouse,
+      kind: warehouse.kind === 'agent' ? 'agent' : 'company',
+    })),
+    products: (data.products ?? []).map((product) => ({
+      ...product,
+      agentPrice: product.agentPrice,
+    })),
+    sales: (data.sales ?? []).map((sale) => ({
+      ...sale,
+      shipping: sale.shipping ?? 0,
+    })),
+    agents: data.agents ?? [],
+    agentSales: data.agentSales ?? [],
+    agentEarningLedgers: data.agentEarningLedgers ?? [],
+    agentWithdrawals: data.agentWithdrawals ?? [],
     quotations: data.quotations ?? [],
     deliveryOrders: data.deliveryOrders ?? [],
     documentAuditLogs: data.documentAuditLogs ?? [],
@@ -438,7 +456,9 @@ export const db = {
   getProductQty(productId: string, warehouseId?: string) {
     if (warehouseId && warehouseId !== 'all') return getQty(productId, warehouseId)
     return round2(
-      state.inventory.filter((row) => row.productId === productId).reduce((sum, row) => sum + row.qty, 0),
+      state.inventory
+        .filter((row) => row.productId === productId && isCompanyWarehouseId(state.warehouses, row.warehouseId))
+        .reduce((sum, row) => sum + row.qty, 0),
     )
   },
 
@@ -460,7 +480,7 @@ export const db = {
     }
     const inventory = [
       ...state.inventory,
-      ...state.warehouses.map((warehouse) => ({ productId: product.id, warehouseId: warehouse.id, qty: 0 })),
+      ...companyWarehouses(state.warehouses).map((warehouse) => ({ productId: product.id, warehouseId: warehouse.id, qty: 0 })),
     ]
     setData({ products: [product, ...state.products], inventory })
     toast('Product added', `${product.name} is now in the catalogue.`)
@@ -1250,7 +1270,8 @@ export const db = {
     const subtotal = round2(items.reduce((sum, item) => sum + item.total, 0))
     const discount = input.discount ?? 0
     const tax = input.tax ?? 0
-    const total = round2(subtotal - discount + tax)
+    const shipping = input.shipping ?? 0
+    const total = round2(subtotal - discount + tax + shipping)
     const paidAmount = Math.min(input.paidAmount ?? 0, total)
     const balance = round2(total - paidAmount)
     const date = input.date ?? nowIso()
@@ -1268,6 +1289,7 @@ export const db = {
       subtotal,
       discount,
       tax,
+      shipping,
       total,
       paid: paidAmount,
       balance,
@@ -2976,12 +2998,17 @@ export const db = {
       toast('Location name is required', undefined, 'warning')
       return null
     }
+    const warehouseId = input.warehouseId || state.settings.defaultWarehouseId || 'wh-main'
+    if (isAgentWarehouseId(state.warehouses, warehouseId)) {
+      toast('Agent warehouses cannot have storage locations', undefined, 'warning')
+      return null
+    }
     const id = uid('loc')
     const location = {
       id,
       name,
       type: input.type,
-      warehouseId: input.warehouseId || state.settings.defaultWarehouseId || 'wh-main',
+      warehouseId,
       active: true,
       createdAt: nowIso(),
       updatedAt: nowIso(),
@@ -3005,12 +3032,17 @@ export const db = {
       toast('Rack name is required', undefined, 'warning')
       return null
     }
+    const warehouseId = input.warehouseId || state.settings.defaultWarehouseId || 'wh-main'
+    if (isAgentWarehouseId(state.warehouses, warehouseId)) {
+      toast('Agent warehouses cannot have storage locations', undefined, 'warning')
+      return null
+    }
     const id = uid('loc')
     const location = {
       id,
       name,
       type: 'RACK' as const,
-      warehouseId: input.warehouseId || state.settings.defaultWarehouseId || 'wh-main',
+      warehouseId,
       active: true,
       createdAt: nowIso(),
       updatedAt: nowIso(),

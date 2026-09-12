@@ -15,6 +15,7 @@ import { formatDate, initials, PROTOTYPE_TODAY } from '@/utils/format'
 import { Dropdown, MenuItem } from '@/components/ui'
 import { currentUser } from '@/features/manufacturing/sessionPlan'
 import { displayRoleName } from '@/features/settings/permissions'
+import { companyWarehouses } from '@/features/agent/agentModel'
 
 export function Header() {
   const state = useStore()
@@ -189,7 +190,7 @@ export function Header() {
         className="hidden h-10 rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-700 md:block"
       >
         <option value="all">All warehouses</option>
-        {state.warehouses.map((warehouse) => (
+        {companyWarehouses(state.warehouses).map((warehouse) => (
           <option key={warehouse.id} value={warehouse.id}>
             {warehouse.name}
           </option>

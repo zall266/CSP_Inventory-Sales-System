@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react'
 import { Bar, BarChart, CartesianGrid, Cell, Pie, PieChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 import { Button, Card, FilterRow, KpiCard, PageHeader, Select } from '@/components/ui'
+import { isCompanyWarehouseId } from '@/features/agent/agentModel'
 import { filteredExpenses, filteredPurchases, filteredSales, inventoryValue, saleCogs, useLookups, useStore } from '@/store/hooks'
 import { downloadCsv, formatDate, formatMoney, formatQty, printPage, round2 } from '@/utils/format'
 
@@ -116,7 +117,11 @@ export function InventoryReportPage() {
   const state = useStore()
   const { categoryName, warehouseName } = useLookups()
   const warehouse = state.ui.warehouseFilter
-  const rows = state.inventory.filter((r) => warehouse === 'all' || r.warehouseId === warehouse)
+  const rows = state.inventory.filter((r) =>
+    warehouse === 'all'
+      ? isCompanyWarehouseId(state.warehouses, r.warehouseId)
+      : r.warehouseId === warehouse,
+  )
   return (
     <div>
       <PageHeader title="Inventory Reports" subtitle="On-hand quantity and inventory value." actions={<ReportToolbar onExport={() => downloadCsv('inventory-report.csv', [['Product','Warehouse','Qty','Value'], ...rows.map((r) => {

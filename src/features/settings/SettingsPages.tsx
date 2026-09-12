@@ -1,5 +1,6 @@
 import { useRef, useState } from 'react'
 import { Button, Card, Field, Input, PageHeader, Select, Textarea, Toggle } from '@/components/ui'
+import { companyWarehouses } from '@/features/agent/agentModel'
 import { useApi, useStore } from '@/store/hooks'
 import type { PaymentMethod } from '@/types'
 
@@ -133,7 +134,7 @@ export function InventorySettingsPage() {
       <Card className="space-y-5 p-6">
         <Field label="Default warehouse">
           <Select value={s.defaultWarehouseId} onChange={(e) => api.updateSettings({ defaultWarehouseId: e.target.value })}>
-            {state.warehouses.map((w) => <option key={w.id} value={w.id}>{w.name}</option>)}
+            {companyWarehouses(state.warehouses).map((w) => <option key={w.id} value={w.id}>{w.name}</option>)}
           </Select>
         </Field>
         <Toggle checked={s.allowNegativeStock} onChange={(allowNegativeStock) => api.updateSettings({ allowNegativeStock })} label="Allow negative stock" />

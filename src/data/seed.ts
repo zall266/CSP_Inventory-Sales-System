@@ -72,9 +72,9 @@ function totals(items: LineItem[], extra?: { discount?: number; tax?: number; sh
 
 export function createSeedData(): AppData {
   const warehouses = [
-    { id: 'wh-main', name: 'Main Warehouse', code: 'MAIN' },
-    { id: 'wh-shop', name: 'Shop', code: 'SHOP' },
-    { id: 'wh-outlet', name: 'Outlet 1', code: 'OUT1' },
+    { id: 'wh-main', name: 'Main Warehouse', code: 'MAIN', kind: 'company' as const },
+    { id: 'wh-shop', name: 'Shop', code: 'SHOP', kind: 'company' as const },
+    { id: 'wh-outlet', name: 'Outlet 1', code: 'OUT1', kind: 'company' as const },
   ]
 
   const categories = [
@@ -365,6 +365,7 @@ export function createSeedData(): AppData {
       subtotal: t.subtotal,
       discount: t.discount,
       tax: t.tax,
+      shipping: t.shipping,
       total: t.total,
       paid: Math.min(paid, t.total),
       balance: round2(t.total - Math.min(paid, t.total)),
@@ -1137,6 +1138,10 @@ export function createSeedData(): AppData {
     customers,
     suppliers,
     sales,
+    agents: [],
+    agentSales: [],
+    agentEarningLedgers: [],
+    agentWithdrawals: [],
     quotations: [],
     deliveryOrders: [],
     documentAuditLogs: [],

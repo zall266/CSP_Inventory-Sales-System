@@ -2,6 +2,7 @@ import { useSyncExternalStore } from 'react'
 import { db } from '@/store/db'
 import type { AppState } from '@/types'
 import { addDays, inRange, PROTOTYPE_TODAY, round2, startOfDay } from '@/utils/format'
+import { isCompanyWarehouseId } from '@/features/agent/agentModel'
 
 export function useStore(): AppState {
   return useSyncExternalStore(db.subscribe, db.getSnapshot, db.getSnapshot)
@@ -38,7 +39,11 @@ export function useLookups() {
 export function inventoryValue(state: AppState, warehouseId = 'all') {
   return round2(
     state.inventory.reduce((sum, row) => {
-      if (warehouseId !== 'all' && row.warehouseId !== warehouseId) return sum
+      if (warehouseId === 'all') {
+        if (!isCompanyWarehouseId(state.warehouses, row.warehouseId)) return sum
+      } else if (row.warehouseId !== warehouseId) {
+        return sum
+      }
       const cost = state.products.find((p) => p.id === row.productId)?.costPrice ?? 0
       return sum + row.qty * cost
     }, 0),
@@ -100,7 +105,11 @@ export function filteredSales(state: AppState) {
   return state.sales.filter((sale) => {
     if (sale.status === 'voided') return false
     if (!inRange(sale.date, from, to)) return false
-    if (warehouse !== 'all' && sale.warehouseId !== warehouse) return false
+    if (warehouse === 'all') {
+      if (!isCompanyWarehouseId(state.warehouses, sale.warehouseId)) return false
+    } else if (sale.warehouseId !== warehouse) {
+      return false
+    }
     return true
   })
 }
@@ -110,7 +119,11 @@ export function filteredPurchases(state: AppState) {
   const warehouse = state.ui.warehouseFilter
   return state.purchases.filter((purchase) => {
     if (!inRange(purchase.date, from, to)) return false
-    if (warehouse !== 'all' && purchase.warehouseId !== warehouse) return false
+    if (warehouse === 'all') {
+      if (!isCompanyWarehouseId(state.warehouses, purchase.warehouseId)) return false
+    } else if (purchase.warehouseId !== warehouse) {
+      return false
+    }
     return true
   })
 }
@@ -125,7 +138,11 @@ export function filteredProductionOrders(state: AppState) {
   const warehouse = state.ui.warehouseFilter
   return state.productionOrders.filter((order) => {
     if (!inRange(order.date, from, to)) return false
-    if (warehouse !== 'all' && order.warehouseId !== warehouse) return false
+    if (warehouse === 'all') {
+      if (!isCompanyWarehouseId(state.warehouses, order.warehouseId)) return false
+    } else if (order.warehouseId !== warehouse) {
+      return false
+    }
     return true
   })
 }
