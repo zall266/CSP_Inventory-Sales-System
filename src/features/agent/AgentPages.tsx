@@ -91,6 +91,26 @@ function AgentTransferModal({
 
   const submit = (event: FormEvent) => {
     event.preventDefault()
+    if (!fromWarehouseId) {
+      api.toast('Select a source warehouse', undefined, 'warning')
+      return
+    }
+    if (!toAgentId) {
+      api.toast('Select an agent', undefined, 'warning')
+      return
+    }
+    if (!productId) {
+      api.toast('Select a product', undefined, 'warning')
+      return
+    }
+    if (!(qty > 0)) {
+      api.toast('Enter a quantity', undefined, 'warning')
+      return
+    }
+    if (qty > available) {
+      api.toast('Insufficient stock.', `Available: ${available}.`, 'danger')
+      return
+    }
     setConfirm(true)
   }
 
@@ -162,7 +182,7 @@ function AgentTransferModal({
         open={confirm}
         onClose={() => setConfirm(false)}
         title="Confirm transfer"
-        message={`Transfer:\n${formatQty(qty)} ${product?.unit ?? ''}\n${product?.name ?? 'Product'}\n\nFrom:\n${fromWarehouse?.name ?? '—'}\n\nTo:\n${toAgent?.name ?? '—'}`}
+        message={`Transfer:\n${formatQty(qty)} ${product?.unit ?? ''}\n${product?.name ?? 'Product'}\n\nFrom:\n${fromWarehouse?.name ?? '—'}\n\nTo:\n${toAgent ? (state.warehouses.find((warehouse) => warehouse.id === toAgent.warehouseId)?.name ?? toAgent.name) : '—'}`}
         confirmLabel="Confirm Transfer"
         onConfirm={confirmTransfer}
       />
