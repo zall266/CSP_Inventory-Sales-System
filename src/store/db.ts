@@ -68,8 +68,9 @@ import type {
   UserAuditLog,
   UserStatus,
   WastageKind,
+  BalanceUsageReason,
 } from '@/types'
-import { nextDatedDocNo, nextDocNo, PROTOTYPE_TODAY, round2, stockStatus, uid } from '@/utils/format'
+import { nextDatedDocNo, nextDocNo, PROTOTYPE_TODAY, formatQty, round2, stockStatus, uid } from '@/utils/format'
 
 const STORAGE_KEY = 'stockflow-prototype-v8'
 
@@ -124,7 +125,7 @@ function hydrateData(data: AppData): AppData {
       const raw = data.settings?.roleMatrix?.[role.id] ?? {}
       const normalized = normalizePermissions(raw)
       const defaults = defaultPermissionsForLegacy(role.legacyRole)
-      for (const key of ['warehouse_map.view', 'warehouse_map.putaway', 'warehouse_map.move', 'warehouse_map.layout.edit', 'warehouse_map.location.manage'] as const) {
+      for (const key of ['warehouse_map.view', 'warehouse_map.putaway', 'warehouse_map.move', 'warehouse_map.layout.edit', 'warehouse_map.location.manage', 'warehouse_map.balance.use'] as const) {
         if (raw[key] === undefined) normalized[key] = defaults[key]
       }
       return [role.id, normalized]
@@ -139,6 +140,7 @@ function hydrateData(data: AppData): AppData {
     storageSlots: data.storageSlots?.length ? data.storageSlots : seedLayout.storageSlots,
     slotOccupancies: data.slotOccupancies ?? (data.storageLocations?.length ? [] : seedOccupancy.slotOccupancies),
     placementLogs: data.placementLogs ?? (data.storageLocations?.length ? [] : seedOccupancy.placementLogs),
+    balanceUsageLogs: data.balanceUsageLogs ?? [],
     settings: {
       ...data.settings,
       legalName: data.settings.legalName ?? '',
@@ -2696,6 +2698,10 @@ export const db = {
       toast('Choose a storage position', undefined, 'warning')
       return false
     }
+    if (location.type === 'DISPLAY') {
+      toast('Display is sale-ready stock', 'Place cartons on a rack first, then top up Display from the rack.', 'warning')
+      return false
+    }
     const existing = state.slotOccupancies.find((row) => row.slotId === slot.id)
     if (existing) {
       toast('Slot occupied', 'Choose an empty position.', 'warning')
@@ -2931,6 +2937,54 @@ export const db = {
       storageSlots: state.storageSlots.map((row) => (row.locationId === id ? { ...row, active: false } : row)),
     })
     toast('Location deactivated', location.name)
+    return true
+  },
+
+  useProductionBalance(input: { balanceId: string; qty: number; reason: BalanceUsageReason; notes?: string }) {
+    if (!hasPermission(state, 'warehouse_map.balance.use')) {
+      toast('Permission denied', 'You cannot use production balance.', 'danger')
+      return false
+    }
+    const qty = round2(input.qty)
+    if (qty <= 0) {
+      toast('Enter a quantity', undefined, 'warning')
+      return false
+    }
+    const balance = state.productionBalances.find((row) => row.id === input.balanceId)
+    if (!balance || balance.status !== 'available' || balance.quantity <= 0) {
+      toast('No available balance', undefined, 'warning')
+      return false
+    }
+    if (qty > balance.quantity) {
+      toast('Quantity exceeds available balance.', `${formatQty(balance.quantity)}${balance.unit} available.`, 'warning')
+      return false
+    }
+    const remaining = round2(balance.quantity - qty)
+    const actor = currentUser(state)
+    const log = {
+      id: uid('bu'),
+      balanceId: balance.id,
+      productId: balance.productId,
+      quantity: qty,
+      unit: balance.unit,
+      productionDate: balance.productionDate,
+      productionReference: balance.productionReference,
+      container: balance.container,
+      location: balance.location,
+      reason: input.reason,
+      notes: input.notes?.trim() ?? '',
+      performedBy: actor.name,
+      performedAt: nowIso(),
+    }
+    setData({
+      productionBalances: state.productionBalances.map((row) =>
+        row.id === balance.id
+          ? { ...row, quantity: remaining, status: remaining > 0 ? 'available' : 'consumed' }
+          : row,
+      ),
+      balanceUsageLogs: [log, ...(state.balanceUsageLogs ?? [])],
+    })
+    toast('Balance used', `${qty}${balance.unit} recorded. Inventory packs unchanged.`)
     return true
   },
 }

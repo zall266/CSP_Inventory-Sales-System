@@ -49,6 +49,7 @@ export type DatePreset = '7d' | '30d' | '90d' | 'custom'
 export type StorageLocationType = 'RACK' | 'DISPLAY' | 'PALLET' | 'FLOOR' | 'BALANCE_AREA'
 export type StorageFace = 'FRONT' | 'BACK' | 'NONE'
 export type PlacementAction = 'PLACED' | 'MOVED' | 'TOPPED_UP' | 'EMPTIED'
+export type BalanceUsageReason = 'Content' | 'Sample' | 'R&D / Testing' | 'Internal Use' | 'Waste' | 'Other'
 
 export type Warehouse = {
   id: string
@@ -128,6 +129,22 @@ export type PlacementLog = {
   performedBy: string
   performedAt: string
   reason: string
+}
+
+export type BalanceUsageLog = {
+  id: string
+  balanceId: string
+  productId: string
+  quantity: number
+  unit: string
+  productionDate: string
+  productionReference: string
+  container: string
+  location: string
+  reason: BalanceUsageReason
+  notes: string
+  performedBy: string
+  performedAt: string
 }
 
 export type Batch = {
@@ -642,6 +659,7 @@ export type PermissionKey =
   | 'warehouse_map.move'
   | 'warehouse_map.layout.edit'
   | 'warehouse_map.location.manage'
+  | 'warehouse_map.balance.use'
   | 'manufacturing.view'
   | 'manufacturing.create'
   | 'manufacturing.edit'
@@ -776,6 +794,7 @@ export type AppData = {
   storageSlots: StorageSlot[]
   slotOccupancies: SlotOccupancy[]
   placementLogs: PlacementLog[]
+  balanceUsageLogs: BalanceUsageLog[]
 }
 
 export type AppState = AppData & {
