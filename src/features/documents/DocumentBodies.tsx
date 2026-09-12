@@ -61,6 +61,7 @@ export function QuotationA4({ state, quotation }: { state: AppState; quotation: 
       </table>
       <div className="a4-avoid-break ml-auto mt-4 w-56 space-y-1 text-[11px]">
         <Row label="Subtotal" value={money(quotation.subtotal)} />
+        {quotation.shipping > 0 && <Row label="Delivery" value={money(quotation.shipping)} />}
         <Row label="Discount" value={money(quotation.discount)} />
         <Row label="Tax" value={money(quotation.tax)} />
         <Row label="Grand total" value={money(quotation.total)} strong />

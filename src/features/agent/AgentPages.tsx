@@ -29,6 +29,7 @@ import {
   configuredAgentPrice,
   isAllowedWithdrawalReceiptFile,
   linkedAgentForUser,
+  currentLinkedAgent,
   saleEarningForAgentSale,
   snapshotAgentBankDetails,
   sortAgentWithdrawals,
@@ -36,6 +37,7 @@ import {
   withdrawalsForAgent,
 } from '@/features/agent/agentModel'
 import { hasPermission } from '@/features/settings/permissions'
+import { productIsSellable } from '@/features/products/masterData'
 import { useApi, useLookups, useStore } from '@/store/hooks'
 import { formatDate, formatDateTime, formatMoney, formatQty, round2 } from '@/utils/format'
 import type { Agent, AgentInput, AppState, PaymentMethod, Product } from '@/types'
@@ -100,7 +102,7 @@ function AgentSaleModal({
   const state = useStore()
   const api = useApi()
   const agent = (state.agents ?? []).find((item) => item.id === agentId)
-  const products = state.products.filter((product) => product.status === 'active')
+  const products = state.products.filter((product) => productIsSellable(product) && configuredAgentPrice(product) !== null)
   const stockedId = products.find((product) => api.getProductQty(product.id, agent?.warehouseId) > 0)?.id
   const defaultProductId = stockedId ?? products.find((product) => product.id === 'p-pack-mt')?.id ?? products[0]?.id ?? ''
   const methods = state.settings.enabledPaymentMethods
@@ -855,9 +857,10 @@ export function AgentsPage() {
   const state = useStore()
   const api = useApi()
   const navigate = useNavigate()
-  const canView = hasPermission(state, 'agent.view') || hasPermission(state, 'agent.manage')
+  const linked = currentLinkedAgent(state)
+  const canView = hasPermission(state, 'agent.view') || hasPermission(state, 'agent.manage') || Boolean(linked)
   const canManage = hasPermission(state, 'agent.manage')
-  const canStock = hasPermission(state, 'agent.stock.view') || canManage
+  const canStock = hasPermission(state, 'agent.stock.view') || canManage || Boolean(linked)
   const canProcess = canProcessAgentWithdrawals(state)
   const [query, setQuery] = useState('')
   const [queueFilter, setQueueFilter] = useState<'all' | 'requested' | 'paid' | 'cancelled'>('requested')
@@ -870,10 +873,12 @@ export function AgentsPage() {
   const agents = state.agents ?? []
   const rows = useMemo(
     () =>
-      agents.filter((agent) =>
-        `${agent.name} ${agent.code} ${agent.bankAccount}`.toLowerCase().includes(query.toLowerCase()),
-      ),
-    [agents, query],
+      agents
+        .filter((agent) => (linked ? agent.id === linked.id : true))
+        .filter((agent) =>
+          `${agent.name} ${agent.code} ${agent.bankAccount}`.toLowerCase().includes(query.toLowerCase()),
+        ),
+    [agents, query, linked],
   )
   const linkedUserIds = new Set(agents.map((agent) => agent.userId).filter(Boolean))
   const formUsers = state.users.filter((user) => {
@@ -1063,11 +1068,12 @@ export function AgentDetailPage() {
   const state = useStore()
   const api = useApi()
   const { warehouseName } = useLookups()
-  const canView = hasPermission(state, 'agent.view') || hasPermission(state, 'agent.manage')
+  const linked = currentLinkedAgent(state)
+  const canView = hasPermission(state, 'agent.view') || hasPermission(state, 'agent.manage') || Boolean(linked)
   const canManage = hasPermission(state, 'agent.manage')
-  const canStock = hasPermission(state, 'agent.stock.view') || canManage
+  const canStock = hasPermission(state, 'agent.stock.view') || canManage || Boolean(linked && linked.id === id)
   const canTransfer = hasPermission(state, 'agent.stock.transfer')
-  const canSale = hasPermission(state, 'agent.sale.create')
+  const canSale = hasPermission(state, 'agent.sale.create') || Boolean(linked && linked.id === id)
   const agent = (state.agents ?? []).find((item) => item.id === id)
   const warehouse = state.warehouses.find((item) => item.id === agent?.warehouseId)
   const linkedUser = state.users.find((user) => user.id === agent?.userId)
@@ -1081,6 +1087,7 @@ export function AgentDetailPage() {
 
   if (!canView) return <PermissionDenied subtitle="You do not have access to Agent." />
   if (!agent) return <PageHeader title="Agent" subtitle="Not found." />
+  if (linked && linked.id !== agent.id) return <PermissionDenied subtitle="You can only view your own Agent record." />
 
   const canWithdraw =
     agent.status === 'active' &&

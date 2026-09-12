@@ -279,6 +279,7 @@ export function hydrateProduct(product: Product, boms: Bom[]): Product {
     purchaseConversionQty: conversion,
     purchaseCost,
     costSource,
+    sellable: product.sellable !== false,
   }
 }
 
@@ -307,4 +308,10 @@ export function productIsUsed(
 
 export function formatUnit(unit: string | undefined) {
   return normalizeUnit(unit) || unit || '—'
+}
+
+export function productIsSellable(product: Pick<Product, 'sellable' | 'status'> | undefined) {
+  if (!product) return false
+  if (product.status && product.status !== 'active') return false
+  return product.sellable !== false
 }

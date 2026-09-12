@@ -1,19 +1,27 @@
 import { Trash2 } from 'lucide-react'
 import { Button, Select } from '@/components/ui'
-import type { AppState } from '@/types'
+import type { AppState, Product } from '@/types'
 import { lineAmount } from './documentModel'
 import { formatMoney, round2 } from '@/utils/format'
+import { productIsSellable } from '@/features/products/masterData'
+import { configuredAgentPrice, currentLinkedAgent } from '@/features/agent/agentModel'
 
 export type DraftLine = { productId: string; description: string; qty: number; unit: string; price: number; discount: number }
 
-export function emptyLine(state: AppState): DraftLine {
-  const product = state.products.find((item) => item.status === 'active') ?? state.products[0]
+export function catalogProducts(state: AppState, extra?: Product[]) {
+  const list = extra ?? state.products.filter((item) => productIsSellable(item))
+  return list
+}
+
+export function emptyLine(state: AppState, extra?: Product[]): DraftLine {
+  const product = catalogProducts(state, extra)[0] ?? state.products[0]
+  const agentPrice = currentLinkedAgent(state) ? configuredAgentPrice(product) : null
   return {
     productId: product?.id ?? '',
     description: product?.name ?? '',
     qty: 1,
     unit: product?.unit ?? 'pcs',
-    price: product?.sellingPrice ?? 0,
+    price: product ? (agentPrice !== null ? Math.max(product.sellingPrice, agentPrice) : product.sellingPrice) : 0,
     discount: 0,
   }
 }
@@ -23,12 +31,16 @@ export function LineEditor({
   lines,
   onChange,
   withPrices = true,
+  products,
 }: {
   state: AppState
   lines: DraftLine[]
   onChange: (lines: DraftLine[]) => void
   withPrices?: boolean
+  products?: Product[]
 }) {
+  const options = catalogProducts(state, products)
+  const showDiscount = withPrices && !currentLinkedAgent(state)
   const patch = (index: number, next: Partial<DraftLine>) => {
     onChange(
       lines.map((line, i) => {
@@ -39,7 +51,10 @@ export function LineEditor({
           if (product) {
             merged.description = merged.description && merged.description !== line.description ? merged.description : product.name
             merged.unit = product.unit
-            if (withPrices && next.price === undefined) merged.price = product.sellingPrice
+            if (withPrices && next.price === undefined) {
+              const agentPrice = currentLinkedAgent(state) ? configuredAgentPrice(product) : null
+              merged.price = agentPrice !== null ? Math.max(product.sellingPrice, agentPrice) : product.sellingPrice
+            }
           }
         }
         return merged
@@ -59,7 +74,7 @@ export function LineEditor({
               {withPrices && (
                 <>
                   <th>Unit price</th>
-                  <th>Discount</th>
+                  {showDiscount && <th>Discount</th>}
                   <th>Amount</th>
                 </>
               )}
@@ -71,7 +86,7 @@ export function LineEditor({
               <tr key={index} className="cursor-default">
                 <td>
                   <Select value={line.productId} onChange={(e) => patch(index, { productId: e.target.value, description: '' })}>
-                    {state.products.filter((item) => item.status === 'active').map((product) => (
+                    {options.map((product) => (
                       <option key={product.id} value={product.id}>{product.name}</option>
                     ))}
                   </Select>
@@ -90,10 +105,12 @@ export function LineEditor({
                     <td>
                       <input type="number" min={0} step="0.01" className="h-10 w-24 rounded-xl border border-slate-200 px-2 text-sm" value={line.price} onChange={(e) => patch(index, { price: Number(e.target.value) })} />
                     </td>
-                    <td>
-                      <input type="number" min={0} step="0.01" className="h-10 w-20 rounded-xl border border-slate-200 px-2 text-sm" value={line.discount} onChange={(e) => patch(index, { discount: Number(e.target.value) })} />
-                    </td>
-                    <td className="tabular">{formatMoney(lineAmount(line.qty, line.price, line.discount))}</td>
+                    {showDiscount && (
+                      <td>
+                        <input type="number" min={0} step="0.01" className="h-10 w-20 rounded-xl border border-slate-200 px-2 text-sm" value={line.discount} onChange={(e) => patch(index, { discount: Number(e.target.value) })} />
+                      </td>
+                    )}
+                    <td className="tabular">{formatMoney(lineAmount(line.qty, line.price, showDiscount ? line.discount : 0))}</td>
                   </>
                 )}
                 <td>
@@ -104,14 +121,15 @@ export function LineEditor({
           </tbody>
         </table>
       </div>
-      <Button variant="secondary" onClick={() => onChange([...lines, emptyLine(state)])}>+ Add Item</Button>
+      <Button variant="secondary" onClick={() => onChange([...lines, emptyLine(state, options)])}>+ Add Item</Button>
     </div>
   )
 }
 
-export function lineTotals(lines: DraftLine[], extraDiscount = 0, tax = 0) {
+export function lineTotals(lines: DraftLine[], extraDiscount = 0, tax = 0, shipping = 0) {
   const subtotal = round2(lines.reduce((sum, line) => sum + lineAmount(line.qty, line.price, line.discount), 0))
   const discount = round2(extraDiscount)
-  const total = round2(Math.max(0, subtotal - discount + tax))
-  return { subtotal, discount, tax, total }
+  const delivery = round2(shipping)
+  const total = round2(Math.max(0, subtotal - discount + tax + delivery))
+  return { subtotal, discount, tax, shipping: delivery, total }
 }

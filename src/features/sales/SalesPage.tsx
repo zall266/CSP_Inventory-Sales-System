@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Plus } from 'lucide-react'
 import { Button, Card, FilterRow, Input, KpiCard, PageHeader, Select, StatusBadge } from '@/components/ui'
-import { isCompanyWarehouseId } from '@/features/agent/agentModel'
+import { currentLinkedAgent, isCompanyWarehouseId, salesVisibleToUser } from '@/features/agent/agentModel'
 import { useApi, useLookups, useStore } from '@/store/hooks'
 import { addDays, formatDate, formatMoney, inRange, PROTOTYPE_TODAY, round2, startOfDay } from '@/utils/format'
 
@@ -17,23 +17,21 @@ export function SalesPage() {
   const [salesperson, setSalesperson] = useState('all')
   const todayStart = startOfDay(PROTOTYPE_TODAY)
   const todayEnd = addDays(todayStart, 1)
-  const isCompanySale = (sale: (typeof state.sales)[number]) => isCompanyWarehouseId(state.warehouses, sale.warehouseId)
+  const linked = currentLinkedAgent(state)
+  const isVisibleSale = (sale: (typeof state.sales)[number]) =>
+    linked ? sale.warehouseId === linked.warehouseId : isCompanyWarehouseId(state.warehouses, sale.warehouseId)
 
-  const todaySales = state.sales.filter((s) => s.status !== 'voided' && inRange(s.date, todayStart, todayEnd) && isCompanySale(s))
+  const todaySales = state.sales.filter((s) => s.status !== 'voided' && inRange(s.date, todayStart, todayEnd) && isVisibleSale(s))
   const rows = useMemo(() => {
-    return state.sales.filter((sale) => {
+    return salesVisibleToUser(state, state.sales).filter((sale) => {
       if (query && !sale.invoiceNo.toLowerCase().includes(query.toLowerCase()) && !customerName(sale.customerId).toLowerCase().includes(query.toLowerCase())) return false
       if (customerId !== 'all' && sale.customerId !== customerId) return false
       if (status !== 'all' && sale.status !== status) return false
       if (salesperson !== 'all' && sale.salesperson !== salesperson) return false
-      if (state.ui.warehouseFilter === 'all') {
-        if (!isCompanyWarehouseId(state.warehouses, sale.warehouseId)) return false
-      } else if (sale.warehouseId !== state.ui.warehouseFilter) {
-        return false
-      }
+      if (!linked && state.ui.warehouseFilter !== 'all' && sale.warehouseId !== state.ui.warehouseFilter) return false
       return true
     })
-  }, [state.sales, query, customerId, status, salesperson, state.ui.warehouseFilter, customerName])
+  }, [state, query, customerId, status, salesperson, linked, customerName])
 
   const people = [...new Set(state.sales.map((s) => s.salesperson))]
 
@@ -46,8 +44,8 @@ export function SalesPage() {
       />
       <div className="mb-5 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
         <KpiCard label="Today's sales" value={formatMoney(round2(todaySales.reduce((s, x) => s + x.total, 0)), { compact: true })} />
-        <KpiCard label="Paid" value={String(state.sales.filter((s) => s.status === 'paid' && isCompanySale(s)).length)} tone="success" />
-        <KpiCard label="Unpaid" value={String(state.sales.filter((s) => (s.status === 'unpaid' || s.status === 'partial') && isCompanySale(s)).length)} tone="warning" />
+        <KpiCard label="Paid" value={String(state.sales.filter((s) => s.status === 'paid' && isVisibleSale(s)).length)} tone="success" />
+        <KpiCard label="Unpaid" value={String(state.sales.filter((s) => (s.status === 'unpaid' || s.status === 'partial') && isVisibleSale(s)).length)} tone="warning" />
         <KpiCard label="Returns" value={String(state.salesReturns.length)} />
       </div>
       <FilterRow>
