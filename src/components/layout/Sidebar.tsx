@@ -34,6 +34,7 @@ import { brand } from '@/brand'
 import { cn } from '@/utils/format'
 import { useApi, useStore } from '@/store/hooks'
 import { actorUser, canAccessUsersAndRoles, hasPermission } from '@/features/settings/permissions'
+import { currentLinkedAgent } from '@/features/agent/agentModel'
 
 type NavItem = { to: string; label: string; icon: typeof LayoutDashboard }
 type NavGroup = { id: string; label: string; items: NavItem[] }
@@ -150,7 +151,7 @@ export function Sidebar() {
   const collapsed = ui.sidebarCollapsed
   const canUsers = canAccessUsersAndRoles(state, actorUser(state))
   const canWarehouseMap = hasPermission(state, 'warehouse_map.view')
-  const canAgents = hasPermission(state, 'agent.view') || hasPermission(state, 'agent.manage')
+  const canAgents = hasPermission(state, 'agent.view') || hasPermission(state, 'agent.manage') || Boolean(currentLinkedAgent(state))
 
   const initialOpen = useMemo(() => {
     const open: Record<string, boolean> = {}
@@ -233,7 +234,7 @@ export function MobileSidebar() {
   const location = useLocation()
   const canUsers = canAccessUsersAndRoles(state, actorUser(state))
   const canWarehouseMap = hasPermission(state, 'warehouse_map.view')
-  const canAgents = hasPermission(state, 'agent.view') || hasPermission(state, 'agent.manage')
+  const canAgents = hasPermission(state, 'agent.view') || hasPermission(state, 'agent.manage') || Boolean(currentLinkedAgent(state))
   if (!open) return null
   return (
     <div className="fixed inset-0 z-50 lg:hidden">

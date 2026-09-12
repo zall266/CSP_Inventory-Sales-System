@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, type FormEvent } from 'react'
-import { Button, Field, Input, Select } from '@/components/ui'
+import { Button, Field, Input, Select, Toggle } from '@/components/ui'
 import { activeBomForProduct, baseUnitCost, baseUnitOptions, formatUnit, normalizeUnit, unitOptions, unitsEqual, validatePurchaseConversion } from '@/features/products/masterData'
 import { useStore } from '@/store/hooks'
 import { formatMoney, round2 } from '@/utils/format'
@@ -16,6 +16,7 @@ export type ProductFormValue = {
   costPrice: number | ''
   sellingPrice: number | ''
   status: ProductStatus
+  sellable: boolean
 }
 
 export function emptyProductForm(categoryId: string, material = false): ProductFormValue {
@@ -30,6 +31,7 @@ export function emptyProductForm(categoryId: string, material = false): ProductF
     costPrice: '',
     sellingPrice: '',
     status: 'active',
+    sellable: !material,
   }
 }
 
@@ -45,6 +47,7 @@ export function formFromProduct(product: Product): ProductFormValue {
     costPrice: product.costPrice,
     sellingPrice: product.sellingPrice,
     status: product.status,
+    sellable: product.sellable !== false,
   }
 }
 
@@ -64,6 +67,7 @@ export function toProductInput(form: ProductFormValue, material: boolean): Produ
     sellingPrice: form.sellingPrice === '' ? 0 : Number(form.sellingPrice),
     wholesalePrice: 0,
     status: form.status,
+    sellable: form.sellable,
     reorderLevel: 0,
     trackBatch: false,
     trackExpiry: false,
@@ -213,6 +217,20 @@ export function ProductForm({
           </Field>
         </>
       )}
+      {(material && form.sellable) && (
+        <Field label="Selling price">
+          <Input
+            type="number"
+            min={0}
+            step="0.01"
+            value={form.sellingPrice}
+            onChange={(event) => setForm({ ...form, sellingPrice: event.target.value === '' ? '' : Number(event.target.value) })}
+          />
+        </Field>
+      )}
+      <Field label="Sellable" hint={form.sellable ? 'Can be sold in POS, invoice and quotation.' : 'Hidden from normal sales.'}>
+        <Toggle checked={form.sellable} onChange={(value) => setForm({ ...form, sellable: value })} label={form.sellable ? 'ON' : 'OFF'} />
+      </Field>
       <Field label="Status">
         <Select value={form.status} onChange={(event) => setForm({ ...form, status: event.target.value as ProductStatus })}>
           <option value="active">Active</option>

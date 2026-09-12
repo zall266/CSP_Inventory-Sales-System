@@ -107,6 +107,7 @@ export type Product = {
   sellingPrice: number
   wholesalePrice: number
   agentPrice?: number
+  sellable?: boolean
   reorderLevel: number
   trackBatch: boolean
   trackExpiry: boolean
@@ -357,8 +358,10 @@ export type Quotation = {
   subtotal: number
   discount: number
   tax: number
+  shipping: number
   total: number
   status: QuotationStatus
+  agentId?: string
   convertedSaleId?: string
   convertedInvoiceNo?: string
   createdAt: string
@@ -952,6 +955,7 @@ export type ProductInput = {
   sellingPrice: number
   wholesalePrice?: number
   agentPrice?: number
+  sellable?: boolean
   reorderLevel?: number
   trackBatch?: boolean
   trackExpiry?: boolean
@@ -989,6 +993,8 @@ export type QuotationInput = {
   items: Array<{ productId: string; description?: string; qty: number; unit?: string; price: number; discount?: number }>
   discount?: number
   tax?: number
+  shipping?: number
+  agentId?: string
   status?: QuotationStatus
 }
 

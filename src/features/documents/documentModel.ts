@@ -35,11 +35,12 @@ export function lineAmount(qty: number, price: number, discount = 0) {
   return round2(Math.max(0, qty * price - discount))
 }
 
-export function totalsFromLines(items: Array<{ total: number }>, extraDiscount = 0, tax = 0) {
+export function totalsFromLines(items: Array<{ total: number }>, extraDiscount = 0, tax = 0, shipping = 0) {
   const subtotal = round2(items.reduce((sum, item) => sum + item.total, 0))
   const discount = round2(extraDiscount)
-  const total = round2(Math.max(0, subtotal - discount + tax))
-  return { subtotal, discount, tax, total }
+  const delivery = round2(shipping)
+  const total = round2(Math.max(0, subtotal - discount + tax + delivery))
+  return { subtotal, discount, tax, shipping: delivery, total }
 }
 
 export function buildDocumentLines(

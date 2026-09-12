@@ -1,8 +1,10 @@
 import { useMemo, useState } from 'react'
+import { Link } from 'react-router-dom'
 import { Minus, Plus, Trash2, Search } from 'lucide-react'
 import { Button, Card, Modal, Select, StatusBadge } from '@/components/ui'
 import { ProductMark, paymentLabel } from '@/components/ProductMark'
-import { companySellingWarehouseId } from '@/features/agent/agentModel'
+import { agentPosItemAvailable, configuredAgentPrice, currentLinkedAgent, posSellingWarehouseId } from '@/features/agent/agentModel'
+import { productIsSellable } from '@/features/products/masterData'
 import { useApi, useStore } from '@/store/hooks'
 import type { PaymentMethod, Product, Sale } from '@/types'
 import { formatMoney, formatQty, round2 } from '@/utils/format'
@@ -12,57 +14,91 @@ type CartLine = { productId: string; qty: number; price: number }
 export function PosPage() {
   const state = useStore()
   const api = useApi()
-  const warehouseId = companySellingWarehouseId(state)
+  const linkedAgent = currentLinkedAgent(state)
+  const warehouseId = posSellingWarehouseId(state)
   const [query, setQuery] = useState('')
   const [categoryId, setCategoryId] = useState('all')
   const [cart, setCart] = useState<CartLine[]>([])
   const [customerId, setCustomerId] = useState(state.settings.defaultCustomerId)
   const [discount, setDiscount] = useState(0)
+  const [delivery, setDelivery] = useState(0)
   const [method, setMethod] = useState<PaymentMethod>('cash')
   const [completed, setCompleted] = useState<Sale | null>(null)
   const [mobileCart, setMobileCart] = useState(false)
 
   const products = useMemo(() => {
     return state.products.filter((p) => {
-      if (p.status !== 'active') return false
+      if (!productIsSellable(p)) return false
       if (categoryId !== 'all' && p.categoryId !== categoryId) return false
       const q = query.trim().toLowerCase()
       if (q && !`${p.name} ${p.sku} ${p.barcode}`.toLowerCase().includes(q)) return false
+      if (linkedAgent && !agentPosItemAvailable(p, api.getProductQty(p.id, warehouseId))) return false
       return true
     })
-  }, [state.products, categoryId, query])
+  }, [state.products, categoryId, query, linkedAgent, warehouseId, api])
 
   const addProduct = (product: Product) => {
+    const available = api.getProductQty(product.id, warehouseId)
+    if (linkedAgent && available <= 0) return
+    const agentPrice = configuredAgentPrice(product)
+    const unitPrice = linkedAgent && agentPrice !== null ? Math.max(product.sellingPrice, agentPrice) : product.sellingPrice
     setCart((current) => {
       const existing = current.find((line) => line.productId === product.id)
-      if (existing) return current.map((line) => (line.productId === product.id ? { ...line, qty: line.qty + 1 } : line))
-      return [...current, { productId: product.id, qty: 1, price: product.sellingPrice }]
+      if (existing) {
+        const nextQty = existing.qty + 1
+        if (linkedAgent && nextQty > available) return current
+        return current.map((line) => (line.productId === product.id ? { ...line, qty: nextQty } : line))
+      }
+      return [...current, { productId: product.id, qty: 1, price: unitPrice }]
     })
   }
 
   const setQty = (productId: string, qty: number) => {
-    setCart((current) => current.map((line) => (line.productId === productId ? { ...line, qty } : line)).filter((line) => line.qty > 0))
+    const available = api.getProductQty(productId, warehouseId)
+    setCart((current) =>
+      current
+        .map((line) => {
+          if (line.productId !== productId) return line
+          const next = linkedAgent ? Math.min(qty, available) : qty
+          return { ...line, qty: next }
+        })
+        .filter((line) => line.qty > 0),
+    )
+  }
+
+  const setPrice = (productId: string, price: number) => {
+    setCart((current) => current.map((line) => (line.productId === productId ? { ...line, price } : line)))
   }
 
   const subtotal = round2(cart.reduce((sum, line) => sum + line.qty * line.price, 0))
   const tax = 0
-  const total = round2(Math.max(0, subtotal - discount + tax))
+  const deliveryCharge = linkedAgent ? round2(Math.max(0, delivery)) : 0
+  const total = round2(Math.max(0, subtotal - discount + tax + deliveryCharge))
   const count = cart.reduce((sum, line) => sum + line.qty, 0)
 
   const complete = () => {
-    const sale = api.createSale({
-      customerId,
-      warehouseId,
-      items: cart.map((line) => ({ productId: line.productId, qty: line.qty, price: line.price })),
-      discount,
-      tax,
-      paymentMethod: method,
-      paidAmount: total,
-    })
+    const sale = linkedAgent
+      ? api.createAgentSale({
+          agentId: linkedAgent.id,
+          items: cart.map((line) => ({ productId: line.productId, qty: line.qty, sellingPrice: line.price })),
+          delivery: deliveryCharge,
+          customerId,
+          paymentMethod: method,
+        })
+      : api.createSale({
+          customerId,
+          warehouseId,
+          items: cart.map((line) => ({ productId: line.productId, qty: line.qty, price: line.price })),
+          discount,
+          tax,
+          paymentMethod: method,
+          paidAmount: total,
+        })
     if (sale) {
       setCompleted(sale)
       setCart([])
       setDiscount(0)
+      setDelivery(0)
     }
   }
 
@@ -71,7 +107,9 @@ export function PosPage() {
       <div className="flex items-center justify-between">
         <div>
           <div className="text-sm font-semibold text-slate-900">Current sale</div>
-          <div className="text-xs text-slate-400">{count} items</div>
+          <div className="text-xs text-slate-400">
+            {count} items{linkedAgent ? ` · ${linkedAgent.name}` : ''}
+          </div>
         </div>
         <Select className="w-44" value={customerId} onChange={(e) => setCustomerId(e.target.value)}>
           {state.customers.map((c) => (
@@ -89,7 +127,18 @@ export function PosPage() {
               <ProductMark product={product} size="sm" />
               <div className="min-w-0 flex-1">
                 <div className="truncate text-sm font-medium">{product.name}</div>
-                <div className="text-xs text-slate-400">{formatQty(line.qty)} × {formatMoney(line.price)}</div>
+                {linkedAgent ? (
+                  <input
+                    type="number"
+                    min={0}
+                    step="0.01"
+                    className="mt-1 h-8 w-24 rounded-lg border border-slate-200 px-2 text-xs"
+                    value={line.price}
+                    onChange={(e) => setPrice(line.productId, Number(e.target.value))}
+                  />
+                ) : (
+                  <div className="text-xs text-slate-400">{formatQty(line.qty)} × {formatMoney(line.price)}</div>
+                )}
               </div>
               <div className="flex items-center gap-1">
                 <button type="button" className="rounded-lg p-1 hover:bg-slate-100" onClick={() => setQty(line.productId, line.qty - 1)}><Minus size={14} /></button>
@@ -104,16 +153,31 @@ export function PosPage() {
       </div>
       <div className="mt-4 space-y-2 border-t border-slate-100 pt-4 text-sm">
         <div className="flex justify-between text-slate-500"><span>Subtotal</span><span className="tabular">{formatMoney(subtotal)}</span></div>
-        <label className="flex items-center justify-between gap-3 text-slate-500">
-          Discount
-          <input
-            type="number"
-            className="h-9 w-28 rounded-lg border border-slate-200 px-2 text-right text-sm"
-            value={discount}
-            disabled={!state.settings.allowDiscount}
-            onChange={(e) => setDiscount(Number(e.target.value))}
-          />
-        </label>
+        {!linkedAgent && (
+          <label className="flex items-center justify-between gap-3 text-slate-500">
+            Discount
+            <input
+              type="number"
+              className="h-9 w-28 rounded-lg border border-slate-200 px-2 text-right text-sm"
+              value={discount}
+              disabled={!state.settings.allowDiscount}
+              onChange={(e) => setDiscount(Number(e.target.value))}
+            />
+          </label>
+        )}
+        {linkedAgent && (
+          <label className="flex items-center justify-between gap-3 text-slate-500">
+            Delivery
+            <input
+              type="number"
+              min={0}
+              step="0.01"
+              className="h-9 w-28 rounded-lg border border-slate-200 px-2 text-right text-sm"
+              value={delivery}
+              onChange={(e) => setDelivery(Number(e.target.value))}
+            />
+          </label>
+        )}
         <div className="flex justify-between text-slate-500"><span>Tax</span><span>RM 0.00</span></div>
         <div className="flex justify-between text-lg font-semibold"><span>Total</span><span className="tabular">{formatMoney(total)}</span></div>
       </div>
@@ -168,7 +232,13 @@ export function PosPage() {
                 <div className="mt-3 truncate text-sm font-semibold text-slate-900">{p.name}</div>
                 <div className="text-xs text-slate-400">{p.sku}</div>
                 <div className="mt-2 flex items-center justify-between">
-                  <div className="text-sm font-semibold text-indigo-700">{formatMoney(p.sellingPrice)}</div>
+                  <div className="text-sm font-semibold text-indigo-700">
+                    {formatMoney(
+                      linkedAgent
+                        ? Math.max(p.sellingPrice, configuredAgentPrice(p) ?? p.sellingPrice)
+                        : p.sellingPrice,
+                    )}
+                  </div>
                   <StatusBadge status={status} />
                 </div>
                 <div className="mt-1 text-[11px] text-slate-400">{formatQty(qty)} {p.unit} on hand</div>
@@ -196,6 +266,7 @@ export function PosPage() {
             <div className="text-sm text-slate-500">Payment</div>
             <div className="font-medium">{paymentLabel(completed.paymentMethod)}</div>
             <div className="flex justify-center gap-2 pt-2">
+              <Link to={`/print/invoice/${completed.id}`}><Button variant="secondary">Preview / PDF</Button></Link>
               <Button variant="secondary" onClick={() => window.print()}>Print receipt</Button>
               <Button onClick={() => setCompleted(null)}>New sale</Button>
             </div>

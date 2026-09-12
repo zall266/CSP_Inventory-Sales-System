@@ -2,7 +2,7 @@ import { Link, useNavigate, useParams } from 'react-router-dom'
 import { Button, Card, PageHeader, StatusBadge } from '@/components/ui'
 import { useApi, useLookups, useStore } from '@/store/hooks'
 import { hasPermission } from '@/features/settings/permissions'
-import { saleIsAgentSale } from '@/features/agent/agentModel'
+import { saleIsAgentSale, salesVisibleToUser } from '@/features/agent/agentModel'
 import { formatDate, formatMoney } from '@/utils/format'
 import { PermissionDenied, PrintShell } from './A4Sheet'
 import { InvoiceA4 } from './DocumentBodies'
@@ -21,7 +21,7 @@ export function InvoiceDetailPage() {
   const api = useApi()
   const navigate = useNavigate()
   const { customerName } = useLookups()
-  const sale = state.sales.find((item) => item.id === id)
+  const sale = salesVisibleToUser(state, state.sales).find((item) => item.id === id)
   if (!hasPermission(state, 'sales.invoice.view') && !hasPermission(state, 'sales.view')) {
     return <PermissionDenied subtitle="You do not have access to invoices." />
   }
@@ -83,7 +83,7 @@ export function InvoicePrintPage() {
   const { id } = useParams()
   const state = useStore()
   const api = useApi()
-  const sale = state.sales.find((item) => item.id === id)
+  const sale = salesVisibleToUser(state, state.sales).find((item) => item.id === id)
   if (!sale) return <PageHeader title="Invoice" subtitle="Not found." />
   if (!hasPermission(state, 'sales.invoice.view') && !hasPermission(state, 'sales.view')) {
     return <PermissionDenied subtitle="You do not have access to invoices." />

@@ -1,3 +1,4 @@
+import { productIsSellable } from '@/features/products/masterData'
 import type { Agent, AgentEarningKind, AgentEarningLedger, AgentWithdrawal, AppState, Product, Sale, Warehouse } from '@/types'
 import { round2 } from '@/utils/format'
 
@@ -191,6 +192,76 @@ export function snapshotAgentBankDetails(agent: Pick<Agent, 'bankName' | 'accoun
 
 export function linkedAgentForUser<T extends { userId?: string }>(agents: T[], userId: string) {
   return agents.find((agent) => agent.userId === userId)
+}
+
+export function currentLinkedAgent(state: Pick<AppState, 'agents' | 'ui'>) {
+  return linkedAgentForUser(state.agents ?? [], state.ui.currentUserId)
+}
+
+export function posSellingWarehouseId(state: AppState) {
+  const linked = currentLinkedAgent(state)
+  if (linked) return linked.warehouseId
+  return companySellingWarehouseId(state)
+}
+
+export function isOwnLinkedAgent(state: Pick<AppState, 'agents' | 'ui'>, agentId: string) {
+  return currentLinkedAgent(state)?.id === agentId
+}
+
+export function agentPosItemAvailable(product: Product, qtyOnHand: number) {
+  if (!productIsSellable(product)) return false
+  if (configuredAgentPrice(product) === null) return false
+  return qtyOnHand > 0
+}
+
+export type AgentSaleLineInput = { productId: string; qty: number; sellingPrice: number }
+
+export function normalizeAgentSaleItems(input: {
+  items?: AgentSaleLineInput[]
+  productId?: string
+  qty?: number
+  sellingPrice?: number
+}): AgentSaleLineInput[] {
+  if (input.items && input.items.length) return input.items
+  if (input.productId) {
+    return [{ productId: input.productId, qty: Number(input.qty) || 0, sellingPrice: Number(input.sellingPrice) || 0 }]
+  }
+  return []
+}
+
+export function calcAgentSaleDocument(input: {
+  lines: Array<{ agentPrice: number; sellingPrice: number; qty: number }>
+  delivery: number
+}) {
+  const parts = input.lines.map((line) =>
+    calcAgentSaleEarnings({ agentPrice: line.agentPrice, sellingPrice: line.sellingPrice, qty: line.qty, delivery: 0 }),
+  )
+  const productMarkup = round2(parts.reduce((sum, part) => sum + part.productMarkup, 0))
+  const cspAmount = round2(parts.reduce((sum, part) => sum + part.cspAmount, 0))
+  const deliveryEarnings = round2(input.delivery)
+  const productTotal = round2(parts.reduce((sum, part) => sum + part.customerPays, 0))
+  return {
+    productMarkup,
+    deliveryEarnings,
+    totalEarnings: round2(productMarkup + deliveryEarnings),
+    cspAmount,
+    customerPays: round2(productTotal + deliveryEarnings),
+  }
+}
+
+export function quotationsVisibleToUser<T extends { agentId?: string }>(state: Pick<AppState, 'agents' | 'ui'>, quotations: T[]) {
+  const linked = currentLinkedAgent(state)
+  if (linked) return quotations.filter((row) => row.agentId === linked.id)
+  return quotations.filter((row) => !row.agentId)
+}
+
+export function salesVisibleToUser<T extends { warehouseId: string }>(
+  state: Pick<AppState, 'agents' | 'ui' | 'warehouses'>,
+  sales: T[],
+) {
+  const linked = currentLinkedAgent(state)
+  if (linked) return sales.filter((sale) => sale.warehouseId === linked.warehouseId)
+  return sales.filter((sale) => isCompanyWarehouseId(state.warehouses, sale.warehouseId))
 }
 
 export function canUserRequestWithdrawalForAgent(

@@ -11,8 +11,8 @@ import {
   unplacedPacks,
   WAREHOUSE_MAP_KEYS,
 } from '@/features/warehouse/warehouseModel'
-import { AGENT_PERMISSION_KEYS, agentBankDetailsComplete, agentLinkedWarehouseName, calcAgentSaleEarnings, canUserRequestWithdrawalForAgent, companyWarehouses, configuredAgentPrice, hasSaleEarningLedger, hasWithdrawalCancelledLedger, hasWithdrawalPaidLedger, hasWithdrawalPendingLedger, isAgentWarehouseId, isCompanyWarehouseId, linkedAgentForUser, nextAgentWarehouseId, parseAgentPriceWrite, parseWithdrawalAmount, parseWithdrawalPaymentDate, parseWithdrawalPaymentReference, parseWithdrawalReceipt, SALE_EARNING_KIND, saleIsAgentSale, snapshotAgentBankDetails, summarizeAgentEarnings, WITHDRAWAL_CANCELLED_KIND, WITHDRAWAL_PAID_KIND, WITHDRAWAL_PENDING_KIND } from '@/features/agent/agentModel'
-import { applyBomCosts, hydrateProducts, normalizeUnit, parseNonNegativeMoney, productHasBom, productIsUsed, purchaseQtyToBaseQty, resolveProductSku, skuIsUnique, validatePurchaseConversion } from '@/features/products/masterData'
+import { AGENT_PERMISSION_KEYS, agentBankDetailsComplete, agentLinkedWarehouseName, calcAgentSaleDocument, canUserRequestWithdrawalForAgent, companyWarehouses, configuredAgentPrice, currentLinkedAgent, hasSaleEarningLedger, hasWithdrawalCancelledLedger, hasWithdrawalPaidLedger, hasWithdrawalPendingLedger, isAgentWarehouseId, isCompanyWarehouseId, linkedAgentForUser, nextAgentWarehouseId, normalizeAgentSaleItems, parseAgentPriceWrite, parseWithdrawalAmount, parseWithdrawalPaymentDate, parseWithdrawalPaymentReference, parseWithdrawalReceipt, SALE_EARNING_KIND, saleIsAgentSale, snapshotAgentBankDetails, summarizeAgentEarnings, WITHDRAWAL_CANCELLED_KIND, WITHDRAWAL_PAID_KIND, WITHDRAWAL_PENDING_KIND } from '@/features/agent/agentModel'
+import { applyBomCosts, hydrateProducts, normalizeUnit, parseNonNegativeMoney, productHasBom, productIsSellable, productIsUsed, purchaseQtyToBaseQty, resolveProductSku, skuIsUnique, validatePurchaseConversion } from '@/features/products/masterData'
 import { bomLinesForQty, consumptionCost, hasShortage, materialAvailability } from '@/features/manufacturing/helpers'
 import { buildSessionPlan, canEditSession, currentUser, mergePicking } from '@/features/manufacturing/sessionPlan'
 import {
@@ -192,7 +192,11 @@ function hydrateData(data: AppData): AppData {
       receiptUrl: row.receiptUrl,
       receiptName: row.receiptName,
     })),
-    quotations: data.quotations ?? [],
+    quotations: (data.quotations ?? []).map((row) => ({
+      ...row,
+      shipping: row.shipping ?? 0,
+      total: round2((row.subtotal ?? 0) - (row.discount ?? 0) + (row.tax ?? 0) + (row.shipping ?? 0)),
+    })),
     deliveryOrders: data.deliveryOrders ?? [],
     documentAuditLogs: data.documentAuditLogs ?? [],
     storageLocations: migrated.storageLocations,
@@ -314,6 +318,52 @@ function pushDocAudit(log: DocumentAuditLog) {
 
 function getQty(productId: string, warehouseId: string) {
   return state.inventory.find((row) => row.productId === productId && row.warehouseId === warehouseId)?.qty ?? 0
+}
+
+function linkedAgentDenied(agentId?: string) {
+  const linked = currentLinkedAgent(state)
+  if (!linked) return false
+  if (linked.id === agentId) return false
+  toast('Permission denied', 'You can only access your own Agent documents.', 'danger')
+  return true
+}
+
+function validateAgentDocumentLines(
+  items: Array<{ productId: string; qty: number; price: number }>,
+  warehouseId: string,
+  options?: { skipStock?: boolean },
+) {
+  const used = new Map<string, number>()
+  for (const line of items) {
+    const product = productById(line.productId)
+    if (!product) {
+      toast('Please select a product.', undefined, 'warning')
+      return 'missing'
+    }
+    if (!productIsSellable(product)) {
+      toast('This item is not sellable.', product.name, 'warning')
+      return 'sellable'
+    }
+    const agentPrice = configuredAgentPrice(product)
+    if (agentPrice === null) {
+      toast('Agent Price must be configured', `Set Agent Price on ${product.name} before quoting.`, 'warning')
+      return 'price'
+    }
+    if (round2(line.price) < agentPrice) {
+      toast('Selling price cannot be lower than Agent Price.', product.name, 'warning')
+      return 'below'
+    }
+    if (!options?.skipStock) {
+      const needed = (used.get(product.id) ?? 0) + line.qty
+      used.set(product.id, needed)
+      const available = getQty(product.id, warehouseId)
+      if (needed > available) {
+        toast('Insufficient Agent stock.', `Available: ${formatQty(available)}`, 'danger')
+        return 'stock'
+      }
+    }
+  }
+  return null
 }
 
 function applyWarehouseTransfer(input: {
@@ -449,17 +499,7 @@ function maybeStockAlerts(productId: string, warehouseId: string, qty: number) {
 let agentSaleInFlight = false
 let lastAgentSale: { key: string; sale: Sale; at: number } | null = null
 
-function agentSaleRequestKey(input: {
-  agentId: string
-  productId: string
-  qty: number
-  sellingPrice: number
-  delivery?: number
-  customerId?: string
-  paymentMethod?: PaymentMethod
-  notes?: string
-  requestId?: string
-}) {
+function agentSaleRequestKey(input: { requestId?: string }) {
   return input.requestId?.trim() || ''
 }
 
@@ -471,20 +511,30 @@ function withSaleEarningLedger(ledgers: AgentEarningLedger[], row: AgentEarningL
 
 function postAgentSale(input: {
   agentId: string
-  productId: string
-  qty: number
-  sellingPrice: number
+  items?: Array<{ productId: string; qty: number; sellingPrice: number }>
+  productId?: string
+  qty?: number
+  sellingPrice?: number
   delivery?: number
   customerId?: string
   paymentMethod?: PaymentMethod
   notes?: string
   requestId?: string
+  quotationId?: string
+  quotationNo?: string
+  paidAmount?: number
 }) {
   const requestKey = agentSaleRequestKey(input)
   if (requestKey && lastAgentSale && lastAgentSale.key === requestKey) {
     return lastAgentSale.sale
   }
-  if (!hasPermission(state, 'agent.sale.create')) {
+  const linked = currentLinkedAgent(state)
+  if (linked) {
+    if (linked.id !== input.agentId) {
+      toast('Permission denied', 'You can only sell from your own Agent stock.', 'danger')
+      return null
+    }
+  } else if (!hasPermission(state, 'agent.sale.create')) {
     toast('Permission denied', 'You cannot create an agent sale.', 'danger')
     return null
   }
@@ -501,38 +551,66 @@ function postAgentSale(input: {
     toast('Unable to complete sale. Please try again.', undefined, 'danger')
     return null
   }
-  if (!input.productId) {
+  const rawLines = normalizeAgentSaleItems(input)
+  if (!rawLines.length) {
     toast('Please select a product.', undefined, 'warning')
     return null
   }
-  const product = productById(input.productId)
-  if (!product) {
-    toast('Please select a product.', undefined, 'warning')
-    return null
-  }
-  const rawAgentPrice = product.agentPrice
-  if (rawAgentPrice !== undefined && rawAgentPrice !== null && Number.isFinite(rawAgentPrice) && rawAgentPrice < 0) {
-    toast('Agent Price cannot be negative.', undefined, 'warning')
-    return null
-  }
-  const agentPrice = configuredAgentPrice(product)
-  if (agentPrice === null) {
-    toast('Agent Price must be configured', 'Set Agent Price on the product before creating an agent sale.', 'warning')
-    return null
-  }
-  const qty = Number(input.qty)
-  if (!Number.isFinite(qty) || !(qty > 0)) {
-    toast('Quantity must be greater than 0.', undefined, 'warning')
-    return null
-  }
-  const sellingPrice = round2(Number(input.sellingPrice))
-  if (!Number.isFinite(sellingPrice) || sellingPrice < 0) {
-    toast('Unable to complete sale. Please try again.', undefined, 'warning')
-    return null
-  }
-  if (sellingPrice < agentPrice) {
-    toast('Selling price cannot be lower than Agent Price.', undefined, 'warning')
-    return null
+  const resolved: Array<{
+    productId: string
+    qty: number
+    sellingPrice: number
+    agentPrice: number
+    productMarkup: number
+    name: string
+    unit: string
+  }> = []
+  const used = new Map<string, number>()
+  for (const line of rawLines) {
+    const product = productById(line.productId)
+    if (!product) {
+      toast('Please select a product.', undefined, 'warning')
+      return null
+    }
+    if (!productIsSellable(product)) {
+      toast('This item is not sellable.', product.name, 'warning')
+      return null
+    }
+    const agentPrice = configuredAgentPrice(product)
+    if (agentPrice === null) {
+      toast('Agent Price must be configured', `Set Agent Price on ${product.name} before creating an agent sale.`, 'warning')
+      return null
+    }
+    const qty = Number(line.qty)
+    if (!Number.isFinite(qty) || !(qty > 0)) {
+      toast('Quantity must be greater than 0.', undefined, 'warning')
+      return null
+    }
+    const sellingPrice = round2(Number(line.sellingPrice))
+    if (!Number.isFinite(sellingPrice) || sellingPrice < 0) {
+      toast('Unable to complete sale. Please try again.', undefined, 'warning')
+      return null
+    }
+    if (sellingPrice < agentPrice) {
+      toast('Selling price cannot be lower than Agent Price.', product.name, 'warning')
+      return null
+    }
+    const needed = (used.get(product.id) ?? 0) + qty
+    used.set(product.id, needed)
+    const available = getQty(product.id, agent.warehouseId)
+    if (needed > available) {
+      toast('Insufficient Agent stock.', `Available: ${formatQty(available)}`, 'danger')
+      return null
+    }
+    resolved.push({
+      productId: product.id,
+      qty,
+      sellingPrice,
+      agentPrice,
+      productMarkup: round2((sellingPrice - agentPrice) * qty),
+      name: product.name,
+      unit: product.unit,
+    })
   }
   const deliveryRaw = Number(input.delivery ?? 0)
   if (!Number.isFinite(deliveryRaw) || deliveryRaw < 0) {
@@ -540,31 +618,26 @@ function postAgentSale(input: {
     return null
   }
   const delivery = round2(deliveryRaw)
-  const available = getQty(product.id, agent.warehouseId)
-  if (qty > available) {
-    toast('Insufficient stock.', `Available: ${formatQty(available)}.`, 'danger')
-    return null
-  }
   const customerId = input.customerId?.trim() || state.settings.defaultCustomerId
   if (!state.customers.some((customer) => customer.id === customerId)) {
     toast('Unable to complete sale. Please try again.', undefined, 'warning')
     return null
   }
   const paymentMethod = input.paymentMethod ?? 'cash'
-  const earnings = calcAgentSaleEarnings({
-    agentPrice,
-    sellingPrice,
-    qty,
+  const earnings = calcAgentSaleDocument({
+    lines: resolved.map((line) => ({ agentPrice: line.agentPrice, sellingPrice: line.sellingPrice, qty: line.qty })),
     delivery,
   })
-  const productSubtotal = round2(sellingPrice * qty)
+  const productSubtotal = round2(resolved.reduce((sum, line) => sum + line.sellingPrice * line.qty, 0))
   const customerTotal = earnings.customerPays
+  const paidAmount = input.paidAmount === undefined ? customerTotal : Math.min(input.paidAmount, customerTotal)
+  const balance = round2(customerTotal - paidAmount)
   const date = nowIso()
   const invoiceNo = nextDocNo(
     state.sales.filter((sale) => sale.invoiceNo.startsWith('SAL-')).map((sale) => sale.invoiceNo),
     'SAL-',
   )
-  const lines = makeLines([{ productId: product.id, qty, price: sellingPrice }])
+  const lines = makeLines(resolved.map((line) => ({ productId: line.productId, qty: line.qty, price: line.sellingPrice })))
   const sale = {
     id: uid('sal'),
     invoiceNo,
@@ -578,22 +651,30 @@ function postAgentSale(input: {
     tax: 0,
     shipping: delivery,
     total: customerTotal,
-    paid: customerTotal,
-    balance: 0,
-    status: 'paid' as SaleStatus,
+    paid: paidAmount,
+    balance,
+    status: (paidAmount >= customerTotal ? 'paid' : paidAmount > 0 ? 'partial' : 'unpaid') as SaleStatus,
     paymentMethod,
     notes: input.notes?.trim() || undefined,
+    quotationId: input.quotationId,
+    quotationNo: input.quotationNo,
   }
-  const applied = addMovement(state.stockMovements, state.inventory, {
-    date,
-    reference: invoiceNo,
-    productId: product.id,
-    warehouseId: agent.warehouseId,
-    type: 'sale',
-    stockIn: 0,
-    stockOut: qty,
-    notes: `Agent sale · ${agent.name}`,
-  })
+  let inventory = state.inventory
+  let movements = state.stockMovements
+  for (const line of resolved) {
+    const applied = addMovement(movements, inventory, {
+      date,
+      reference: invoiceNo,
+      productId: line.productId,
+      warehouseId: agent.warehouseId,
+      type: 'sale',
+      stockIn: 0,
+      stockOut: line.qty,
+      notes: `Agent sale · ${agent.name}`,
+    })
+    inventory = applied.inventory
+    movements = applied.movements
+  }
   const agentSale: AgentSale = {
     id: uid('ags'),
     saleId: sale.id,
@@ -601,20 +682,18 @@ function postAgentSale(input: {
     warehouseId: agent.warehouseId,
     date,
     customerId,
-    items: [
-      {
-        productId: product.id,
-        qty,
-        agentPrice,
-        sellingPrice,
-        productMarkup: earnings.productMarkup,
-      },
-    ],
+    items: resolved.map((line) => ({
+      productId: line.productId,
+      qty: line.qty,
+      agentPrice: line.agentPrice,
+      sellingPrice: line.sellingPrice,
+      productMarkup: line.productMarkup,
+    })),
     cspAmount: earnings.cspAmount,
     productMarkup: earnings.productMarkup,
     deliveryEarnings: earnings.deliveryEarnings,
     totalEarnings: earnings.totalEarnings,
-    customerPaid: earnings.customerPays,
+    customerPaid: customerTotal,
     notes: sale.notes,
     createdAt: date,
   }
@@ -633,7 +712,7 @@ function postAgentSale(input: {
     createdAt: date,
   }
   const payments = [...state.payments]
-  if (customerTotal > 0) {
+  if (paidAmount > 0) {
     payments.unshift({
       id: uid('pay'),
       paymentNo: nextDocNo(state.payments.map((payment) => payment.paymentNo), 'PAY-'),
@@ -643,24 +722,25 @@ function postAgentSale(input: {
       invoiceId: sale.id,
       invoiceNo,
       method: paymentMethod,
-      amount: customerTotal,
+      amount: paidAmount,
       status: 'completed',
     })
   }
+  const summary = resolved.map((line) => `${line.name} · ${formatQty(line.qty)} ${line.unit}`).join(', ')
   const audit = makeDocAudit({
     action: 'agent_sale_created',
     documentType: 'agent_sale',
     documentId: sale.id,
     documentNo: invoiceNo,
     field: 'CREATE_AGENT_SALE',
-    newValue: `${agent.name} · ${product.name} · ${formatQty(qty)} ${product.unit}`,
+    newValue: `${agent.name} · ${summary}`,
   })
   state = {
     ...state,
     sales: [sale, ...state.sales],
     agentSales: [agentSale, ...(state.agentSales ?? [])],
-    inventory: applied.inventory,
-    stockMovements: applied.movements,
+    inventory,
+    stockMovements: movements,
     payments,
     agentEarningLedgers: withSaleEarningLedger(state.agentEarningLedgers ?? [], ledger),
     documentAuditLogs: pushDocAudit(audit),
@@ -1122,6 +1202,7 @@ export const db = {
       sellingPrice: selling.value,
       wholesalePrice: wholesale.value,
       agentPrice,
+      sellable: input.sellable ?? true,
       reorderLevel: input.reorderLevel ?? 0,
       trackBatch: Boolean(input.trackBatch),
       trackExpiry: Boolean(input.trackExpiry),
@@ -1243,6 +1324,7 @@ export const db = {
       sellingPrice: patch.sellingPrice ?? current.sellingPrice,
       wholesalePrice: patch.wholesalePrice ?? current.wholesalePrice,
       agentPrice: Object.prototype.hasOwnProperty.call(patch, 'agentPrice') ? patch.agentPrice : current.agentPrice,
+      sellable: patch.sellable ?? current.sellable ?? true,
       reorderLevel: patch.reorderLevel ?? current.reorderLevel,
       trackBatch: patch.trackBatch ?? current.trackBatch,
       trackExpiry: patch.trackExpiry ?? current.trackExpiry,
@@ -1790,8 +1872,32 @@ export const db = {
       toast('Add at least one item', undefined, 'warning')
       return null
     }
+    const linked = currentLinkedAgent(state)
+    const agentId = input.agentId ?? linked?.id
+    const shipping = round2(Math.max(0, Number(input.shipping ?? 0)))
+    if (agentId) {
+      const agent = (state.agents ?? []).find((item) => item.id === agentId)
+      if (!agent) {
+        toast('Unable to save quotation.', undefined, 'danger')
+        return null
+      }
+      if (linked && linked.id !== agentId) {
+        toast('Permission denied', 'You can only quote from your own Agent stock.', 'danger')
+        return null
+      }
+      const blocked = validateAgentDocumentLines(items, agent.warehouseId)
+      if (blocked) return null
+    } else {
+      for (const line of items) {
+        const product = productById(line.productId)
+        if (product && !productIsSellable(product)) {
+          toast('This item is not sellable.', product.name, 'warning')
+          return null
+        }
+      }
+    }
     const date = input.date ?? nowIso()
-    const totals = totalsFromLines(items, input.discount ?? 0, input.tax ?? 0)
+    const totals = totalsFromLines(items, input.discount ?? 0, input.tax ?? 0, shipping)
     const quotation: Quotation = {
       id: uid('qt'),
       quotationNo: nextDatedDocNo((state.quotations ?? []).map((row) => row.quotationNo), 'QT-', date),
@@ -1805,6 +1911,7 @@ export const db = {
       items,
       ...totals,
       status: input.status ?? 'draft',
+      agentId,
       createdAt: nowIso(),
       updatedAt: nowIso(),
     }
@@ -1831,6 +1938,7 @@ export const db = {
     }
     const current = (state.quotations ?? []).find((item) => item.id === id)
     if (!current) return false
+    if (linkedAgentDenied(current.agentId)) return false
     if (current.status === 'cancelled' || current.convertedSaleId) {
       toast('This quotation cannot be edited', undefined, 'warning')
       return false
@@ -1840,7 +1948,27 @@ export const db = {
       toast('Add at least one item', undefined, 'warning')
       return false
     }
-    const totals = totalsFromLines(items, input.discount ?? 0, input.tax ?? 0)
+    const shipping = round2(Math.max(0, Number(input.shipping ?? current.shipping ?? 0)))
+    const agentId = input.agentId ?? current.agentId
+    if (agentId) {
+      const agent = (state.agents ?? []).find((item) => item.id === agentId)
+      if (!agent) return false
+      const linked = currentLinkedAgent(state)
+      if (linked && linked.id !== agentId) {
+        toast('Permission denied', 'You can only quote from your own Agent stock.', 'danger')
+        return false
+      }
+      if (validateAgentDocumentLines(items, agent.warehouseId)) return false
+    } else {
+      for (const line of items) {
+        const product = productById(line.productId)
+        if (product && !productIsSellable(product)) {
+          toast('This item is not sellable.', product.name, 'warning')
+          return false
+        }
+      }
+    }
+    const totals = totalsFromLines(items, input.discount ?? 0, input.tax ?? 0, shipping)
     setData({
       quotations: state.quotations.map((item) =>
         item.id === id
@@ -1854,6 +1982,7 @@ export const db = {
               terms: input.terms ?? item.terms,
               items,
               ...totals,
+              agentId,
               updatedAt: nowIso(),
             }
           : item,
@@ -1874,6 +2003,7 @@ export const db = {
   setQuotationStatus(id: string, status: QuotationStatus) {
     const current = (state.quotations ?? []).find((item) => item.id === id)
     if (!current) return false
+    if (linkedAgentDenied(current.agentId)) return false
     if (status === 'sent' && !hasPermission(state, 'sales.quotation.issue')) {
       toast('Permission denied', 'You cannot issue quotations.', 'danger')
       return false
@@ -1913,6 +2043,7 @@ export const db = {
     }
     const quotation = (state.quotations ?? []).find((item) => item.id === id)
     if (!quotation) return null
+    if (linkedAgentDenied(quotation.agentId)) return null
     if (quotation.convertedSaleId) {
       toast('Already converted', quotation.convertedInvoiceNo, 'info')
       return state.sales.find((item) => item.id === quotation.convertedSaleId) ?? null
@@ -1920,6 +2051,52 @@ export const db = {
     if (quotation.status === 'cancelled') {
       toast('Cancelled quotations cannot be converted', undefined, 'warning')
       return null
+    }
+    if (quotation.agentId) {
+      const agent = (state.agents ?? []).find((item) => item.id === quotation.agentId)
+      if (!agent) {
+        toast('Unable to convert quotation.', undefined, 'danger')
+        return null
+      }
+      const sale = this.createAgentSale({
+        agentId: agent.id,
+        items: quotation.items.map((line) => ({
+          productId: line.productId,
+          qty: line.qty,
+          sellingPrice: line.price,
+        })),
+        delivery: quotation.shipping ?? 0,
+        customerId: quotation.customerId,
+        notes: quotation.notes,
+        quotationId: quotation.id,
+        quotationNo: quotation.quotationNo,
+        paidAmount: 0,
+      })
+      if (!sale) return null
+      setData({
+        quotations: state.quotations.map((item) =>
+          item.id === id
+            ? {
+                ...item,
+                status: 'accepted' as const,
+                convertedSaleId: sale.id,
+                convertedInvoiceNo: sale.invoiceNo,
+                updatedAt: nowIso(),
+              }
+            : item,
+        ),
+        documentAuditLogs: pushDocAudit(
+          makeDocAudit({
+            action: 'quotation_converted',
+            documentType: 'quotation',
+            documentId: quotation.id,
+            documentNo: quotation.quotationNo,
+            newValue: sale.invoiceNo,
+          }),
+        ),
+      })
+      toast('Quotation converted', sale.invoiceNo)
+      return sale
     }
     const sale = this.createSale({
       customerId: quotation.customerId,
@@ -1934,6 +2111,7 @@ export const db = {
       })),
       discount: quotation.discount,
       tax: quotation.tax,
+      shipping: quotation.shipping ?? 0,
       paidAmount: 0,
       notes: quotation.notes,
       reference: quotation.reference,
@@ -2164,6 +2342,17 @@ export const db = {
       return null
     }
     const warehouseId = input.warehouseId
+    if (isAgentWarehouseId(state.warehouses, warehouseId)) {
+      toast('Use Agent POS', 'Agent stock sales must use the Agent sale flow.', 'warning')
+      return null
+    }
+    for (const item of items) {
+      const product = productById(item.productId)
+      if (product && !productIsSellable(product)) {
+        toast('This item is not sellable.', product.name, 'warning')
+        return null
+      }
+    }
     if (!state.settings.allowNegativeStock) {
       for (const item of items) {
         const available = getQty(item.productId, warehouseId)
@@ -2510,14 +2699,18 @@ export const db = {
 
   createAgentSale(input: {
     agentId: string
-    productId: string
-    qty: number
-    sellingPrice: number
+    items?: Array<{ productId: string; qty: number; sellingPrice: number }>
+    productId?: string
+    qty?: number
+    sellingPrice?: number
     delivery?: number
     customerId?: string
     paymentMethod?: PaymentMethod
     notes?: string
     requestId?: string
+    quotationId?: string
+    quotationNo?: string
+    paidAmount?: number
   }) {
     if (agentSaleInFlight) {
       toast('Unable to complete sale. Please try again.', undefined, 'warning')
