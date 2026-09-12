@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useMemo, useRef, useState } from 'react'
 import { MapPin, Search } from 'lucide-react'
 import { Button, Card, ConfirmDialog, Field, Input, Modal, PageHeader, Select } from '@/components/ui'
 import { hasPermission } from '@/features/settings/permissions'
@@ -19,6 +19,18 @@ import type { PlacementLog, Product, SlotOccupancy, StorageLocation, StorageSlot
 
 type PlaceMode = { kind: 'place'; productId: string } | { kind: 'move'; fromSlotId: string } | null
 
+type SlotDnd = {
+  enabled: boolean
+  fromId: string
+  overId: string
+  setFrom: (id: string) => void
+  setOver: (id: string) => void
+  markDrag: () => void
+  consumedClick: () => boolean
+  drop: (toSlotId: string, fromSlotId?: string) => void
+  end: () => void
+}
+
 export function WarehouseMapPage() {
   const state = useStore()
   const api = useApi()
@@ -37,6 +49,9 @@ export function WarehouseMapPage() {
   const [showRack, setShowRack] = useState(false)
   const [historyOpen, setHistoryOpen] = useState(false)
   const [deactivateId, setDeactivateId] = useState('')
+  const [dragFromId, setDragFromId] = useState('')
+  const [dragOverId, setDragOverId] = useState('')
+  const draggedRef = useRef(false)
   const occupancies = occupancyBySlot(state.slotOccupancies)
   const products = state.products.filter(isFinishedPack)
   const productById = (id: string) => state.products.find((row) => row.id === id)
@@ -150,6 +165,45 @@ export function WarehouseMapPage() {
     setMode({ kind: 'move', fromSlotId })
     setSelectedSlotId(target.id)
     setQty(Math.min(source.quantityPacks, 5) || source.quantityPacks)
+  }
+
+  const dropMove = (toSlotId: string, fromSlotId?: string) => {
+    const fromId = fromSlotId || dragFromId
+    if (!canMove || !fromId || fromId === toSlotId) return
+    if (occupancies[toSlotId]) return
+    const source = occupancies[fromId]
+    const toSlot = state.storageSlots.find((row) => row.id === toSlotId && row.active)
+    const toLocation = toSlot ? state.storageLocations.find((row) => row.id === toSlot.locationId && row.active) : undefined
+    if (!source || !toSlot || !toLocation || toLocation.type === 'BALANCE_AREA') return
+    api.moveStock({
+      fromSlotId: fromId,
+      toSlotId,
+      qty: source.quantityPacks,
+      action: toLocation.type === 'DISPLAY' ? 'TOPPED_UP' : 'MOVED',
+    })
+    setMode(null)
+    setSelectedSlotId('')
+  }
+
+  const dnd: SlotDnd = {
+    enabled: canMove,
+    fromId: dragFromId,
+    overId: dragOverId,
+    setFrom: setDragFromId,
+    setOver: setDragOverId,
+    markDrag: () => {
+      draggedRef.current = true
+    },
+    consumedClick: () => {
+      if (!draggedRef.current) return false
+      draggedRef.current = false
+      return true
+    },
+    drop: dropMove,
+    end: () => {
+      setDragFromId('')
+      setDragOverId('')
+    },
   }
 
   if (!canView) {
@@ -276,6 +330,7 @@ export function WarehouseMapPage() {
                   selectedSlotId={selectedSlotId}
                   searching={Boolean(query.trim())}
                   onClick={clickSlot}
+                  dnd={dnd}
                 />
               ))}
             </div>
@@ -292,6 +347,7 @@ export function WarehouseMapPage() {
               selectedSlotId={selectedSlotId}
               searching={Boolean(query.trim())}
               onClick={clickSlot}
+              dnd={dnd}
             />
           ))}
 
@@ -311,6 +367,7 @@ export function WarehouseMapPage() {
                     searching={Boolean(query.trim())}
                     onClick={clickSlot}
                     onDeactivate={canManage ? () => setDeactivateId(location.id) : undefined}
+                    dnd={dnd}
                   />
                 ))}
               </div>
@@ -389,6 +446,7 @@ function RackCard({
   selectedSlotId,
   searching,
   onClick,
+  dnd,
 }: {
   location: StorageLocation
   slots: StorageSlot[]
@@ -398,6 +456,7 @@ function RackCard({
   selectedSlotId: string
   searching?: boolean
   onClick: (slot: StorageSlot, occupancy?: SlotOccupancy) => void
+  dnd: SlotDnd
 }) {
   const levels = [...new Set(slots.map((row) => row.level))].sort((a, b) => a - b)
   return (
@@ -414,17 +473,6 @@ function RackCard({
             <div key={level}>
               <div className="mb-1 text-[10px] font-semibold uppercase tracking-[0.12em] text-slate-400">Level {level}</div>
               <FaceRow
-                label="Front"
-                slots={front}
-                occupancies={occupancies}
-                productById={productById}
-                highlightedSlotIds={highlightedSlotIds}
-                selectedSlotId={selectedSlotId}
-                partnerSlots={back}
-                searching={searching}
-                onClick={onClick}
-              />
-              <FaceRow
                 label="Back"
                 slots={back}
                 occupancies={occupancies}
@@ -434,7 +482,20 @@ function RackCard({
                 partnerSlots={front}
                 searching={searching}
                 onClick={onClick}
+                dnd={dnd}
                 muted
+              />
+              <FaceRow
+                label="Front"
+                slots={front}
+                occupancies={occupancies}
+                productById={productById}
+                highlightedSlotIds={highlightedSlotIds}
+                selectedSlotId={selectedSlotId}
+                partnerSlots={back}
+                searching={searching}
+                onClick={onClick}
+                dnd={dnd}
               />
             </div>
           )
@@ -454,6 +515,7 @@ function FaceRow({
   partnerSlots,
   searching,
   onClick,
+  dnd,
   muted,
 }: {
   label: string
@@ -465,10 +527,11 @@ function FaceRow({
   partnerSlots: StorageSlot[]
   searching?: boolean
   onClick: (slot: StorageSlot, occupancy?: SlotOccupancy) => void
+  dnd: SlotDnd
   muted?: boolean
 }) {
   return (
-    <div className={muted ? 'mt-1' : ''}>
+    <div className={muted ? '' : 'mt-1'}>
       <div className="mb-1 text-[10px] font-medium uppercase tracking-wide text-slate-400">{label}</div>
       <div className="flex gap-1.5">
         {slots.map((slot) => {
@@ -486,6 +549,7 @@ function FaceRow({
               dimmed={Boolean(searching && occupancies[slot.id] && !highlighted)}
               backStock={backHidden}
               onClick={() => onClick(slot, occupancies[slot.id])}
+              dnd={dnd}
             />
           )
         })}
@@ -504,6 +568,7 @@ function GenericStrip({
   searching,
   onClick,
   onDeactivate,
+  dnd,
 }: {
   title: string
   slots: StorageSlot[]
@@ -514,6 +579,7 @@ function GenericStrip({
   searching?: boolean
   onClick: (slot: StorageSlot, occupancy?: SlotOccupancy) => void
   onDeactivate?: () => void
+  dnd: SlotDnd
 }) {
   return (
     <div>
@@ -534,6 +600,7 @@ function GenericStrip({
               selected={selectedSlotId === slot.id}
               dimmed={Boolean(searching && occupancies[slot.id] && !highlighted)}
               onClick={() => onClick(slot, occupancies[slot.id])}
+              dnd={dnd}
             />
           )
         })}
@@ -573,6 +640,7 @@ function BalanceStrip({ location, slots }: { location: StorageLocation; slots: S
 }
 
 function SlotCell({
+  slot,
   occupancy,
   product,
   highlighted,
@@ -580,6 +648,7 @@ function SlotCell({
   dimmed,
   backStock,
   onClick,
+  dnd,
 }: {
   slot: StorageSlot
   occupancy?: SlotOccupancy
@@ -589,19 +658,58 @@ function SlotCell({
   dimmed?: boolean
   backStock?: boolean
   onClick: () => void
+  dnd?: SlotDnd
 }) {
   const color = product?.accent || '#e2e8f0'
+  const occupied = Boolean(occupancy)
+  const canDrag = Boolean(dnd?.enabled && occupied)
+  const dragging = Boolean(dnd?.fromId === slot.id)
+  const hovering = Boolean(dnd?.fromId && dnd.fromId !== slot.id && dnd.overId === slot.id)
+  const dropOk = hovering && !occupied
+  const dropBad = hovering && occupied
   return (
     <button
       type="button"
-      onClick={onClick}
+      draggable={canDrag}
+      onDragStart={(event) => {
+        if (!canDrag || !dnd) {
+          event.preventDefault()
+          return
+        }
+        event.dataTransfer.effectAllowed = 'move'
+        event.dataTransfer.setData('text/plain', slot.id)
+        dnd.markDrag()
+        dnd.setFrom(slot.id)
+      }}
+      onDragEnd={() => dnd?.end()}
+      onDragOver={(event) => {
+        if (!dnd?.enabled || !dnd.fromId || dnd.fromId === slot.id) return
+        event.preventDefault()
+        event.dataTransfer.dropEffect = occupied ? 'none' : 'move'
+        if (dnd.overId !== slot.id) dnd.setOver(slot.id)
+      }}
+      onDragLeave={() => {
+        if (dnd?.overId === slot.id) dnd.setOver('')
+      }}
+      onDrop={(event) => {
+        event.preventDefault()
+        const fromId = event.dataTransfer.getData('text/plain') || dnd?.fromId
+        dnd?.drop(slot.id, fromId)
+        dnd?.end()
+      }}
+      onClick={() => {
+        if (dnd?.consumedClick()) return
+        onClick()
+      }}
       className={`relative h-[76px] w-[96px] shrink-0 rounded-lg border text-left text-[11px] leading-tight ${
         occupancy
           ? 'border-slate-300 shadow-sm'
           : 'border-dashed border-slate-300 bg-[repeating-linear-gradient(-45deg,#fff,#fff_6px,#f8fafc_6px,#f8fafc_12px)] text-slate-400'
       } ${highlighted ? 'z-10 scale-[1.03] ring-4 ring-indigo-500 ring-offset-2' : ''} ${selected ? 'ring-2 ring-emerald-500' : ''} ${
-        dimmed ? 'opacity-35' : ''
-      }`}
+        dimmed && !dragging ? 'opacity-35' : ''
+      } ${canDrag ? 'cursor-grab active:cursor-grabbing' : ''} ${dragging ? 'opacity-50 shadow-md' : ''} ${
+        dropOk ? 'z-10 ring-2 ring-emerald-500 bg-emerald-50' : ''
+      } ${dropBad ? 'z-10 ring-2 ring-rose-400' : ''}`}
       style={occupancy ? { background: color, color: contrastText(color) } : undefined}
     >
       <div className="flex h-full flex-col justify-between p-1.5">
