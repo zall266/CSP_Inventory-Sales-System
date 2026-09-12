@@ -8,6 +8,7 @@ import {
   locationTypeLabel,
   occupancyBySlot,
   placedPacks,
+  displayPacks,
   shortProductName,
   slotLabel,
   unplacedPacks,
@@ -57,6 +58,8 @@ export function WarehouseMapPage() {
   const [deactivateId, setDeactivateId] = useState('')
   const [dragFromId, setDragFromId] = useState('')
   const [dragOverId, setDragOverId] = useState('')
+  const [mapTab, setMapTab] = useState<'ctn' | 'pallet'>('ctn')
+  const [topUpOpen, setTopUpOpen] = useState(false)
   const draggedRef = useRef(false)
   const occupancies = occupancyBySlot(state.slotOccupancies)
   const products = state.products.filter(isFinishedPack)
@@ -69,13 +72,14 @@ export function WarehouseMapPage() {
           product,
           qty: unplacedPacks(state, product.id, warehouseId),
           placed: placedPacks(state, product.id, warehouseId),
+          display: displayPacks(state, product.id, warehouseId),
           inventory: state.inventory.find((row) => row.productId === product.id && row.warehouseId === warehouseId)?.qty ?? 0,
         }))
-        .filter((row) => row.qty > 0 || row.placed > row.inventory),
+        .filter((row) => row.qty > 0 || row.placed + row.display > row.inventory),
     [products, state, warehouseId],
   )
 
-  const overPlaced = unplaced.filter((row) => row.placed > row.inventory)
+  const overPlaced = unplaced.filter((row) => row.placed + row.display > row.inventory)
   const findMatches = useMemo(() => {
     const q = query.trim().toLowerCase()
     if (!q) return []
@@ -84,8 +88,9 @@ export function WarehouseMapPage() {
         const product = productById(row.productId)
         const slot = state.storageSlots.find((item) => item.id === row.slotId)
         const location = slot ? state.storageLocations.find((item) => item.id === slot.locationId) : undefined
-        if (!product || !slot || !location?.active || location.warehouseId !== warehouseId) return null
-        if (!`${product.name} ${product.sku}`.toLowerCase().includes(q)) return null
+        if (!product || !slot || !location) return null
+        if (!location.active || location.warehouseId !== warehouseId || location.type === 'DISPLAY' || location.type === 'BALANCE_AREA') return null
+        if (!`${product.name} ${product.sku} ${location.name}`.toLowerCase().includes(q)) return null
         return { occupancy: row, product, slot, location }
       })
       .filter((row): row is NonNullable<typeof row> => Boolean(row))
@@ -95,9 +100,14 @@ export function WarehouseMapPage() {
   if (highlightId) highlightedSlotIds.add(highlightId)
 
   const racks = state.storageLocations.filter((row) => row.active && row.warehouseId === warehouseId && row.type === 'RACK')
-  const displays = state.storageLocations.filter((row) => row.active && row.warehouseId === warehouseId && row.type === 'DISPLAY')
-  const overflow = state.storageLocations.filter((row) => row.active && row.warehouseId === warehouseId && (row.type === 'PALLET' || row.type === 'FLOOR'))
+  const pallets = state.storageLocations.filter((row) => row.active && row.warehouseId === warehouseId && (row.type === 'PALLET' || row.type === 'FLOOR'))
   const balances = state.storageLocations.filter((row) => row.active && row.warehouseId === warehouseId && row.type === 'BALANCE_AREA')
+
+  const firstEmptySlot = (locationId: string) =>
+    state.storageSlots
+      .filter((row) => row.locationId === locationId && row.active)
+      .sort((a, b) => a.slotNo - b.slotNo)
+      .find((row) => !occupancies[row.id])
 
   const clickSlot = (slot: StorageSlot, occupancy?: SlotOccupancy) => {
     if (mode?.kind === 'place') {
@@ -105,7 +115,7 @@ export function WarehouseMapPage() {
       if (!canPlace) return
       const location = state.storageLocations.find((row) => row.id === slot.locationId)
       if (location?.type === 'DISPLAY' || location?.type === 'BALANCE_AREA') {
-        api.toast('Display is sale-ready stock', 'Place finished packs on a rack, then top up Display from the rack.', 'warning')
+        api.toast('Display is loose stock', 'Place cartons on CTN Rack or Pallet Stock, then top up Display from carton stock.', 'warning')
         return
       }
       setSelectedSlotId(slot.id)
@@ -147,11 +157,17 @@ export function WarehouseMapPage() {
       return
     }
     const toLocation = state.storageLocations.find((row) => row.id === state.storageSlots.find((item) => item.id === selectedSlotId)?.locationId)
+    if (toLocation?.type === 'DISPLAY') {
+      api.topUpDisplay({ fromSlotId: mode.fromSlotId, qty })
+      setMode(null)
+      setSelectedSlotId('')
+      return
+    }
     api.moveStock({
       fromSlotId: mode.fromSlotId,
       toSlotId: selectedSlotId,
       qty,
-      action: toLocation?.type === 'DISPLAY' ? 'TOPPED_UP' : 'MOVED',
+      action: 'MOVED',
     })
     setMode(null)
     setSelectedSlotId('')
@@ -160,22 +176,9 @@ export function WarehouseMapPage() {
   const moveToDisplay = (fromSlotId: string) => {
     const source = occupancies[fromSlotId]
     if (!source) return
-    const display = displays[0]
-    if (!display) {
-      api.toast('No display rack', 'Add a display location first.', 'warning')
-      return
-    }
-    const displaySlots = state.storageSlots.filter((row) => row.locationId === display.id && row.active)
-    const same = displaySlots.find((slot) => occupancies[slot.id]?.productId === source.productId)
-    const empty = displaySlots.find((slot) => !occupancies[slot.id])
-    const target = same ?? empty
-    if (!target) {
-      api.toast('Display is full', 'Empty a display position first.', 'warning')
-      return
-    }
     setMode({ kind: 'move', fromSlotId })
-    setSelectedSlotId(target.id)
-    setQty(Math.min(source.quantityPacks, 5) || source.quantityPacks)
+    setQty(source.quantityPacks)
+    setTopUpOpen(true)
   }
 
   const dropMove = (toSlotId: string, fromSlotId?: string) => {
@@ -185,12 +188,12 @@ export function WarehouseMapPage() {
     const source = occupancies[fromId]
     const toSlot = state.storageSlots.find((row) => row.id === toSlotId && row.active)
     const toLocation = toSlot ? state.storageLocations.find((row) => row.id === toSlot.locationId && row.active) : undefined
-    if (!source || !toSlot || !toLocation || toLocation.type === 'BALANCE_AREA') return
+    if (!source || !toSlot || !toLocation || toLocation.type === 'BALANCE_AREA' || toLocation.type === 'DISPLAY') return
     api.moveStock({
       fromSlotId: fromId,
       toSlotId,
       qty: source.quantityPacks,
-      action: toLocation.type === 'DISPLAY' ? 'TOPPED_UP' : 'MOVED',
+      action: 'MOVED',
     })
     setMode(null)
     setSelectedSlotId('')
@@ -246,7 +249,7 @@ export function WarehouseMapPage() {
       <div className="mb-4 flex flex-col gap-3 lg:flex-row">
         <div className="relative min-w-0 flex-1">
           <Search size={16} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
-          <Input className="pl-9" placeholder="Find product" value={query} onChange={(e) => { setQuery(e.target.value); setHighlightId('') }} />
+          <Input className="pl-9" placeholder={mapTab === 'pallet' ? 'Search location / product' : 'Find product'} value={query} onChange={(e) => { setQuery(e.target.value); setHighlightId('') }} />
         </div>
         {mode && (
           <Button variant="ghost" onClick={() => { setMode(null); setSelectedSlotId('') }}>
@@ -271,7 +274,10 @@ export function WarehouseMapPage() {
                       className={`block w-full rounded-lg px-2 py-1.5 text-left text-sm hover:bg-slate-50 ${
                         highlightId === row.occupancy.slotId ? 'bg-indigo-50 ring-1 ring-indigo-300' : ''
                       }`}
-                      onClick={() => setHighlightId(row.occupancy.slotId)}
+                      onClick={() => {
+                        setHighlightId(row.occupancy.slotId)
+                        setMapTab(row.location.type === 'RACK' ? 'ctn' : 'pallet')
+                      }}
                     >
                       {slotLabel(state, row.occupancy.slotId)} · {formatQty(row.occupancy.quantityPacks)}
                     </button>
@@ -282,7 +288,7 @@ export function WarehouseMapPage() {
           )}
           <Card className="p-4">
             <div className="mb-3 text-sm font-semibold">Ready to place</div>
-            <p className="mb-3 text-[11px] text-slate-400">Place onto warehouse racks or temporary storage. Display is sale-ready stock only.</p>
+            <p className="mb-3 text-[11px] text-slate-400">Place carton stock onto CTN Rack or Pallet Stock. Display is loose stock, not a map slot.</p>
             {unplaced.filter((row) => row.qty > 0).length === 0 ? (
               <p className="text-sm text-slate-500">No finished goods waiting for placement.</p>
             ) : (
@@ -291,7 +297,7 @@ export function WarehouseMapPage() {
                   <div key={row.product.id} className="rounded-xl border border-slate-100 p-3">
                     <div className="text-sm font-medium text-slate-900">{row.product.name}</div>
                     <div className="mt-1 text-lg font-semibold tabular">{formatQty(row.qty)} PACK</div>
-                    <div className="text-xs text-slate-400">Inventory {formatQty(row.inventory)} · Mapped {formatQty(row.placed)}</div>
+                    <div className="text-xs text-slate-400">Inventory {formatQty(row.inventory)} · Display {formatQty(row.display)} · Carton {formatQty(row.placed)}</div>
                     {latestProductionRef(state, row.product.id) && (
                       <div className="text-xs text-slate-400">Batch: {latestProductionRef(state, row.product.id)}</div>
                     )}
@@ -313,9 +319,9 @@ export function WarehouseMapPage() {
             <Card className="p-4">
               <div className="text-sm font-semibold">Move stock</div>
               <p className="mt-1 text-sm text-slate-600">{slotLabel(state, mode.fromSlotId)} · {formatQty(movingFrom.quantityPacks)} pack</p>
-              <p className="mt-2 text-xs text-slate-500">Click a destination cell, or top up Display.</p>
+              <p className="mt-2 text-xs text-slate-500">Click a destination cell, or top up Display from this carton.</p>
               <div className="mt-3 flex flex-wrap gap-2">
-                <Button size="sm" onClick={() => moveToDisplay(mode.fromSlotId)}>Move to Display</Button>
+                <Button size="sm" onClick={() => moveToDisplay(mode.fromSlotId)}>Top up Display</Button>
                 <Button size="sm" variant="secondary" onClick={() => api.emptySlot(mode.fromSlotId)}>Empty (unplace)</Button>
               </div>
             </Card>
@@ -323,75 +329,71 @@ export function WarehouseMapPage() {
           {mode?.kind === 'place' && placingProduct && (
             <Card className="p-4">
               <div className="text-sm font-semibold">Placing {placingProduct.name}</div>
-              <p className="mt-1 text-sm text-slate-600">{formatQty(unplacedPacks(state, placingProduct.id, warehouseId))} pack left. Click an empty cell.</p>
+              <p className="mt-1 text-sm text-slate-600">{formatQty(unplacedPacks(state, placingProduct.id, warehouseId))} pack left. Click an empty CTN Rack cell or Place here on Pallet Stock.</p>
             </Card>
           )}
         </div>
 
         <div className="min-w-0 space-y-5">
-          <div className="overflow-x-auto pb-2">
-            <div className="mb-2 text-xs font-semibold uppercase tracking-[0.14em] text-slate-400">Main warehouse</div>
-            <div className="flex min-w-max gap-6">
-              {racks.map((rack) => (
-                <RackCard
-                  key={rack.id}
-                  location={rack}
-                  slots={state.storageSlots.filter((row) => row.locationId === rack.id && row.active)}
-                  occupancies={occupancies}
-                  productById={productById}
-                  highlightedSlotIds={highlightedSlotIds}
-                  selectedSlotId={selectedSlotId}
-                  searching={Boolean(query.trim())}
-                  onClick={clickSlot}
-                  dnd={dnd}
-                />
-              ))}
-            </div>
+          <div className="flex flex-wrap gap-2">
+            <Button variant={mapTab === 'ctn' ? 'primary' : 'secondary'} onClick={() => setMapTab('ctn')}>CTN Rack</Button>
+            <Button variant={mapTab === 'pallet' ? 'primary' : 'secondary'} onClick={() => setMapTab('pallet')}>Pallet Stock</Button>
           </div>
-
-          {displays.map((location) => (
-            <div key={location.id}>
-              <p className="mb-2 text-[11px] text-slate-400">Sale-ready stock. Top up from a rack — not from production putaway.</p>
-              <GenericStrip
-                title="Display rack"
-                slots={state.storageSlots.filter((row) => row.locationId === location.id && row.active)}
+          {mapTab === 'ctn' ? (
+            <>
+              <div className="overflow-x-auto pb-2">
+                <div className="mb-2 text-xs font-semibold uppercase tracking-[0.14em] text-slate-400">CTN Rack</div>
+                <div className="flex min-w-max gap-6">
+                  {racks.map((rack) => (
+                    <RackCard
+                      key={rack.id}
+                      location={rack}
+                      slots={state.storageSlots.filter((row) => row.locationId === rack.id && row.active)}
+                      occupancies={occupancies}
+                      productById={productById}
+                      highlightedSlotIds={highlightedSlotIds}
+                      selectedSlotId={selectedSlotId}
+                      searching={Boolean(query.trim())}
+                      onClick={clickSlot}
+                      dnd={dnd}
+                    />
+                  ))}
+                </div>
+              </div>
+              {balances.map((location) => (
+                <BalanceStrip key={location.id} location={location} slots={state.storageSlots.filter((row) => row.locationId === location.id && row.active)} canUse={canUseBalance} />
+              ))}
+            </>
+          ) : (
+            <PalletStockPanel
+              locations={pallets}
+              query={query}
               occupancies={occupancies}
               productById={productById}
               highlightedSlotIds={highlightedSlotIds}
               selectedSlotId={selectedSlotId}
-              searching={Boolean(query.trim())}
-              onClick={clickSlot}
+              canManage={canManage}
+              canPlace={canPlace}
+              placing={mode?.kind === 'place'}
+              firstEmptySlot={firstEmptySlot}
+              onClickSlot={clickSlot}
+              onPlaceHere={(locationId) => {
+                const slot = firstEmptySlot(locationId)
+                if (!slot) {
+                  api.toast('Pallet is full', 'Empty a carton position or add another pallet.', 'warning')
+                  return
+                }
+                clickSlot(slot)
+              }}
+              onDeactivate={(id) => setDeactivateId(id)}
+              onDropLocation={(locationId, fromSlotId) => {
+                const slot = firstEmptySlot(locationId)
+                if (!slot) return
+                dropMove(slot.id, fromSlotId)
+              }}
               dnd={dnd}
             />
-            </div>
-          ))}
-
-          {overflow.length > 0 && (
-            <div>
-              <div className="mb-2 text-xs font-semibold uppercase tracking-[0.14em] text-slate-400">Overflow</div>
-              <div className="space-y-3">
-                {overflow.map((location) => (
-                  <GenericStrip
-                    key={location.id}
-                    title={`${locationTypeLabel(location.type)} · ${location.name}`}
-                    slots={state.storageSlots.filter((row) => row.locationId === location.id && row.active)}
-                    occupancies={occupancies}
-                    productById={productById}
-                    highlightedSlotIds={highlightedSlotIds}
-                    selectedSlotId={selectedSlotId}
-                    searching={Boolean(query.trim())}
-                    onClick={clickSlot}
-                    onDeactivate={canManage ? () => setDeactivateId(location.id) : undefined}
-                    dnd={dnd}
-                  />
-                ))}
-              </div>
-            </div>
           )}
-
-          {balances.map((location) => (
-            <BalanceStrip key={location.id} location={location} slots={state.storageSlots.filter((row) => row.locationId === location.id && row.active)} canUse={canUseBalance} />
-          ))}
         </div>
       </div>
 
@@ -434,6 +436,40 @@ export function WarehouseMapPage() {
           </div>
         )}
       </Modal>
+      <Modal
+        open={topUpOpen && mode?.kind === 'move'}
+        onClose={() => setTopUpOpen(false)}
+        title="Top up Display"
+      >
+        {mode?.kind === 'move' && movingFrom && (
+          <div className="space-y-3">
+            <p className="text-sm text-slate-600">
+              Move packs from {slotLabel(state, mode.fromSlotId)} into Display / Loose stock. Inventory total does not change.
+            </p>
+            <Field label="Available">
+              <div className="text-sm tabular">{formatQty(movingFrom.quantityPacks)} PACK</div>
+            </Field>
+            <Field label="Quantity (packs)">
+              <Input type="number" min={0.01} step="1" value={qty} onChange={(e) => setQty(Number(e.target.value))} />
+            </Field>
+            <div className="flex justify-end gap-2">
+              <Button variant="secondary" onClick={() => setTopUpOpen(false)}>Cancel</Button>
+              <Button
+                onClick={() => {
+                  const ok = api.topUpDisplay({ fromSlotId: mode.fromSlotId, qty })
+                  if (ok) {
+                    setTopUpOpen(false)
+                    setMode(null)
+                    setSelectedSlotId('')
+                  }
+                }}
+              >
+                Top up Display
+              </Button>
+            </div>
+          </div>
+        )}
+      </Modal>
       <TempLocationModal open={showTemp} onClose={() => setShowTemp(false)} warehouseId={warehouseId} />
       <RackModal open={showRack} onClose={() => setShowRack(false)} warehouseId={warehouseId} />
       <HistoryModal open={historyOpen} onClose={() => setHistoryOpen(false)} logs={state.placementLogs} />
@@ -449,6 +485,148 @@ export function WarehouseMapPage() {
           setDeactivateId('')
         }}
       />
+    </div>
+  )
+}
+
+function PalletStockPanel({
+  locations,
+  query,
+  occupancies,
+  productById,
+  highlightedSlotIds,
+  selectedSlotId,
+  canManage,
+  canPlace,
+  placing,
+  firstEmptySlot,
+  onClickSlot,
+  onPlaceHere,
+  onDeactivate,
+  onDropLocation,
+  dnd,
+}: {
+  locations: StorageLocation[]
+  query: string
+  occupancies: Record<string, SlotOccupancy>
+  productById: (id: string) => Product | undefined
+  highlightedSlotIds: Set<string>
+  selectedSlotId: string
+  canManage: boolean
+  canPlace: boolean
+  placing: boolean
+  firstEmptySlot: (locationId: string) => StorageSlot | undefined
+  onClickSlot: (slot: StorageSlot, occupancy?: SlotOccupancy) => void
+  onPlaceHere: (locationId: string) => void
+  onDeactivate: (id: string) => void
+  onDropLocation: (locationId: string, fromSlotId?: string) => void
+  dnd: SlotDnd
+}) {
+  const state = useStore()
+  const q = query.trim().toLowerCase()
+  const cards = locations
+    .map((location) => {
+      const slots = state.storageSlots.filter((row) => row.locationId === location.id && row.active).sort((a, b) => a.slotNo - b.slotNo)
+      const rows = slots
+        .map((slot) => occupancies[slot.id] ? { slot, occupancy: occupancies[slot.id], product: productById(occupancies[slot.id].productId) } : null)
+        .filter((row): row is NonNullable<typeof row> => Boolean(row))
+      return { location, slots, rows, empty: firstEmptySlot(location.id) }
+    })
+    .filter((card) => {
+      if (!q) return true
+      if (card.location.name.toLowerCase().includes(q)) return true
+      return card.rows.some((row) => `${row.product?.name ?? ''} ${row.product?.sku ?? ''}`.toLowerCase().includes(q))
+    })
+
+  return (
+    <div className="space-y-4">
+      <div>
+        <div className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-400">Pallet Stock</div>
+        <p className="mt-1 text-[11px] text-slate-400">Cartons stored outside the CTN Rack. Empty pallets can be deactivated; history is kept.</p>
+      </div>
+      {cards.length === 0 ? (
+        <Card className="p-5">
+          <p className="text-sm text-slate-500">{locations.length === 0 ? 'No active pallet locations. Add a temporary location such as DEPAN OFFICE.' : 'No pallet locations match that search.'}</p>
+        </Card>
+      ) : (
+        cards.map((card) => {
+          const highlighted = card.rows.some((row) => highlightedSlotIds.has(row.slot.id))
+          return (
+            <div
+              key={card.location.id}
+              className={`rounded-2xl border bg-white p-4 ${highlighted ? 'border-indigo-300 ring-1 ring-indigo-200' : 'border-slate-200'}`}
+              onDragOver={(event) => {
+                if (!dnd.enabled || !dnd.fromId || !card.empty) return
+                event.preventDefault()
+                event.dataTransfer.dropEffect = 'move'
+                if (dnd.overId !== card.empty.id) dnd.setOver(card.empty.id)
+              }}
+              onDrop={(event) => {
+                event.preventDefault()
+                const fromId = event.dataTransfer.getData('text/plain') || dnd.fromId
+                onDropLocation(card.location.id, fromId)
+                dnd.end()
+              }}
+            >
+              <div className="mb-3 flex items-start justify-between gap-3">
+                <div>
+                  <div className="text-sm font-semibold text-slate-900">{card.location.name}</div>
+                  <div className="text-[11px] uppercase tracking-wide text-slate-400">{locationTypeLabel(card.location.type)}</div>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  {placing && canPlace && (
+                    <Button size="sm" onClick={() => onPlaceHere(card.location.id)}>Place here</Button>
+                  )}
+                  {canManage && card.rows.length === 0 && (
+                    <button type="button" className="text-xs text-rose-600" onClick={() => onDeactivate(card.location.id)}>Deactivate</button>
+                  )}
+                </div>
+              </div>
+              {card.rows.length === 0 ? (
+                <p className="text-sm text-slate-400">Empty</p>
+              ) : (
+                <div className="space-y-2">
+                  {card.rows.map((row) => {
+                    const produced = occupancyProductionLabel(state, row.occupancy)
+                    const color = row.product?.accent || '#e2e8f0'
+                    return (
+                      <button
+                        key={row.occupancy.id}
+                        type="button"
+                        draggable={dnd.enabled}
+                        onDragStart={(event) => {
+                          if (!dnd.enabled) {
+                            event.preventDefault()
+                            return
+                          }
+                          event.dataTransfer.effectAllowed = 'move'
+                          event.dataTransfer.setData('text/plain', row.slot.id)
+                          dnd.markDrag()
+                          dnd.setFrom(row.slot.id)
+                        }}
+                        onDragEnd={() => dnd.end()}
+                        onClick={() => {
+                          if (dnd.consumedClick()) return
+                          onClickSlot(row.slot, row.occupancy)
+                        }}
+                        className={`w-full rounded-xl border px-3 py-2 text-left ${
+                          highlightedSlotIds.has(row.slot.id) ? 'ring-2 ring-indigo-500' : ''
+                        } ${selectedSlotId === row.slot.id ? 'ring-2 ring-emerald-500' : ''}`}
+                        style={{ background: color, color: contrastText(color), borderColor: color }}
+                      >
+                        <div className="text-sm font-semibold uppercase tracking-wide">{shortProductName(row.product?.name ?? 'Product')}</div>
+                        <div className="mt-0.5 tabular text-sm font-medium">{formatQty(row.occupancy.quantityPacks)} PACK</div>
+                        <div className="text-[11px] opacity-80">{produced}</div>
+                        <div className="mt-1 text-[10px] font-semibold uppercase tracking-wide opacity-80">1 carton</div>
+                      </button>
+                    )
+                  })}
+                </div>
+              )}
+            </div>
+          )
+        })
+      )}
     </div>
   )
 }
@@ -564,57 +742,6 @@ function FaceRow({
               selected={selectedSlotId === slot.id}
               dimmed={Boolean(searching && occupancies[slot.id] && !highlighted)}
               backStock={backHidden}
-              onClick={() => onClick(slot, occupancies[slot.id])}
-              dnd={dnd}
-            />
-          )
-        })}
-      </div>
-    </div>
-  )
-}
-
-function GenericStrip({
-  title,
-  slots,
-  occupancies,
-  productById,
-  highlightedSlotIds,
-  selectedSlotId,
-  searching,
-  onClick,
-  onDeactivate,
-  dnd,
-}: {
-  title: string
-  slots: StorageSlot[]
-  occupancies: Record<string, SlotOccupancy>
-  productById: (id: string) => Product | undefined
-  highlightedSlotIds: Set<string>
-  selectedSlotId: string
-  searching?: boolean
-  onClick: (slot: StorageSlot, occupancy?: SlotOccupancy) => void
-  onDeactivate?: () => void
-  dnd: SlotDnd
-}) {
-  return (
-    <div>
-      <div className="mb-2 flex items-center justify-between gap-2">
-        <div className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-400">{title}</div>
-        {onDeactivate && <button type="button" className="text-xs text-rose-600" onClick={onDeactivate}>Deactivate</button>}
-      </div>
-      <div className="flex flex-wrap gap-1.5">
-        {slots.sort((a, b) => a.slotNo - b.slotNo).map((slot) => {
-          const highlighted = highlightedSlotIds.has(slot.id)
-          return (
-            <SlotCell
-              key={slot.id}
-              slot={slot}
-              occupancy={occupancies[slot.id]}
-              product={occupancies[slot.id] ? productById(occupancies[slot.id].productId) : undefined}
-              highlighted={highlighted}
-              selected={selectedSlotId === slot.id}
-              dimmed={Boolean(searching && occupancies[slot.id] && !highlighted)}
               onClick={() => onClick(slot, occupancies[slot.id])}
               dnd={dnd}
             />
@@ -764,7 +891,7 @@ function SlotCell({
 
 function TempLocationModal({ open, onClose, warehouseId }: { open: boolean; onClose: () => void; warehouseId: string }) {
   const api = useApi()
-  const [name, setName] = useState('Pallet P01')
+  const [name, setName] = useState('DEPAN OFFICE')
   const [type, setType] = useState<'PALLET' | 'FLOOR'>('PALLET')
   const [slotCount, setSlotCount] = useState(3)
   return (

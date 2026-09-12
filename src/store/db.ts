@@ -1,5 +1,14 @@
 import { createSeedData, CURRENT_USER } from '@/data/seed'
-import { createMainWarehouseLayout, generateGenericSlots, generateRackSlots, seedWarehouseOccupancy, unplacedPacks } from '@/features/warehouse/warehouseModel'
+import {
+  applyDisplayDelta,
+  createMainWarehouseLayout,
+  DISPLAY_STOCK_DESTINATION,
+  generateGenericSlots,
+  generateRackSlots,
+  migrateFinishedGoodsStorage,
+  seedWarehouseOccupancy,
+  unplacedPacks,
+} from '@/features/warehouse/warehouseModel'
 import { bomLinesForQty, consumptionCost, hasShortage, materialAvailability } from '@/features/manufacturing/helpers'
 import { buildSessionPlan, canEditSession, currentUser, mergePicking } from '@/features/manufacturing/sessionPlan'
 import {
@@ -131,16 +140,34 @@ function hydrateData(data: AppData): AppData {
       return [role.id, normalized]
     }),
   )
+  const migrated = migrateFinishedGoodsStorage(
+    {
+      storageLocations: data.storageLocations?.length ? data.storageLocations : seedLayout.storageLocations,
+      storageSlots: data.storageSlots?.length ? data.storageSlots : seedLayout.storageSlots,
+      slotOccupancies: data.slotOccupancies ?? (data.storageLocations?.length ? [] : seedOccupancy.slotOccupancies),
+      displayStocks: data.displayStocks,
+    },
+    '2026-09-08T16:15:00+08:00',
+  )
   return {
     ...data,
     quotations: data.quotations ?? [],
     deliveryOrders: data.deliveryOrders ?? [],
     documentAuditLogs: data.documentAuditLogs ?? [],
-    storageLocations: data.storageLocations?.length ? data.storageLocations : seedLayout.storageLocations,
-    storageSlots: data.storageSlots?.length ? data.storageSlots : seedLayout.storageSlots,
-    slotOccupancies: data.slotOccupancies ?? (data.storageLocations?.length ? [] : seedOccupancy.slotOccupancies),
+    storageLocations: migrated.storageLocations,
+    storageSlots: migrated.storageSlots,
+    slotOccupancies: migrated.slotOccupancies,
+    displayStocks: migrated.displayStocks,
     placementLogs: data.placementLogs ?? (data.storageLocations?.length ? [] : seedOccupancy.placementLogs),
     balanceUsageLogs: data.balanceUsageLogs ?? [],
+    productionSessions: (data.productionSessions ?? []).map((session) => ({
+      ...session,
+      items: session.items.map((item) => ({
+        ...item,
+        displayQty: item.displayQty ?? 0,
+        cartonQty: item.cartonQty ?? 0,
+      })),
+    })),
     settings: {
       ...data.settings,
       legalName: data.settings.legalName ?? '',
@@ -2319,6 +2346,8 @@ export const db = {
       wasteQty: number
       shortProductionReason: string
       notes: string
+      displayQty: number
+      cartonQty: number
     }>,
   ) {
     const session = state.productionSessions.find((item) => item.id === id)
@@ -2349,6 +2378,20 @@ export const db = {
         toast('Select a reason', `${productById(item.productId)?.name} is below target.`, 'warning')
         return false
       }
+      const displayQty = round2(result.displayQty || 0)
+      const cartonQty = round2(result.cartonQty || 0)
+      if (displayQty < 0 || cartonQty < 0) {
+        toast('Distribution cannot be negative', undefined, 'warning')
+        return false
+      }
+      if (round2(displayQty + cartonQty) !== round2(result.actualQty)) {
+        toast(
+          'Distribution must equal actual',
+          `${productById(item.productId)?.name}: Display ${formatQty(displayQty)} + Carton ${formatQty(cartonQty)} must equal ${formatQty(result.actualQty)} PACK.`,
+          'warning',
+        )
+        return false
+      }
     }
     const items = session.items.map((item) => {
       const result = results.find((row) => row.productId === item.productId)!
@@ -2362,6 +2405,8 @@ export const db = {
         shortProductionQty: Math.max(0, item.targetQty - result.actualQty),
         shortProductionReason: result.shortProductionReason,
         notes: result.notes,
+        displayQty: round2(result.displayQty || 0),
+        cartonQty: round2(result.cartonQty || 0),
       }
     })
     const working = { ...session, items }
@@ -2370,6 +2415,7 @@ export const db = {
     let inventory = state.inventory
     let movements = state.stockMovements
     let balances = state.productionBalances
+    let displayStocks = state.displayStocks ?? []
     const apply = (input: Parameters<typeof addMovement>[2]) => {
       const next = addMovement(movements, inventory, input)
       inventory = next.inventory
@@ -2424,6 +2470,9 @@ export const db = {
           notes: 'Finished goods packs',
         })
       }
+      if (item.displayQty > 0) {
+        displayStocks = applyDisplayDelta(displayStocks, item.productId, session.warehouseId, item.displayQty, date, uid('ds'))
+      }
       if (item.productionBalanceQty > 0) {
         balances = [
           {
@@ -2471,6 +2520,7 @@ export const db = {
       inventory,
       stockMovements: movements,
       productionBalances: balances,
+      displayStocks,
       productionSessions: state.productionSessions.map((item) =>
         item.id === id
           ? {
@@ -2665,6 +2715,8 @@ export const db = {
           wasteQty: 0,
           wasteReason: '',
           notes: '',
+          displayQty: 0,
+          cartonQty: 0,
         }
       }),
       picking: [],
@@ -2699,7 +2751,7 @@ export const db = {
       return false
     }
     if (location.type === 'DISPLAY') {
-      toast('Display is sale-ready stock', 'Place cartons on a rack first, then top up Display from the rack.', 'warning')
+      toast('Display is loose stock', 'Place cartons on CTN Rack or Pallet Stock, then top up Display from carton stock.', 'warning')
       return false
     }
     const existing = state.slotOccupancies.find((row) => row.slotId === slot.id)
@@ -2763,8 +2815,8 @@ export const db = {
     const fromSlot = state.storageSlots.find((row) => row.id === input.fromSlotId && row.active)
     const toSlot = state.storageSlots.find((row) => row.id === input.toSlotId && row.active)
     const toLocation = toSlot ? state.storageLocations.find((row) => row.id === toSlot.locationId && row.active) : undefined
-    if (!source || !fromSlot || !toSlot || !toLocation || toLocation.type === 'BALANCE_AREA') {
-      toast('Choose valid positions', undefined, 'warning')
+    if (!source || !fromSlot || !toSlot || !toLocation || toLocation.type === 'BALANCE_AREA' || toLocation.type === 'DISPLAY') {
+      toast('Choose valid positions', toLocation?.type === 'DISPLAY' ? 'Use Top up Display instead of a map slot.' : undefined, 'warning')
       return false
     }
     if (qty > source.quantityPacks) {
@@ -2821,7 +2873,53 @@ export const db = {
       reason: input.reason ?? '',
     }
     setData({ slotOccupancies: occupancies, placementLogs: [log, ...state.placementLogs] })
-    toast(log.action === 'TOPPED_UP' ? 'Display topped up' : 'Stock moved', `${qty} pack(s) moved.`)
+    toast('Stock moved', `${qty} pack(s) moved.`)
+    return true
+  },
+
+  topUpDisplay(input: { fromSlotId: string; qty: number; reason?: string }) {
+    if (!hasPermission(state, 'warehouse_map.move')) {
+      toast('Permission denied', 'You cannot move warehouse stock.', 'danger')
+      return false
+    }
+    const qty = round2(input.qty)
+    if (qty <= 0) {
+      toast('Enter a quantity', undefined, 'warning')
+      return false
+    }
+    const source = state.slotOccupancies.find((row) => row.slotId === input.fromSlotId)
+    const fromSlot = state.storageSlots.find((row) => row.id === input.fromSlotId && row.active)
+    const fromLocation = fromSlot ? state.storageLocations.find((row) => row.id === fromSlot.locationId && row.active) : undefined
+    if (!source || !fromSlot || !fromLocation || fromLocation.type === 'BALANCE_AREA' || fromLocation.type === 'DISPLAY') {
+      toast('Choose carton stock', 'Top up Display from CTN Rack or Pallet Stock.', 'warning')
+      return false
+    }
+    if (qty > source.quantityPacks) {
+      toast('Not enough in that position', `${source.quantityPacks} pack(s) available.`, 'warning')
+      return false
+    }
+    const actor = currentUser(state)
+    const remaining = round2(source.quantityPacks - qty)
+    const occupancies =
+      remaining <= 0
+        ? state.slotOccupancies.filter((row) => row.id !== source.id)
+        : state.slotOccupancies.map((row) => (row.id === source.id ? { ...row, quantityPacks: remaining, updatedAt: nowIso() } : row))
+    const displayStocks = applyDisplayDelta(state.displayStocks ?? [], source.productId, fromLocation.warehouseId, qty, nowIso(), uid('ds'))
+    const log = {
+      id: uid('pl'),
+      action: 'TOPPED_UP' as const,
+      productId: source.productId,
+      quantity: qty,
+      fromSlotId: fromSlot.id,
+      toSlotId: DISPLAY_STOCK_DESTINATION,
+      batchRef: source.batchRef,
+      referenceId: source.productionSessionRef,
+      performedBy: actor.name,
+      performedAt: nowIso(),
+      reason: input.reason ?? 'Top up display stock',
+    }
+    setData({ slotOccupancies: occupancies, displayStocks, placementLogs: [log, ...state.placementLogs] })
+    toast('Display topped up', `${qty} pack(s) moved to Display. Inventory total unchanged.`)
     return true
   },
 
