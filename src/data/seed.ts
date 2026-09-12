@@ -22,6 +22,7 @@ import type {
   UserAuditLog,
 } from '@/types'
 import { defaultPermissionsForLegacy } from '@/features/settings/permissions'
+import { createMainWarehouseLayout, seedWarehouseOccupancy } from '@/features/warehouse/warehouseModel'
 import { PROTOTYPE_TODAY, round2, uid } from '@/utils/format'
 
 const iso = (month: number, day: number, hour = 10) =>
@@ -1152,6 +1153,8 @@ export function createSeedData(): AppData {
     productionOrders,
     productionSessions,
     productionBalances,
+    ...createMainWarehouseLayout(iso(9, 8, 9)),
+    ...seedWarehouseOccupancy(iso(9, 8, 16), 'Admin'),
     settings: {
       businessName: 'Cool Slurppy',
       legalName: 'Cool Slurppy Sdn Bhd',

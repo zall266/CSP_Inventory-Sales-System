@@ -5,6 +5,7 @@ import { PosPage } from '@/features/pos/PosPage'
 import { SalesPage } from '@/features/sales/SalesPage'
 import { CategoriesPage, ProductsPage } from '@/features/products/ProductsPage'
 import { InventoryPage } from '@/features/inventory/InventoryPage'
+import { WarehouseMapPage } from '@/features/warehouse/WarehouseMapPage'
 import { StockAdjustmentPage, StockCountPage, StockMovementsPage, StockTransferPage } from '@/features/inventory/StockPages'
 import { NewPurchasePage, PurchasesPage } from '@/features/purchases/PurchasesPage'
 import { CustomersPage, SuppliersPage } from '@/features/parties/PartiesPages'
@@ -54,6 +55,7 @@ export default function App() {
           <Route path="/purchase-returns" element={<PurchaseReturnsPage />} />
           <Route path="/suppliers" element={<SuppliersPage />} />
           <Route path="/inventory" element={<InventoryPage />} />
+          <Route path="/inventory/warehouse-map" element={<WarehouseMapPage />} />
           <Route path="/stock-movements" element={<StockMovementsPage />} />
           <Route path="/stock-adjustment" element={<StockAdjustmentPage />} />
           <Route path="/stock-transfer" element={<StockTransferPage />} />

@@ -43,6 +43,7 @@ export function InventoryPage() {
         subtitle="Manage your products and stock in one place."
         actions={
           <>
+            <Button variant="secondary" onClick={() => navigate('/inventory/warehouse-map')}>Warehouse map</Button>
             <Button variant="secondary" onClick={() => navigate('/stock-adjustment')}>Adjust stock</Button>
             <Button variant="secondary" onClick={() => navigate('/stock-transfer')}>Transfer stock</Button>
             <Button onClick={() => navigate('/stock-count')}>Stock count</Button>

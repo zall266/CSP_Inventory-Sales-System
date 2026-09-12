@@ -32,6 +32,11 @@ export const PERMISSION_KEYS: PermissionKey[] = [
   'inventory.adjust',
   'inventory.transfer',
   'inventory.count',
+  'warehouse_map.view',
+  'warehouse_map.putaway',
+  'warehouse_map.move',
+  'warehouse_map.layout.edit',
+  'warehouse_map.location.manage',
   'manufacturing.view',
   'manufacturing.create',
   'manufacturing.edit',
@@ -93,6 +98,17 @@ export const PERMISSION_GROUPS: Array<{ id: string; label: string; keys: Permiss
   { id: 'purchases', label: 'Purchases', keys: ['purchases.view', 'purchases.create', 'purchases.edit', 'purchases.delete'] },
   { id: 'inventory', label: 'Inventory', keys: ['inventory.view', 'inventory.adjust', 'inventory.transfer', 'inventory.count'] },
   {
+    id: 'warehouse_map',
+    label: 'Warehouse Map',
+    keys: [
+      'warehouse_map.view',
+      'warehouse_map.putaway',
+      'warehouse_map.move',
+      'warehouse_map.layout.edit',
+      'warehouse_map.location.manage',
+    ],
+  },
+  {
     id: 'manufacturing',
     label: 'Manufacturing',
     keys: [
@@ -144,6 +160,11 @@ export const PERMISSION_LABELS: Record<PermissionKey, string> = {
   'inventory.adjust': 'Adjust Stock',
   'inventory.transfer': 'Stock Transfer',
   'inventory.count': 'Stock Count',
+  'warehouse_map.view': 'View Warehouse Map',
+  'warehouse_map.putaway': 'Place Finished Goods',
+  'warehouse_map.move': 'Move Warehouse Stock',
+  'warehouse_map.layout.edit': 'Edit Warehouse Layout',
+  'warehouse_map.location.manage': 'Manage Storage Locations',
   'manufacturing.view': 'View Manufacturing',
   'manufacturing.create': 'Create Production',
   'manufacturing.edit': 'Edit Production',
@@ -209,6 +230,14 @@ const DOCUMENT_KEYS: PermissionKey[] = [
 ]
 const PURCHASES_ALL: PermissionKey[] = ['purchases.view', 'purchases.create', 'purchases.edit', 'purchases.delete']
 const INVENTORY_ALL: PermissionKey[] = ['inventory.view', 'inventory.adjust', 'inventory.transfer', 'inventory.count']
+const WAREHOUSE_MAP_STAFF: PermissionKey[] = ['warehouse_map.view', 'warehouse_map.putaway', 'warehouse_map.move']
+const WAREHOUSE_MAP_ALL: PermissionKey[] = [
+  'warehouse_map.view',
+  'warehouse_map.putaway',
+  'warehouse_map.move',
+  'warehouse_map.layout.edit',
+  'warehouse_map.location.manage',
+]
 const MFG_RUN: PermissionKey[] = [
   'manufacturing.view',
   'manufacturing.create',
@@ -229,6 +258,7 @@ export function defaultPermissionsForLegacy(role: UserRole): RolePermissions {
       ...DOCUMENT_KEYS,
       ...PURCHASES_ALL,
       ...INVENTORY_ALL,
+      ...WAREHOUSE_MAP_ALL,
       ...MFG_RUN,
       'reports.view',
       ...FINANCE_VIEW,
@@ -241,6 +271,7 @@ export function defaultPermissionsForLegacy(role: UserRole): RolePermissions {
       ...SALES_CORE,
       ...DOCUMENT_KEYS,
       'inventory.view',
+      ...WAREHOUSE_MAP_STAFF,
       ...MFG_RUN,
       'reports.view',
     ])
@@ -258,6 +289,7 @@ export function defaultPermissionsForLegacy(role: UserRole): RolePermissions {
     'dashboard.view',
     ...PURCHASES_ALL,
     ...INVENTORY_ALL,
+    ...WAREHOUSE_MAP_ALL,
     ...MFG_RUN,
     'sales.delivery.view',
     'sales.delivery.create',
