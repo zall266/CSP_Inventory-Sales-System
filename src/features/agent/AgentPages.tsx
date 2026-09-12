@@ -93,9 +93,16 @@ function AgentSaleModal({
   const stockedId = products.find((product) => api.getProductQty(product.id, agent?.warehouseId) > 0)?.id
   const defaultProductId = stockedId ?? products.find((product) => product.id === 'p-pack-mt')?.id ?? products[0]?.id ?? ''
   const methods = state.settings.enabledPaymentMethods
+  const defaultProduct = products.find((item) => item.id === defaultProductId)
+  const defaultAgentPrice = configuredAgentPrice(defaultProduct)
+  const defaultSelling = defaultProduct
+    ? defaultAgentPrice !== null
+      ? Math.max(defaultProduct.sellingPrice, defaultAgentPrice)
+      : defaultProduct.sellingPrice
+    : 0
   const [productId, setProductId] = useState(defaultProductId)
   const [qty, setQty] = useState(0)
-  const [sellingPrice, setSellingPrice] = useState(() => products.find((item) => item.id === defaultProductId)?.sellingPrice ?? 0)
+  const [sellingPrice, setSellingPrice] = useState(defaultSelling)
   const [delivery, setDelivery] = useState(0)
   const [customerId, setCustomerId] = useState(state.settings.defaultCustomerId)
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>(methods.includes('cash') ? 'cash' : methods[0] ?? 'cash')
@@ -111,7 +118,7 @@ function AgentSaleModal({
   const qtyValue = Number(qty) || 0
   const sellingValue = Number(sellingPrice) || 0
   const deliveryValue = round2(Number(delivery) || 0)
-  const preview = agentPrice !== null
+  const preview = agentPrice !== null && round2(sellingValue) >= agentPrice
     ? calcAgentSaleEarnings({
         agentPrice,
         sellingPrice: sellingValue,
@@ -119,6 +126,7 @@ function AgentSaleModal({
         delivery: deliveryValue,
       })
     : null
+  const belowAgentPrice = agentPrice !== null && round2(sellingValue) < agentPrice
   const customerTotal = preview?.customerPays ?? round2(qtyValue * sellingValue + deliveryValue)
   const afterQty = round2(available - qtyValue)
   const agentLabel = agent ? (state.warehouses.find((warehouse) => warehouse.id === agent.warehouseId)?.name ?? agent.name) : '—'
@@ -126,7 +134,9 @@ function AgentSaleModal({
   const chooseProduct = (nextId: string) => {
     setProductId(nextId)
     const next = products.find((item) => item.id === nextId)
-    setSellingPrice(next?.sellingPrice ?? 0)
+    const nextAgentPrice = configuredAgentPrice(next)
+    const listPrice = next?.sellingPrice ?? 0
+    setSellingPrice(nextAgentPrice !== null ? Math.max(listPrice, nextAgentPrice) : listPrice)
   }
 
   const submit = (event: FormEvent) => {
@@ -217,6 +227,12 @@ function AgentSaleModal({
           </Field>
           <Field label="Selling price">
             <Input type="number" min={0} step="0.01" value={sellingPrice} onChange={(event) => setSellingPrice(Number(event.target.value))} />
+            {belowAgentPrice && (
+              <div className="text-xs text-amber-700">Selling price cannot be lower than Agent Price.</div>
+            )}
+            {agentPrice === null && product && (
+              <div className="text-xs text-amber-700">Agent Price must be configured.</div>
+            )}
           </Field>
           <Field label="Delivery charge">
             <Input type="number" min={0} step="0.01" value={delivery} onChange={(event) => setDelivery(Number(event.target.value))} />
@@ -228,9 +244,13 @@ function AgentSaleModal({
             <Input
               disabled
               value={
-                preview
-                  ? `${formatMoney(preview.totalEarnings)} · Markup ${formatMoney(preview.productMarkup)} · Delivery ${formatMoney(preview.deliveryEarnings)}`
-                  : 'Configure Agent Price to calculate earnings'
+                agentPrice === null
+                  ? 'Configure Agent Price to calculate earnings'
+                  : belowAgentPrice
+                    ? 'Selling price cannot be lower than Agent Price'
+                    : preview
+                      ? `${formatMoney(preview.totalEarnings)} · Markup ${formatMoney(preview.productMarkup)} · Delivery ${formatMoney(preview.deliveryEarnings)}`
+                      : 'Configure Agent Price to calculate earnings'
               }
             />
           </Field>
