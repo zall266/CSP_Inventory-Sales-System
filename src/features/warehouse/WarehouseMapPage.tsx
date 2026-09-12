@@ -279,7 +279,7 @@ export function WarehouseMapPage() {
                         setMapTab(row.location.type === 'RACK' ? 'ctn' : 'pallet')
                       }}
                     >
-                      {slotLabel(state, row.occupancy.slotId)} · {formatQty(row.occupancy.quantityPacks)}
+                      {slotLabel(state, row.occupancy.slotId)} · {formatQty(row.occupancy.quantityPacks)} · {occupancyProductionLabel(state, row.occupancy)}
                     </button>
                   ))}
                 </div>
@@ -569,61 +569,39 @@ function PalletStockPanel({
                 dnd.end()
               }}
             >
-              <div className="mb-3 flex items-start justify-between gap-3">
-                <div>
+              <div className="flex items-start gap-4">
+                <div className="w-40 shrink-0">
                   <div className="text-sm font-semibold text-slate-900">{card.location.name}</div>
                   <div className="text-[11px] uppercase tracking-wide text-slate-400">{locationTypeLabel(card.location.type)}</div>
+                  <div className="mt-2 flex flex-col items-start gap-2">
+                    {placing && canPlace && (
+                      <Button size="sm" onClick={() => onPlaceHere(card.location.id)}>Place here</Button>
+                    )}
+                    {canManage && card.rows.length === 0 && (
+                      <button type="button" className="text-xs text-rose-600" onClick={() => onDeactivate(card.location.id)}>Deactivate</button>
+                    )}
+                  </div>
                 </div>
-                <div className="flex flex-wrap gap-2">
-                  {placing && canPlace && (
-                    <Button size="sm" onClick={() => onPlaceHere(card.location.id)}>Place here</Button>
-                  )}
-                  {canManage && card.rows.length === 0 && (
-                    <button type="button" className="text-xs text-rose-600" onClick={() => onDeactivate(card.location.id)}>Deactivate</button>
-                  )}
-                </div>
-              </div>
-              {card.rows.length === 0 ? (
-                <p className="text-sm text-slate-400">Empty</p>
-              ) : (
-                <div className="space-y-2">
-                  {card.rows.map((row) => {
-                    const produced = occupancyProductionLabel(state, row.occupancy)
-                    const color = row.product?.accent || '#e2e8f0'
+                <div className="flex min-w-0 flex-col gap-1.5">
+                  {card.slots.map((slot) => {
+                    const occupancy = occupancies[slot.id]
+                    const highlighted = highlightedSlotIds.has(slot.id)
                     return (
-                      <button
-                        key={row.occupancy.id}
-                        type="button"
-                        draggable={dnd.enabled}
-                        onDragStart={(event) => {
-                          if (!dnd.enabled) {
-                            event.preventDefault()
-                            return
-                          }
-                          event.dataTransfer.effectAllowed = 'move'
-                          event.dataTransfer.setData('text/plain', row.slot.id)
-                          dnd.markDrag()
-                          dnd.setFrom(row.slot.id)
-                        }}
-                        onDragEnd={() => dnd.end()}
-                        onClick={() => {
-                          if (dnd.consumedClick()) return
-                          onClickSlot(row.slot, row.occupancy)
-                        }}
-                        className={`w-full rounded-xl border px-3 py-2 text-left ${
-                          highlightedSlotIds.has(row.slot.id) ? 'ring-2 ring-indigo-500' : ''
-                        } ${selectedSlotId === row.slot.id ? 'ring-2 ring-emerald-500' : ''}`}
-                        style={{ background: color, color: contrastText(color), borderColor: color }}
-                      >
-                        <div className="text-sm font-semibold uppercase tracking-wide">{shortProductName(row.product?.name ?? 'Product')}</div>
-                        <div className="mt-0.5 tabular text-sm font-medium">{formatQty(row.occupancy.quantityPacks)} PACK</div>
-                        <div className="text-[11px] opacity-80">{produced}</div>
-                        <div className="mt-1 text-[10px] font-semibold uppercase tracking-wide opacity-80">1 carton</div>
-                      </button>
+                      <SlotCell
+                        key={slot.id}
+                        slot={slot}
+                        occupancy={occupancy}
+                        product={occupancy ? productById(occupancy.productId) : undefined}
+                        highlighted={highlighted}
+                        selected={selectedSlotId === slot.id}
+                        dimmed={Boolean(q && occupancy && !highlighted)}
+                        onClick={() => onClickSlot(slot, occupancy)}
+                        dnd={dnd}
+                      />
                     )
                   })}
                 </div>
-              )}
+              </div>
             </div>
           )
         })
