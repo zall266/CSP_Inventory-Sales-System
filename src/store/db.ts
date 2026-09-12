@@ -5,6 +5,7 @@ import {
   DISPLAY_STOCK_DESTINATION,
   generateGenericSlots,
   generateRackSlots,
+  nextGenericSlot,
   migrateFinishedGoodsStorage,
   seedWarehouseOccupancy,
   unplacedPacks,
@@ -2950,6 +2951,19 @@ export const db = {
     })
     toast('Position emptied', 'Packs returned to Ready to Place.')
     return true
+  },
+
+  ensurePalletEmptySlot(locationId: string) {
+    const location = state.storageLocations.find((row) => row.id === locationId && row.active)
+    if (!location || (location.type !== 'PALLET' && location.type !== 'FLOOR')) return null
+    const empty = state.storageSlots
+      .filter((row) => row.locationId === locationId && row.active)
+      .sort((a, b) => a.slotNo - b.slotNo)
+      .find((row) => !state.slotOccupancies.some((item) => item.slotId === row.id))
+    if (empty) return empty
+    const slot = nextGenericSlot(locationId, state.storageSlots)
+    setData({ storageSlots: [...state.storageSlots, slot] })
+    return slot
   },
 
   createTemporaryLocation(input: { name: string; type: Extract<StorageLocationType, 'PALLET' | 'FLOOR'>; warehouseId?: string; slotCount?: number }) {

@@ -379,16 +379,14 @@ export function WarehouseMapPage() {
               firstEmptySlot={firstEmptySlot}
               onClickSlot={clickSlot}
               onPlaceHere={(locationId) => {
-                const slot = firstEmptySlot(locationId)
-                if (!slot) {
-                  api.toast('Pallet is full', 'Empty a carton position or add another pallet.', 'warning')
-                  return
-                }
+                if (mode?.kind !== 'place' && mode?.kind !== 'move') return
+                const slot = firstEmptySlot(locationId) ?? api.ensurePalletEmptySlot(locationId)
+                if (!slot) return
                 clickSlot(slot)
               }}
               onDeactivate={(id) => setDeactivateId(id)}
               onDropLocation={(locationId, fromSlotId) => {
-                const slot = firstEmptySlot(locationId)
+                const slot = firstEmptySlot(locationId) ?? api.ensurePalletEmptySlot(locationId)
                 if (!slot) return
                 dropMove(slot.id, fromSlotId)
               }}
@@ -550,61 +548,74 @@ function PalletStockPanel({
           <p className="text-sm text-slate-500">{locations.length === 0 ? 'No active pallet locations. Add a temporary location such as DEPAN OFFICE.' : 'No pallet locations match that search.'}</p>
         </Card>
       ) : (
-        cards.map((card) => {
-          const highlighted = card.rows.some((row) => highlightedSlotIds.has(row.slot.id))
-          return (
-            <div
-              key={card.location.id}
-              className={`rounded-2xl border bg-white p-4 ${highlighted ? 'border-indigo-300 ring-1 ring-indigo-200' : 'border-slate-200'}`}
-              onDragOver={(event) => {
-                if (!dnd.enabled || !dnd.fromId || !card.empty) return
-                event.preventDefault()
-                event.dataTransfer.dropEffect = 'move'
-                if (dnd.overId !== card.empty.id) dnd.setOver(card.empty.id)
-              }}
-              onDrop={(event) => {
-                event.preventDefault()
-                const fromId = event.dataTransfer.getData('text/plain') || dnd.fromId
-                onDropLocation(card.location.id, fromId)
-                dnd.end()
-              }}
-            >
-              <div className="flex items-start gap-4">
-                <div className="w-40 shrink-0">
-                  <div className="text-sm font-semibold text-slate-900">{card.location.name}</div>
-                  <div className="text-[11px] uppercase tracking-wide text-slate-400">{locationTypeLabel(card.location.type)}</div>
-                  <div className="mt-2 flex flex-col items-start gap-2">
+        <div className="flex flex-wrap items-start gap-3">
+          {cards.map((card) => {
+            const highlighted = card.rows.some((row) => highlightedSlotIds.has(row.slot.id))
+            return (
+              <div
+                key={card.location.id}
+                className={`w-fit shrink-0 rounded-xl border bg-white p-1.5 ${highlighted ? 'border-indigo-300 ring-1 ring-indigo-200' : 'border-slate-200'}`}
+                onDragOver={(event) => {
+                  if (!dnd.enabled || !dnd.fromId) return
+                  event.preventDefault()
+                  event.dataTransfer.dropEffect = 'move'
+                  const overId = card.empty?.id || `${card.location.id}::empty`
+                  if (dnd.overId !== overId) dnd.setOver(overId)
+                }}
+                onDrop={(event) => {
+                  event.preventDefault()
+                  const fromId = event.dataTransfer.getData('text/plain') || dnd.fromId
+                  onDropLocation(card.location.id, fromId)
+                  dnd.end()
+                }}
+              >
+                <div className="mb-1.5 max-w-[96px] px-0.5">
+                  <div className="text-[11px] font-semibold leading-tight text-slate-900">{card.location.name}</div>
+                  <div className="text-[9px] uppercase tracking-wide text-slate-400">{locationTypeLabel(card.location.type)}</div>
+                  <div className="mt-1 flex flex-col items-start gap-1">
                     {placing && canPlace && (
-                      <Button size="sm" onClick={() => onPlaceHere(card.location.id)}>Place here</Button>
+                      <button type="button" className="text-[10px] font-medium text-indigo-600" onClick={() => onPlaceHere(card.location.id)}>Place here</button>
                     )}
                     {canManage && card.rows.length === 0 && (
-                      <button type="button" className="text-xs text-rose-600" onClick={() => onDeactivate(card.location.id)}>Deactivate</button>
+                      <button type="button" className="text-[10px] text-rose-600" onClick={() => onDeactivate(card.location.id)}>Deactivate</button>
                     )}
                   </div>
                 </div>
-                <div className="flex min-w-0 flex-col gap-1.5">
-                  {card.slots.map((slot) => {
-                    const occupancy = occupancies[slot.id]
-                    const highlighted = highlightedSlotIds.has(slot.id)
+                <div className="flex flex-col gap-1.5">
+                  {card.rows.map((row) => {
+                    const slotHighlighted = highlightedSlotIds.has(row.slot.id)
                     return (
                       <SlotCell
-                        key={slot.id}
-                        slot={slot}
-                        occupancy={occupancy}
-                        product={occupancy ? productById(occupancy.productId) : undefined}
-                        highlighted={highlighted}
-                        selected={selectedSlotId === slot.id}
-                        dimmed={Boolean(q && occupancy && !highlighted)}
-                        onClick={() => onClickSlot(slot, occupancy)}
+                        key={row.slot.id}
+                        slot={row.slot}
+                        occupancy={row.occupancy}
+                        product={row.product}
+                        highlighted={slotHighlighted}
+                        selected={selectedSlotId === row.slot.id}
+                        dimmed={Boolean(q && !slotHighlighted)}
+                        onClick={() => onClickSlot(row.slot, row.occupancy)}
                         dnd={dnd}
                       />
                     )
                   })}
+                  {card.empty ? (
+                    <SlotCell
+                      slot={card.empty}
+                      selected={selectedSlotId === card.empty.id}
+                      onClick={() => onClickSlot(card.empty!, undefined)}
+                      dnd={dnd}
+                    />
+                  ) : (
+                    <PalletVisualEmpty
+                      active={Boolean(dnd.enabled && dnd.fromId && dnd.overId === `${card.location.id}::empty`)}
+                      onClick={() => onPlaceHere(card.location.id)}
+                    />
+                  )}
                 </div>
               </div>
-            </div>
-          )
-        })
+            )
+          })}
+        </div>
       )}
     </div>
   )
@@ -776,6 +787,22 @@ function BalanceStrip({ location, slots, canUse }: { location: StorageLocation; 
       </div>
       <UseBalanceModal balanceId={useId} onClose={() => setUseId('')} />
     </div>
+  )
+}
+
+function PalletVisualEmpty({ active, onClick }: { active?: boolean; onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={`relative h-[76px] w-[96px] shrink-0 rounded-lg border border-dashed border-slate-300 bg-[repeating-linear-gradient(-45deg,#fff,#fff_6px,#f8fafc_6px,#f8fafc_12px)] text-left text-[11px] leading-tight text-slate-400 ${
+        active ? 'z-10 ring-2 ring-emerald-500 bg-emerald-50' : ''
+      }`}
+    >
+      <div className="m-auto flex h-full items-center justify-center p-1.5">
+        <div className="text-[10px] font-medium tracking-wide">EMPTY</div>
+      </div>
+    </button>
   )
 }
 

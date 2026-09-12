@@ -79,6 +79,20 @@ export function generateGenericSlots(locationId: string, count: number, face: St
   }))
 }
 
+export function nextGenericSlot(locationId: string, existing: StorageSlot[], face: StorageFace = 'NONE'): StorageSlot {
+  const owned = existing.filter((row) => row.locationId === locationId)
+  const slotNo = owned.reduce((max, row) => Math.max(max, row.slotNo), 0) + 1
+  return {
+    id: slotIdFor(locationId, 0, face, slotNo),
+    locationId,
+    level: 0,
+    face,
+    slotNo,
+    capacity: 0,
+    active: true,
+  }
+}
+
 export function occupancyBySlot(occupancies: SlotOccupancy[]) {
   return Object.fromEntries(occupancies.map((row) => [row.slotId, row])) as Record<string, SlotOccupancy>
 }
