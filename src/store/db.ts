@@ -11,7 +11,7 @@ import {
   unplacedPacks,
   WAREHOUSE_MAP_KEYS,
 } from '@/features/warehouse/warehouseModel'
-import { AGENT_PERMISSION_KEYS, agentLinkedWarehouseName, calcAgentSaleEarnings, companyWarehouses, configuredAgentPrice, hasSaleEarningLedger, isAgentWarehouseId, isCompanyWarehouseId, nextAgentWarehouseId, parseAgentPriceWrite, SALE_EARNING_KIND, saleIsAgentSale } from '@/features/agent/agentModel'
+import { AGENT_PERMISSION_KEYS, agentBankDetailsComplete, agentLinkedWarehouseName, calcAgentSaleEarnings, canUserRequestWithdrawalForAgent, companyWarehouses, configuredAgentPrice, hasSaleEarningLedger, hasWithdrawalPendingLedger, isAgentWarehouseId, isCompanyWarehouseId, nextAgentWarehouseId, parseAgentPriceWrite, parseWithdrawalAmount, SALE_EARNING_KIND, saleIsAgentSale, snapshotAgentBankDetails, summarizeAgentEarnings, WITHDRAWAL_PENDING_KIND } from '@/features/agent/agentModel'
 import { bomLinesForQty, consumptionCost, hasShortage, materialAvailability } from '@/features/manufacturing/helpers'
 import { buildSessionPlan, canEditSession, currentUser, mergePicking } from '@/features/manufacturing/sessionPlan'
 import {
@@ -47,6 +47,7 @@ import type {
   AgentInput,
   AgentSale,
   AgentStatus,
+  AgentWithdrawal,
   BomInput,
   DeliveryOrder,
   DeliveryOrderInput,
@@ -88,7 +89,7 @@ import type {
   WastageKind,
   BalanceUsageReason,
 } from '@/types'
-import { nextDatedDocNo, nextDocNo, PROTOTYPE_TODAY, formatQty, round2, stockStatus, uid } from '@/utils/format'
+import { nextDatedDocNo, nextDocNo, PROTOTYPE_TODAY, formatMoney, formatQty, round2, stockStatus, uid } from '@/utils/format'
 
 const STORAGE_KEY = 'stockflow-prototype-v8'
 
@@ -175,7 +176,13 @@ function hydrateData(data: AppData): AppData {
     agents: data.agents ?? [],
     agentSales: data.agentSales ?? [],
     agentEarningLedgers: data.agentEarningLedgers ?? [],
-    agentWithdrawals: data.agentWithdrawals ?? [],
+    agentWithdrawals: (data.agentWithdrawals ?? []).map((row) => ({
+      ...row,
+      bankName: row.bankName ?? '',
+      accountHolder: row.accountHolder ?? '',
+      accountNumber: row.accountNumber ?? '',
+      requestedBy: row.requestedBy ?? '',
+    })),
     quotations: data.quotations ?? [],
     deliveryOrders: data.deliveryOrders ?? [],
     documentAuditLogs: data.documentAuditLogs ?? [],
@@ -653,6 +660,106 @@ function postAgentSale(input: {
   lastAgentSale = { key: requestKey, sale, at: Date.now() }
   toast('Sale completed', invoiceNo)
   return sale
+}
+
+let agentWithdrawalInFlight = false
+let lastAgentWithdrawal: { key: string; withdrawal: AgentWithdrawal; at: number } | null = null
+
+function agentWithdrawalRequestKey(input: { requestId?: string }) {
+  return input.requestId?.trim() || ''
+}
+
+function withWithdrawalPendingLedger(ledgers: AgentEarningLedger[], row: AgentEarningLedger) {
+  const withdrawalId = row.relatedWithdrawalId
+  if (!withdrawalId || hasWithdrawalPendingLedger(ledgers, withdrawalId)) return ledgers
+  return [row, ...ledgers]
+}
+
+function postAgentWithdrawal(input: {
+  agentId: string
+  amount: number
+  notes?: string
+  requestId?: string
+}) {
+  const requestKey = agentWithdrawalRequestKey(input)
+  if (requestKey && lastAgentWithdrawal && lastAgentWithdrawal.key === requestKey) {
+    return lastAgentWithdrawal.withdrawal
+  }
+  if (!hasPermission(state, 'agent.withdrawal.create')) {
+    toast('Permission denied', 'You cannot request an agent withdrawal.', 'danger')
+    return null
+  }
+  const agent = (state.agents ?? []).find((item) => item.id === input.agentId)
+  if (!agent) {
+    toast('Agent not found', undefined, 'warning')
+    return null
+  }
+  const actor = currentUser(state)
+  if (!canUserRequestWithdrawalForAgent(state.agents ?? [], actor.id, agent.id)) {
+    toast('You can only request a withdrawal for your own agent.', undefined, 'danger')
+    return null
+  }
+  if (agent.status !== 'active') {
+    toast('This agent is inactive and cannot request a withdrawal.', undefined, 'warning')
+    return null
+  }
+  if (!agentBankDetailsComplete(agent)) {
+    toast(
+      'Complete bank/payment information first',
+      'Add bank name, account holder, and account number on the agent profile before requesting a withdrawal.',
+      'warning',
+    )
+    return null
+  }
+  const parsed = parseWithdrawalAmount(input.amount)
+  if (!parsed.ok) {
+    toast('Withdrawal amount must be greater than 0.', undefined, 'warning')
+    return null
+  }
+  const amount = parsed.value
+  const earnings = summarizeAgentEarnings(state.agentEarningLedgers ?? [], agent.id)
+  if (amount > earnings.available) {
+    toast('Withdrawal amount cannot exceed available earnings.', `Available: ${formatMoney(earnings.available)}.`, 'danger')
+    return null
+  }
+  const date = nowIso()
+  const bank = snapshotAgentBankDetails(agent)
+  const withdrawal: AgentWithdrawal = {
+    id: uid('agw'),
+    agentId: agent.id,
+    amount,
+    status: 'requested',
+    bankName: bank.bankName,
+    accountHolder: bank.accountHolder,
+    accountNumber: bank.accountNumber,
+    requestedAt: date,
+    requestedBy: actor.id,
+    notes: input.notes?.trim() || undefined,
+    createdAt: date,
+    updatedAt: date,
+  }
+  const ledger: AgentEarningLedger = {
+    id: uid('ael'),
+    agentId: agent.id,
+    date,
+    kind: WITHDRAWAL_PENDING_KIND,
+    amount,
+    availableDelta: round2(-amount),
+    pendingDelta: amount,
+    paidDelta: 0,
+    relatedWithdrawalId: withdrawal.id,
+    notes: `Withdrawal pending · ${formatMoney(amount)}`,
+    createdAt: date,
+  }
+  state = {
+    ...state,
+    agentWithdrawals: [withdrawal, ...(state.agentWithdrawals ?? [])],
+    agentEarningLedgers: withWithdrawalPendingLedger(state.agentEarningLedgers ?? [], ledger),
+  }
+  emit()
+  lastAgentWithdrawal = { key: requestKey, withdrawal, at: Date.now() }
+  toast('Withdrawal requested', formatMoney(amount))
+  return withdrawal
 }
 
 export const db = {
@@ -2064,6 +2171,32 @@ export const db = {
   creditAgentSaleEarning(agentSaleId: string) {
     const existing = (state.agentEarningLedgers ?? []).find(
       (row) => row.kind === SALE_EARNING_KIND && row.relatedAgentSaleId === agentSaleId,
+    )
+    if (existing) return existing
+    return null
+  },
+
+  requestAgentWithdrawal(input: {
+    agentId: string
+    amount: number
+    notes?: string
+    requestId?: string
+  }) {
+    if (agentWithdrawalInFlight) {
+      toast('Unable to complete withdrawal. Please try again.', undefined, 'warning')
+      return null
+    }
+    agentWithdrawalInFlight = true
+    try {
+      return postAgentWithdrawal(input)
+    } finally {
+      agentWithdrawalInFlight = false
+    }
+  },
+
+  creditAgentWithdrawalPending(withdrawalId: string) {
+    const existing = (state.agentEarningLedgers ?? []).find(
+      (row) => row.kind === WITHDRAWAL_PENDING_KIND && row.relatedWithdrawalId === withdrawalId,
     )
     if (existing) return existing
     return null

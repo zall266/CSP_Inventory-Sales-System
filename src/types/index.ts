@@ -306,7 +306,11 @@ export type AgentWithdrawal = {
   agentId: string
   amount: number
   status: AgentWithdrawalStatus
+  bankName: string
+  accountHolder: string
+  accountNumber: string
   requestedAt: string
+  requestedBy: string
   processedAt?: string
   paidAt?: string
   cancelledAt?: string

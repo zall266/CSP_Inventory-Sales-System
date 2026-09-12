@@ -183,6 +183,7 @@ export function StatusBadge({ status }: { status: string }) {
     returned: { label: 'Returned', tone: 'sky' },
     received: { label: 'Received', tone: 'sky' },
     pending: { label: 'Pending', tone: 'amber' },
+    requested: { label: 'Requested', tone: 'amber' },
     draft: { label: 'Draft', tone: 'slate' },
     completed: { label: 'Completed', tone: 'emerald' },
     planned: { label: 'Planned', tone: 'indigo' },

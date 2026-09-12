@@ -1,7 +1,8 @@
-import type { AgentEarningKind, AgentEarningLedger, AppState, Product, Sale, Warehouse } from '@/types'
+import type { Agent, AgentEarningKind, AgentEarningLedger, AgentWithdrawal, AppState, Product, Sale, Warehouse } from '@/types'
 import { round2 } from '@/utils/format'
 
 export const SALE_EARNING_KIND: AgentEarningKind = 'sale_earning'
+export const WITHDRAWAL_PENDING_KIND: AgentEarningKind = 'withdrawal_pending'
 
 export function configuredAgentPrice(product: { agentPrice?: number | null } | undefined) {
   if (!product) return null
@@ -161,4 +162,54 @@ export function agentSalesForAgent<T extends { agentId: string; date: string; cr
 
 export function activeAgents<T extends { status: string }>(agents: T[]) {
   return agents.filter((agent) => agent.status === 'active')
+}
+
+export function parseWithdrawalAmount(value: unknown) {
+  const numeric = Number(value)
+  if (!Number.isFinite(numeric)) return { ok: false as const }
+  const amount = round2(numeric)
+  if (!Number.isFinite(amount) || !(amount > 0)) return { ok: false as const }
+  return { ok: true as const, value: amount }
+}
+
+export function agentBankDetailsComplete(agent: Pick<Agent, 'bankName' | 'accountHolder' | 'bankAccount'> | undefined) {
+  if (!agent) return false
+  return Boolean(agent.bankName.trim() && agent.accountHolder.trim() && agent.bankAccount.trim())
+}
+
+export function snapshotAgentBankDetails(agent: Pick<Agent, 'bankName' | 'accountHolder' | 'bankAccount'>) {
+  return {
+    bankName: agent.bankName.trim(),
+    accountHolder: agent.accountHolder.trim(),
+    accountNumber: agent.bankAccount.trim(),
+  }
+}
+
+export function linkedAgentForUser<T extends { userId?: string }>(agents: T[], userId: string) {
+  return agents.find((agent) => agent.userId === userId)
+}
+
+export function canUserRequestWithdrawalForAgent(
+  agents: Array<{ id: string; userId?: string }>,
+  userId: string,
+  agentId: string,
+) {
+  const linked = linkedAgentForUser(agents, userId)
+  if (linked) return linked.id === agentId
+  return true
+}
+
+export function hasWithdrawalPendingLedger(entries: AgentEarningLedger[], withdrawalId: string) {
+  return entries.some((entry) => entry.kind === WITHDRAWAL_PENDING_KIND && entry.relatedWithdrawalId === withdrawalId)
+}
+
+export function withdrawalPendingForWithdrawal(entries: AgentEarningLedger[], withdrawalId: string) {
+  return entries.find((entry) => entry.kind === WITHDRAWAL_PENDING_KIND && entry.relatedWithdrawalId === withdrawalId)
+}
+
+export function withdrawalsForAgent(withdrawals: AgentWithdrawal[], agentId: string) {
+  return withdrawals
+    .filter((row) => row.agentId === agentId)
+    .slice()
+    .sort((a, b) => b.requestedAt.localeCompare(a.requestedAt) || b.createdAt.localeCompare(a.createdAt))
 }

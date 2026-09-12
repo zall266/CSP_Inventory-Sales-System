@@ -19,14 +19,18 @@ import { paymentLabel } from '@/components/ProductMark'
 import { PermissionDenied } from '@/features/documents/A4Sheet'
 import {
   activeAgents,
+  agentBankDetailsComplete,
   agentSalesForAgent,
   agentStockRows,
   agentStockTotal,
   calcAgentSaleEarnings,
+  canUserRequestWithdrawalForAgent,
   companyWarehouses,
   configuredAgentPrice,
   saleEarningForAgentSale,
+  snapshotAgentBankDetails,
   summarizeAgentEarnings,
+  withdrawalsForAgent,
 } from '@/features/agent/agentModel'
 import { hasPermission } from '@/features/settings/permissions'
 import { useApi, useLookups, useStore } from '@/store/hooks'
@@ -285,6 +289,132 @@ function AgentSaleModal({
         confirmLabel={submitting ? 'Processing...' : 'Confirm Sale'}
         confirmDisabled={submitting}
         onConfirm={confirmSale}
+      />
+    </>
+  )
+}
+
+function AgentWithdrawalModal({
+  open,
+  agentId,
+  onClose,
+}: {
+  open: boolean
+  agentId: string
+  onClose: () => void
+}) {
+  const state = useStore()
+  const api = useApi()
+  const agent = (state.agents ?? []).find((item) => item.id === agentId)
+  const earnings = summarizeAgentEarnings(state.agentEarningLedgers ?? [], agentId)
+  const bank = agent ? snapshotAgentBankDetails(agent) : { bankName: '', accountHolder: '', accountNumber: '' }
+  const bankComplete = agentBankDetailsComplete(agent)
+  const [amount, setAmount] = useState('')
+  const [notes, setNotes] = useState('')
+  const [confirm, setConfirm] = useState(false)
+  const [submitting, setSubmitting] = useState(false)
+  const submittingRef = useRef(false)
+  const requestIdRef = useRef('')
+
+  const parsedAmount = Number(amount)
+  const roundedAmount = Number.isFinite(parsedAmount) ? round2(parsedAmount) : 0
+  const remaining = round2(earnings.available - roundedAmount)
+
+  const submit = (event: FormEvent) => {
+    event.preventDefault()
+    if (!bankComplete) {
+      api.toast(
+        'Complete bank/payment information first',
+        'Add bank name, account holder, and account number on the agent profile before requesting a withdrawal.',
+        'warning',
+      )
+      return
+    }
+    if (!Number.isFinite(parsedAmount) || !(roundedAmount > 0)) {
+      api.toast('Withdrawal amount must be greater than 0.', undefined, 'warning')
+      return
+    }
+    if (roundedAmount > earnings.available) {
+      api.toast('Withdrawal amount cannot exceed available earnings.', `Available: ${formatMoney(earnings.available)}.`, 'danger')
+      return
+    }
+    requestIdRef.current = `awr_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`
+    setConfirm(true)
+  }
+
+  const confirmWithdrawal = () => {
+    if (submittingRef.current) return
+    submittingRef.current = true
+    setSubmitting(true)
+    const withdrawal = api.requestAgentWithdrawal({
+      agentId,
+      amount: roundedAmount,
+      notes,
+      requestId: requestIdRef.current,
+    })
+    submittingRef.current = false
+    setSubmitting(false)
+    setConfirm(false)
+    if (withdrawal) {
+      setAmount('')
+      setNotes('')
+      onClose()
+    }
+  }
+
+  const close = () => {
+    if (submittingRef.current) return
+    setConfirm(false)
+    onClose()
+  }
+
+  return (
+    <>
+      <Modal open={open} onClose={close} title="Request Withdrawal" width="max-w-xl">
+        <form className="grid gap-4 sm:grid-cols-2" onSubmit={submit}>
+          <Field label="Available balance" className="sm:col-span-2">
+            <Input disabled value={formatMoney(earnings.available)} />
+          </Field>
+          <Field label="Amount" className="sm:col-span-2">
+            <Input
+              type="number"
+              min={0}
+              step="0.01"
+              value={amount}
+              onChange={(event) => setAmount(event.target.value)}
+            />
+          </Field>
+          <Field label="Bank name">
+            <Input disabled value={bank.bankName || '—'} />
+          </Field>
+          <Field label="Account holder">
+            <Input disabled value={bank.accountHolder || '—'} />
+          </Field>
+          <Field label="Account number" className="sm:col-span-2">
+            <Input disabled value={bank.accountNumber || '—'} />
+          </Field>
+          {!bankComplete && (
+            <div className="sm:col-span-2 text-xs text-amber-700">
+              Complete bank/payment information first. Bank details are managed on the agent profile.
+            </div>
+          )}
+          <Field label="Notes" className="sm:col-span-2">
+            <Textarea rows={2} value={notes} onChange={(event) => setNotes(event.target.value)} />
+          </Field>
+          <div className="flex justify-end gap-2 sm:col-span-2">
+            <Button type="button" variant="secondary" onClick={close}>Cancel</Button>
+            <Button type="submit" size="lg">Request Withdrawal</Button>
+          </div>
+        </form>
+      </Modal>
+      <ConfirmDialog
+        open={confirm}
+        onClose={() => { if (!submittingRef.current) setConfirm(false) }}
+        title="Confirm Withdrawal"
+        message={`Agent:\n${agent?.name ?? '—'}\nAvailable:\n${formatMoney(earnings.available)}\nWithdrawal:\n${formatMoney(roundedAmount)}\nRemaining:\n${formatMoney(remaining)}\nBank:\n${bank.bankName || '—'}\nAccount Holder:\n${bank.accountHolder || '—'}\nAccount:\n${bank.accountNumber || '—'}`}
+        confirmLabel="Confirm Withdrawal"
+        confirmDisabled={submitting}
+        onConfirm={confirmWithdrawal}
       />
     </>
   )
@@ -635,13 +765,20 @@ export function AgentDetailPage() {
   const [statusOpen, setStatusOpen] = useState(false)
   const [transferOpen, setTransferOpen] = useState(false)
   const [saleOpen, setSaleOpen] = useState(false)
+  const [withdrawOpen, setWithdrawOpen] = useState(false)
 
   if (!canView) return <PermissionDenied subtitle="You do not have access to Agent." />
   if (!agent) return <PageHeader title="Agent" subtitle="Not found." />
 
+  const canWithdraw =
+    agent.status === 'active' &&
+    hasPermission(state, 'agent.withdrawal.create') &&
+    canUserRequestWithdrawalForAgent(state.agents ?? [], state.ui.currentUserId, agent.id)
+  const canAdminWithdrawView = hasPermission(state, 'agent.manage') || hasPermission(state, 'agent.withdrawal.process')
   const stockRows = canStock ? agentStockRows(state, agent.warehouseId) : []
   const earnings = summarizeAgentEarnings(state.agentEarningLedgers ?? [], agent.id)
   const history = agentSalesForAgent(state.agentSales ?? [], agent.id)
+  const withdrawalHistory = withdrawalsForAgent(state.agentWithdrawals ?? [], agent.id)
   const linkedUserIds = new Set((state.agents ?? []).map((item) => item.userId).filter(Boolean))
   const formUsers = state.users.filter((user) => {
     if (user.status !== 'active') return false
@@ -711,7 +848,14 @@ export function AgentDetailPage() {
         </Card>
       </div>
       <Card className="mb-5 space-y-2 p-5">
-        <div className="text-[11px] font-semibold uppercase tracking-[0.08em] text-slate-400">Earnings</div>
+        <div className="flex items-start justify-between gap-3">
+          <div className="text-[11px] font-semibold uppercase tracking-[0.08em] text-slate-400">Earnings</div>
+          {canWithdraw && (
+            <Button onClick={() => setWithdrawOpen(true)} disabled={earnings.available <= 0}>
+              Withdraw
+            </Button>
+          )}
+        </div>
         <div className="grid gap-3 sm:grid-cols-3">
           <div>
             <div className="text-sm text-slate-500">Available</div>
@@ -819,11 +963,56 @@ export function AgentDetailPage() {
           )}
         </div>
       </Card>
+      <Card className="mt-5">
+        <div className="border-b border-slate-100 px-5 py-4">
+          <div className="text-sm font-semibold">Withdrawals</div>
+          <div className="text-xs text-slate-400">Requested withdrawals from available earnings. Payout is processed separately.</div>
+        </div>
+        <div className="sf-table-wrap">
+          <table>
+            <thead>
+              <tr>
+                {canAdminWithdrawView && <th>Agent</th>}
+                <th>Date</th>
+                <th>Amount</th>
+                <th>Status</th>
+                <th>Bank</th>
+                <th>Account Holder</th>
+                {canAdminWithdrawView && <th>Account Number</th>}
+                {canAdminWithdrawView && <th>Requested By</th>}
+              </tr>
+            </thead>
+            <tbody>
+              {withdrawalHistory.map((row) => {
+                const requestedBy = state.users.find((user) => user.id === row.requestedBy)?.name ?? row.requestedBy ?? '—'
+                return (
+                  <tr key={row.id} className="cursor-default">
+                    {canAdminWithdrawView && <td className="font-medium">{agent.name}</td>}
+                    <td>{formatDate(row.requestedAt)}</td>
+                    <td className="tabular">{formatMoney(row.amount)}</td>
+                    <td><StatusBadge status={row.status} /></td>
+                    <td>{row.bankName || '—'}</td>
+                    <td>{row.accountHolder || '—'}</td>
+                    {canAdminWithdrawView && <td>{row.accountNumber || '—'}</td>}
+                    {canAdminWithdrawView && <td>{requestedBy || '—'}</td>}
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
+          {!withdrawalHistory.length && (
+            <EmptyState title="No withdrawals yet" hint={canWithdraw && earnings.available > 0 ? 'Request a withdrawal from available earnings.' : undefined} />
+          )}
+        </div>
+      </Card>
       {canTransfer && (
         <AgentTransferModal open={transferOpen} agentId={agent.id} onClose={() => setTransferOpen(false)} />
       )}
       {canSale && (
         <AgentSaleModal open={saleOpen} agentId={agent.id} onClose={() => setSaleOpen(false)} />
+      )}
+      {canWithdraw && (
+        <AgentWithdrawalModal open={withdrawOpen} agentId={agent.id} onClose={() => setWithdrawOpen(false)} />
       )}
       <AgentFormModal
         open={editing}
