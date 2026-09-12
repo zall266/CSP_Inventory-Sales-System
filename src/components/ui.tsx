@@ -333,12 +333,14 @@ export function Modal({
   title,
   children,
   width = 'max-w-lg',
+  layer = 'z-[70]',
 }: {
   open: boolean
   onClose: () => void
   title: string
   children: ReactNode
   width?: string
+  layer?: string
 }) {
   useEffect(() => {
     if (!open) return
@@ -351,7 +353,7 @@ export function Modal({
 
   if (!open) return null
   return createPortal(
-    <div className="fixed inset-0 z-[70] flex items-end justify-center p-0 sm:items-center sm:p-6">
+    <div className={cn('fixed inset-0 flex items-end justify-center p-0 sm:items-center sm:p-6', layer)}>
       <button type="button" className="absolute inset-0 bg-slate-900/40" aria-label="Close" onClick={onClose} />
       <div className={cn('relative z-10 max-h-[92vh] w-full overflow-y-auto rounded-t-2xl bg-white shadow-2xl sm:rounded-2xl', width)}>
         <div className="flex items-center justify-between border-b border-slate-100 px-5 py-4">
@@ -432,8 +434,8 @@ export function ConfirmDialog({
   onClose: () => void
 }) {
   return (
-    <Modal open={open} onClose={onClose} title={title} width="max-w-md">
-      <p className="text-sm text-slate-600">{message}</p>
+    <Modal open={open} onClose={onClose} title={title} width="max-w-md" layer="z-[80]">
+      <p className="whitespace-pre-line text-sm text-slate-600">{message}</p>
       <div className="mt-6 flex justify-end gap-2">
         <Button variant="secondary" onClick={onClose}>
           Cancel

@@ -266,6 +266,7 @@ const DOCUMENT_KEYS: PermissionKey[] = [
 ]
 const PURCHASES_ALL: PermissionKey[] = ['purchases.view', 'purchases.create', 'purchases.edit', 'purchases.delete']
 const INVENTORY_ALL: PermissionKey[] = ['inventory.view', 'inventory.adjust', 'inventory.transfer', 'inventory.count']
+const AGENT_STOCK_OPS: PermissionKey[] = ['agent.view', 'agent.stock.view', 'agent.stock.transfer']
 const WAREHOUSE_MAP_STAFF: PermissionKey[] = ['warehouse_map.view', 'warehouse_map.putaway', 'warehouse_map.move', 'warehouse_map.balance.use']
 const WAREHOUSE_MAP_ALL: PermissionKey[] = [
   'warehouse_map.view',
@@ -295,6 +296,7 @@ export function defaultPermissionsForLegacy(role: UserRole): RolePermissions {
       ...DOCUMENT_KEYS,
       ...PURCHASES_ALL,
       ...INVENTORY_ALL,
+      ...AGENT_STOCK_OPS,
       ...WAREHOUSE_MAP_ALL,
       ...MFG_RUN,
       'reports.view',
@@ -326,6 +328,7 @@ export function defaultPermissionsForLegacy(role: UserRole): RolePermissions {
     'dashboard.view',
     ...PURCHASES_ALL,
     ...INVENTORY_ALL,
+    ...AGENT_STOCK_OPS,
     ...WAREHOUSE_MAP_ALL,
     ...MFG_RUN,
     'sales.delivery.view',

@@ -297,6 +297,46 @@ function getQty(productId: string, warehouseId: string) {
   return state.inventory.find((row) => row.productId === productId && row.warehouseId === warehouseId)?.qty ?? 0
 }
 
+function applyWarehouseTransfer(input: {
+  fromWarehouseId: string
+  toWarehouseId: string
+  productId: string
+  qty: number
+  notes?: string
+}) {
+  const reference = nextDocNo(
+    state.stockMovements.filter((m) => m.reference.startsWith('TRF-')).map((m) => m.reference),
+    'TRF-',
+    4,
+  )
+  const date = nowIso()
+  const fromName = state.warehouses.find((warehouse) => warehouse.id === input.fromWarehouseId)?.name ?? input.fromWarehouseId
+  const toName = state.warehouses.find((warehouse) => warehouse.id === input.toWarehouseId)?.name ?? input.toWarehouseId
+  const note = input.notes?.trim()
+  const outMove = addMovement(state.stockMovements, state.inventory, {
+    date,
+    reference,
+    productId: input.productId,
+    warehouseId: input.fromWarehouseId,
+    type: 'transfer_out',
+    stockIn: 0,
+    stockOut: input.qty,
+    notes: [note, `To ${toName}`].filter(Boolean).join(' — '),
+  })
+  const inMove = addMovement(outMove.movements, outMove.inventory, {
+    date,
+    reference,
+    productId: input.productId,
+    warehouseId: input.toWarehouseId,
+    type: 'transfer_in',
+    stockIn: input.qty,
+    stockOut: 0,
+    notes: [note, `From ${fromName}`].filter(Boolean).join(' — '),
+  })
+  setData({ inventory: inMove.inventory, stockMovements: inMove.movements })
+  return reference
+}
+
 function productById(id: string) {
   return state.products.find((product) => product.id === id)
 }
@@ -1674,7 +1714,7 @@ export const db = {
     return true
   },
 
-  transferStock(input: { fromWarehouseId: string; toWarehouseId: string; productId: string; qty: number }) {
+  transferStock(input: { fromWarehouseId: string; toWarehouseId: string; productId: string; qty: number; notes?: string }) {
     if (input.fromWarehouseId === input.toWarehouseId) {
       toast('Choose different warehouses', undefined, 'warning')
       return false
@@ -1688,32 +1728,54 @@ export const db = {
       toast('Not enough stock at source', `Available: ${current}.`, 'danger')
       return false
     }
-    const reference = nextDocNo(
-      state.stockMovements.filter((m) => m.reference.startsWith('TRF-')).map((m) => m.reference),
-      'TRF-',
-      4,
-    )
-    const date = nowIso()
-    const outMove = addMovement(state.stockMovements, state.inventory, {
-      date,
-      reference,
-      productId: input.productId,
-      warehouseId: input.fromWarehouseId,
-      type: 'transfer_out',
-      stockIn: 0,
-      stockOut: input.qty,
-    })
-    const inMove = addMovement(outMove.movements, outMove.inventory, {
-      date,
-      reference,
-      productId: input.productId,
-      warehouseId: input.toWarehouseId,
-      type: 'transfer_in',
-      stockIn: input.qty,
-      stockOut: 0,
-    })
-    setData({ inventory: inMove.inventory, stockMovements: inMove.movements })
+    applyWarehouseTransfer(input)
     toast('Transfer complete', `${input.qty} moved.`)
+    return true
+  },
+
+  transferStockToAgent(input: { agentId: string; fromWarehouseId: string; productId: string; qty: number; notes?: string }) {
+    if (!hasPermission(state, 'agent.stock.transfer')) {
+      toast('Permission denied', 'You cannot transfer agent stock.', 'danger')
+      return false
+    }
+    const agent = (state.agents ?? []).find((item) => item.id === input.agentId)
+    if (!agent) {
+      toast('Agent not found', undefined, 'warning')
+      return false
+    }
+    if (agent.status !== 'active') {
+      toast('Inactive agents cannot receive stock.', undefined, 'warning')
+      return false
+    }
+    if (!input.fromWarehouseId) {
+      toast('Select a source warehouse', undefined, 'warning')
+      return false
+    }
+    if (!isCompanyWarehouseId(state.warehouses, input.fromWarehouseId)) {
+      toast('Source must be a company warehouse', undefined, 'warning')
+      return false
+    }
+    if (!input.productId) {
+      toast('Select a product', undefined, 'warning')
+      return false
+    }
+    if (!(input.qty > 0)) {
+      toast('Enter a quantity', undefined, 'warning')
+      return false
+    }
+    const available = getQty(input.productId, input.fromWarehouseId)
+    if (input.qty > available) {
+      toast('Insufficient stock.', `Available: ${available}.`, 'danger')
+      return false
+    }
+    applyWarehouseTransfer({
+      fromWarehouseId: input.fromWarehouseId,
+      toWarehouseId: agent.warehouseId,
+      productId: input.productId,
+      qty: input.qty,
+      notes: input.notes,
+    })
+    toast('Stock transferred successfully.')
     return true
   },
 

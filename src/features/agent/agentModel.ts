@@ -118,3 +118,7 @@ export function agentStockRows(state: Pick<AppState, 'inventory' | 'products'>, 
     .filter((row): row is { productId: string; warehouseId: string; qty: number; product: Product } => Boolean(row))
     .sort((a, b) => a.product.name.localeCompare(b.product.name))
 }
+
+export function activeAgents<T extends { status: string }>(agents: T[]) {
+  return agents.filter((agent) => agent.status === 'active')
+}
