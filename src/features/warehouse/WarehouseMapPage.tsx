@@ -12,6 +12,7 @@ import {
   slotLabel,
   unplacedPacks,
   latestProductionRef,
+  occupancyProductionLabel,
   BALANCE_USAGE_REASONS,
   balanceProductionDate,
   formatProductionDate,
@@ -685,6 +686,7 @@ function SlotCell({
   onClick: () => void
   dnd?: SlotDnd
 }) {
+  const state = useStore()
   const color = product?.accent || '#e2e8f0'
   const occupied = Boolean(occupancy)
   const canDrag = Boolean(dnd?.enabled && occupied)
@@ -692,6 +694,7 @@ function SlotCell({
   const hovering = Boolean(dnd?.fromId && dnd.fromId !== slot.id && dnd.overId === slot.id)
   const dropOk = hovering && !occupied
   const dropBad = hovering && occupied
+  const produced = occupancy ? occupancyProductionLabel(state, occupancy) : ''
   return (
     <button
       type="button"
@@ -741,7 +744,10 @@ function SlotCell({
         {occupancy && product ? (
           <>
             <div className="font-semibold uppercase tracking-wide">{shortProductName(product.name)}</div>
-            <div className="tabular font-medium">{formatQty(occupancy.quantityPacks)} PACK</div>
+            <div>
+              <div className="tabular font-medium">{formatQty(occupancy.quantityPacks)} PACK</div>
+              <div className="text-[9px] font-medium tabular opacity-80">{produced}</div>
+            </div>
           </>
         ) : (
           <div className="m-auto text-[10px] font-medium tracking-wide">EMPTY</div>

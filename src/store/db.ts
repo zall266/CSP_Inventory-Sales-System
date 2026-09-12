@@ -2776,6 +2776,12 @@ export const db = {
       toast('Slot has another product', 'One SKU per position.', 'warning')
       return false
     }
+    const sourceRef = source.productionSessionRef || source.batchRef
+    const destRef = destination ? destination.productionSessionRef || destination.batchRef : ''
+    if (destination && sourceRef && destRef && sourceRef !== destRef) {
+      toast('Keep cartons separate', 'Different production dates cannot share a slot.', 'warning')
+      return false
+    }
     const actor = currentUser(state)
     const remaining = round2(source.quantityPacks - qty)
     let occupancies = state.slotOccupancies
