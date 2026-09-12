@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react'
 import { Minus, Plus, Trash2, Search } from 'lucide-react'
 import { Button, Card, Modal, Select, StatusBadge } from '@/components/ui'
 import { ProductMark, paymentLabel } from '@/components/ProductMark'
+import { companySellingWarehouseId } from '@/features/agent/agentModel'
 import { useApi, useStore } from '@/store/hooks'
 import type { PaymentMethod, Product, Sale } from '@/types'
 import { formatMoney, formatQty, round2 } from '@/utils/format'
@@ -11,7 +12,7 @@ type CartLine = { productId: string; qty: number; price: number }
 export function PosPage() {
   const state = useStore()
   const api = useApi()
-  const warehouseId = state.ui.warehouseFilter === 'all' ? state.settings.defaultWarehouseId : state.ui.warehouseFilter
+  const warehouseId = companySellingWarehouseId(state)
   const [query, setQuery] = useState('')
   const [categoryId, setCategoryId] = useState('all')
   const [cart, setCart] = useState<CartLine[]>([])

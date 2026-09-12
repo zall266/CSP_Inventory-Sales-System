@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import { Button, Card, FilterRow, Input, KpiCard, PageHeader, Select, StatusBadge } from '@/components/ui'
 import { ProductMark } from '@/components/ProductMark'
 import { finishedGoodsBreakdown, isFinishedPack } from '@/features/warehouse/warehouseModel'
+import { companyWarehouses, isCompanyWarehouseId } from '@/features/agent/agentModel'
 import { inventoryValue, useApi, useLookups, useStore } from '@/store/hooks'
 import { formatMoney, formatQty } from '@/utils/format'
 
@@ -19,7 +20,11 @@ export function InventoryPage() {
 
   const rows = useMemo(() => {
     return state.inventory
-      .filter((row) => warehouse === 'all' || row.warehouseId === warehouse)
+      .filter((row) =>
+        warehouse === 'all'
+          ? isCompanyWarehouseId(state.warehouses, row.warehouseId)
+          : row.warehouseId === warehouse,
+      )
       .map((row) => {
         const p = product(row.productId)
         return p ? { ...row, product: p, status: api.getProductStockStatus(p.id, row.warehouseId) } : null
@@ -39,7 +44,7 @@ export function InventoryPage() {
   const out = rows.filter((r) => r.status === 'out_of_stock').length
 
   const displayRows = useMemo(() => {
-    const warehouses = warehouse === 'all' ? state.warehouses.map((row) => row.id) : [warehouse]
+    const warehouses = warehouse === 'all' ? companyWarehouses(state.warehouses).map((row) => row.id) : [warehouse]
     return state.products
       .filter(isFinishedPack)
       .flatMap((p) =>
@@ -78,7 +83,7 @@ export function InventoryPage() {
         <Input placeholder="Search" value={query} onChange={(e) => setQuery(e.target.value)} />
         <Select value={warehouse} onChange={(e) => api.setWarehouseFilter(e.target.value)}>
           <option value="all">All warehouses</option>
-          {state.warehouses.map((w) => <option key={w.id} value={w.id}>{w.name}</option>)}
+          {companyWarehouses(state.warehouses).map((w) => <option key={w.id} value={w.id}>{w.name}</option>)}
         </Select>
         <Select value={categoryId} onChange={(e) => setCategoryId(e.target.value)}>
           <option value="all">All categories</option>

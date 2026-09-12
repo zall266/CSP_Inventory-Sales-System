@@ -51,10 +51,29 @@ export type StorageFace = 'FRONT' | 'BACK' | 'NONE'
 export type PlacementAction = 'PLACED' | 'MOVED' | 'TOPPED_UP' | 'EMPTIED'
 export type BalanceUsageReason = 'Content' | 'Sample' | 'R&D / Testing' | 'Internal Use' | 'Waste' | 'Other'
 
+export type WarehouseKind = 'company' | 'agent'
+
 export type Warehouse = {
   id: string
   name: string
   code: string
+  kind: WarehouseKind
+}
+
+export type AgentStatus = 'active' | 'inactive'
+
+export type Agent = {
+  id: string
+  name: string
+  code: string
+  warehouseId: string
+  userId?: string
+  bankName: string
+  accountHolder: string
+  bankAccount: string
+  status: AgentStatus
+  createdAt: string
+  updatedAt: string
 }
 
 export type Category = {
@@ -72,6 +91,7 @@ export type Product = {
   costPrice: number
   sellingPrice: number
   wholesalePrice: number
+  agentPrice?: number
   reorderLevel: number
   trackBatch: boolean
   trackExpiry: boolean
@@ -207,6 +227,7 @@ export type Sale = {
   subtotal: number
   discount: number
   tax: number
+  shipping: number
   total: number
   paid: number
   balance: number
@@ -218,6 +239,73 @@ export type Sale = {
   quotationNo?: string
   dueDate?: string
   paymentTerms?: string
+}
+
+export type AgentSaleItem = {
+  productId: string
+  qty: number
+  agentPrice: number
+  sellingPrice: number
+  productMarkup: number
+}
+
+export type AgentSale = {
+  id: string
+  saleId: string
+  agentId: string
+  warehouseId: string
+  date: string
+  customerId: string
+  items: AgentSaleItem[]
+  cspAmount: number
+  productMarkup: number
+  deliveryEarnings: number
+  totalEarnings: number
+  customerPaid: number
+  notes?: string
+  createdAt: string
+}
+
+export type AgentEarningKind =
+  | 'product_markup'
+  | 'delivery_earnings'
+  | 'withdrawal_pending'
+  | 'withdrawal_paid'
+  | 'withdrawal_cancelled'
+
+export type AgentEarningLedger = {
+  id: string
+  agentId: string
+  date: string
+  kind: AgentEarningKind
+  amount: number
+  availableDelta: number
+  pendingDelta: number
+  paidDelta: number
+  relatedSaleId?: string
+  relatedAgentSaleId?: string
+  relatedWithdrawalId?: string
+  notes?: string
+  createdAt: string
+}
+
+export type AgentWithdrawalStatus = 'requested' | 'processing' | 'paid' | 'cancelled'
+
+export type AgentWithdrawal = {
+  id: string
+  agentId: string
+  amount: number
+  status: AgentWithdrawalStatus
+  requestedAt: string
+  processedAt?: string
+  paidAt?: string
+  cancelledAt?: string
+  receiptUrl?: string
+  receiptName?: string
+  processedBy?: string
+  notes?: string
+  createdAt: string
+  updatedAt: string
 }
 
 export type QuotationStatus = 'draft' | 'sent' | 'accepted' | 'rejected' | 'expired' | 'cancelled'
@@ -696,6 +784,15 @@ export type PermissionKey =
   | 'roles.permissions.manage'
   | 'settings.view'
   | 'settings.edit'
+  | 'agent.view'
+  | 'agent.manage'
+  | 'agent.stock.view'
+  | 'agent.stock.transfer'
+  | 'agent.sale.create'
+  | 'agent.sale.view'
+  | 'agent.earnings.view'
+  | 'agent.withdrawal.create'
+  | 'agent.withdrawal.process'
 
 export type RolePermissions = Record<PermissionKey, boolean>
 export type RoleMatrix = Record<string, RolePermissions>
@@ -781,6 +878,10 @@ export type AppData = {
   customers: Customer[]
   suppliers: Supplier[]
   sales: Sale[]
+  agents: Agent[]
+  agentSales: AgentSale[]
+  agentEarningLedgers: AgentEarningLedger[]
+  agentWithdrawals: AgentWithdrawal[]
   quotations: Quotation[]
   deliveryOrders: DeliveryOrder[]
   documentAuditLogs: DocumentAuditLog[]
@@ -821,6 +922,7 @@ export type ProductInput = {
   costPrice: number
   sellingPrice: number
   wholesalePrice: number
+  agentPrice?: number
   reorderLevel: number
   trackBatch: boolean
   trackExpiry: boolean
@@ -834,6 +936,7 @@ export type SaleInput = {
   items: Array<{ productId: string; qty: number; price: number; discount?: number; description?: string }>
   discount?: number
   tax?: number
+  shipping?: number
   paymentMethod?: PaymentMethod
   paidAmount?: number
   notes?: string

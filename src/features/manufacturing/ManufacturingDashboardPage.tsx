@@ -1,5 +1,6 @@
 import { Link } from 'react-router-dom'
 import { Button, Card, KpiCard, PageHeader, StatusBadge } from '@/components/ui'
+import { isCompanyWarehouseId } from '@/features/agent/agentModel'
 import { useLookups, useStore } from '@/store/hooks'
 import { formatQty } from '@/utils/format'
 import { currentUser, sessionTotals } from './sessionPlan'
@@ -15,6 +16,7 @@ export function ManufacturingDashboardPage() {
   const actualPacks = completedToday.reduce((sum, item) => sum + sessionTotals(item).actual, 0)
   const balanceG = state.productionBalances.filter((row) => row.status === 'available').reduce((sum, row) => sum + row.quantity, 0)
   const lowAlerts = state.inventory.filter((row) => {
+    if (!isCompanyWarehouseId(state.warehouses, row.warehouseId)) return false
     const p = product(row.productId)
     return p && row.qty > 0 && row.qty <= p.reorderLevel
   }).length
