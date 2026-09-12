@@ -13,9 +13,10 @@ import {
   PageHeader,
   Select,
   StatusBadge,
+  Textarea,
 } from '@/components/ui'
 import { PermissionDenied } from '@/features/documents/A4Sheet'
-import { agentStockRows, agentStockTotal } from '@/features/agent/agentModel'
+import { activeAgents, agentStockRows, agentStockTotal, companyWarehouses } from '@/features/agent/agentModel'
 import { hasPermission } from '@/features/settings/permissions'
 import { useApi, useLookups, useStore } from '@/store/hooks'
 import { formatQty } from '@/utils/format'
@@ -59,6 +60,114 @@ function toInput(form: AgentForm): AgentInput {
     accountHolder: form.accountHolder,
     bankAccount: form.bankAccount,
   }
+}
+
+function AgentTransferModal({
+  open,
+  agentId,
+  onClose,
+}: {
+  open: boolean
+  agentId: string
+  onClose: () => void
+}) {
+  const state = useStore()
+  const api = useApi()
+  const companies = companyWarehouses(state.warehouses)
+  const agents = activeAgents(state.agents ?? [])
+  const products = state.products.filter((product) => product.status === 'active')
+  const defaultFrom = companies.find((warehouse) => warehouse.id === state.settings.defaultWarehouseId)?.id ?? companies[0]?.id ?? ''
+  const [fromWarehouseId, setFromWarehouseId] = useState(defaultFrom)
+  const [toAgentId, setToAgentId] = useState(agentId)
+  const [productId, setProductId] = useState(products.find((item) => item.id === 'p-pack-mt')?.id ?? products[0]?.id ?? '')
+  const [qty, setQty] = useState(0)
+  const [notes, setNotes] = useState('')
+  const [confirm, setConfirm] = useState(false)
+
+  const product = products.find((item) => item.id === productId)
+  const fromWarehouse = companies.find((warehouse) => warehouse.id === fromWarehouseId)
+  const toAgent = agents.find((agent) => agent.id === toAgentId)
+  const available = productId && fromWarehouseId ? api.getProductQty(productId, fromWarehouseId) : 0
+
+  const submit = (event: FormEvent) => {
+    event.preventDefault()
+    setConfirm(true)
+  }
+
+  const confirmTransfer = () => {
+    const ok = api.transferStockToAgent({
+      agentId: toAgentId,
+      fromWarehouseId,
+      productId,
+      qty,
+      notes,
+    })
+    setConfirm(false)
+    if (ok) {
+      setQty(0)
+      setNotes('')
+      close()
+    }
+  }
+
+  const close = () => {
+    setConfirm(false)
+    onClose()
+  }
+
+  return (
+    <>
+      <Modal open={open} onClose={close} title="Transfer Stock" width="max-w-xl">
+        <form className="grid gap-4 sm:grid-cols-2" onSubmit={submit}>
+          <Field label="From warehouse">
+            <Select value={fromWarehouseId} onChange={(e) => setFromWarehouseId(e.target.value)}>
+              <option value="">Select warehouse</option>
+              {companies.map((warehouse) => (
+                <option key={warehouse.id} value={warehouse.id}>{warehouse.name}</option>
+              ))}
+            </Select>
+          </Field>
+          <Field label="To agent">
+            <Select value={toAgentId} onChange={(e) => setToAgentId(e.target.value)}>
+              <option value="">Select agent</option>
+              {agents.map((agent) => (
+                <option key={agent.id} value={agent.id}>{agent.name}</option>
+              ))}
+            </Select>
+          </Field>
+          <Field label="Product" className="sm:col-span-2">
+            <Select value={productId} onChange={(e) => setProductId(e.target.value)}>
+              <option value="">Select product</option>
+              {products.map((item) => (
+                <option key={item.id} value={item.id}>{item.name}</option>
+              ))}
+            </Select>
+          </Field>
+          <Field label="Available stock">
+            <Input disabled value={product ? `${formatQty(available)} ${product.unit}` : '—'} />
+          </Field>
+          <Field label="Quantity">
+            <Input type="number" min={0} step="0.01" value={qty || ''} onChange={(e) => setQty(Number(e.target.value))} />
+          </Field>
+          <Field label="Notes" className="sm:col-span-2">
+            <Textarea rows={2} value={notes} onChange={(e) => setNotes(e.target.value)} />
+          </Field>
+          <div className="flex justify-end gap-2 sm:col-span-2">
+            <Button type="button" variant="secondary" onClick={close}>Cancel</Button>
+            <Button type="submit">Transfer Stock</Button>
+          </div>
+        </form>
+      </Modal>
+      <ConfirmDialog
+        open={confirm}
+        onClose={() => setConfirm(false)}
+        title="Confirm transfer"
+        message={`Transfer:\n${formatQty(qty)} ${product?.unit ?? ''}\n${product?.name ?? 'Product'}\n\nFrom:\n${fromWarehouse?.name ?? '—'}\n\nTo:\n${toAgent?.name ?? '—'}`}
+        confirmLabel="Confirm Transfer"
+        onConfirm={confirmTransfer}
+      />
+    </>
+  )
 }
 
 function AgentFormModal({
@@ -268,12 +377,14 @@ export function AgentDetailPage() {
   const canView = hasPermission(state, 'agent.view') || hasPermission(state, 'agent.manage')
   const canManage = hasPermission(state, 'agent.manage')
   const canStock = hasPermission(state, 'agent.stock.view') || canManage
+  const canTransfer = hasPermission(state, 'agent.stock.transfer')
   const agent = (state.agents ?? []).find((item) => item.id === id)
   const warehouse = state.warehouses.find((item) => item.id === agent?.warehouseId)
   const linkedUser = state.users.find((user) => user.id === agent?.userId)
   const [form, setForm] = useState<AgentForm>(emptyForm)
   const [editing, setEditing] = useState(false)
   const [statusOpen, setStatusOpen] = useState(false)
+  const [transferOpen, setTransferOpen] = useState(false)
 
   if (!canView) return <PermissionDenied subtitle="You do not have access to Agent." />
   if (!agent) return <PageHeader title="Agent" subtitle="Not found." />
@@ -294,6 +405,9 @@ export function AgentDetailPage() {
         actions={
           <div className="flex flex-wrap gap-2">
             <Link to="/sales/agents"><Button variant="secondary">Back</Button></Link>
+            {canTransfer && agent.status === 'active' && (
+              <Button onClick={() => setTransferOpen(true)}>Transfer Stock</Button>
+            )}
             {canManage && <Button variant="secondary" onClick={() => { setForm(formFromAgent(agent)); setEditing(true) }}>Edit</Button>}
             {canManage && (
               <Button
@@ -349,9 +463,14 @@ export function AgentDetailPage() {
       </Card>
       {canStock && (
         <Card>
-          <div className="border-b border-slate-100 px-5 py-4">
-            <div className="text-sm font-semibold">Stock</div>
-            <div className="text-xs text-slate-400">From InventoryRow in the agent warehouse.</div>
+          <div className="flex items-center justify-between gap-3 border-b border-slate-100 px-5 py-4">
+            <div>
+              <div className="text-sm font-semibold">Stock</div>
+              <div className="text-xs text-slate-400">From InventoryRow in the agent warehouse.</div>
+            </div>
+            {canTransfer && agent.status === 'active' && (
+              <Button onClick={() => setTransferOpen(true)}>Transfer Stock</Button>
+            )}
           </div>
           <div className="sf-table-wrap">
             <table>
@@ -373,6 +492,9 @@ export function AgentDetailPage() {
             {!stockRows.length && <EmptyState title="No stock yet" hint="Agent stock is stored in the linked warehouse." />}
           </div>
         </Card>
+      )}
+      {canTransfer && (
+        <AgentTransferModal open={transferOpen} agentId={agent.id} onClose={() => setTransferOpen(false)} />
       )}
       <AgentFormModal
         open={editing}
