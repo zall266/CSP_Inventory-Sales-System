@@ -92,6 +92,7 @@ function AgentSaleModal({
   const [confirm, setConfirm] = useState(false)
   const [submitting, setSubmitting] = useState(false)
   const submittingRef = useRef(false)
+  const requestIdRef = useRef('')
 
   const product = products.find((item) => item.id === productId)
   const available = productId && agent?.warehouseId ? api.getProductQty(productId, agent.warehouseId) : 0
@@ -119,6 +120,7 @@ function AgentSaleModal({
       api.toast('Insufficient stock.', `Available: ${formatQty(available)}.`, 'danger')
       return
     }
+    requestIdRef.current = `asr_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`
     setConfirm(true)
   }
 
@@ -134,6 +136,7 @@ function AgentSaleModal({
       customerId,
       paymentMethod,
       notes,
+      requestId: requestIdRef.current,
     })
     submittingRef.current = false
     setSubmitting(false)

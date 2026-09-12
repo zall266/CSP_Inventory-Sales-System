@@ -440,8 +440,9 @@ function agentSaleRequestKey(input: {
   customerId?: string
   paymentMethod?: PaymentMethod
   notes?: string
+  requestId?: string
 }) {
-  return [input.agentId, input.productId, input.qty, input.sellingPrice, input.customerId ?? '', input.paymentMethod ?? '', input.notes ?? ''].join('|')
+  return input.requestId?.trim() || ''
 }
 
 function postAgentSale(input: {
@@ -452,9 +453,10 @@ function postAgentSale(input: {
   customerId?: string
   paymentMethod?: PaymentMethod
   notes?: string
+  requestId?: string
 }) {
   const requestKey = agentSaleRequestKey(input)
-  if (lastAgentSale && lastAgentSale.key === requestKey && Date.now() - lastAgentSale.at < 1500) {
+  if (requestKey && lastAgentSale && lastAgentSale.key === requestKey) {
     return lastAgentSale.sale
   }
   if (!hasPermission(state, 'agent.sale.create')) {
@@ -1968,6 +1970,7 @@ export const db = {
     customerId?: string
     paymentMethod?: PaymentMethod
     notes?: string
+    requestId?: string
   }) {
     if (agentSaleInFlight) {
       toast('Unable to complete sale. Please try again.', undefined, 'warning')
