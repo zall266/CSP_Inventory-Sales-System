@@ -72,7 +72,7 @@ export function ReceivingListPage() {
         }
       />
       <FilterRow>
-        <Input placeholder="Search receiving no, material or supplier" value={query} onChange={(event) => setQuery(event.target.value)} />
+        <Input placeholder="Search receiving no or material" value={query} onChange={(event) => setQuery(event.target.value)} />
         <div />
         <div />
         <div />
@@ -236,19 +236,20 @@ export function NewReceivingPage() {
             const product = state.products.find((item) => item.id === line.productId)
             return (
               <div key={index} className="grid gap-2 rounded-xl border border-slate-100 p-3 lg:grid-cols-8">
-                <Select
-                  className="lg:col-span-2"
-                  value={line.productId}
-                  onChange={(event) =>
-                    setLines(lines.map((item, i) => (i === index ? { ...item, productId: event.target.value } : item)))
-                  }
-                >
-                  {materials.map((material) => (
-                    <option key={material.id} value={material.id}>
-                      {material.name} · {material.sku}
-                    </option>
-                  ))}
-                </Select>
+                <Field label="Raw material" className="lg:col-span-2">
+                  <Select
+                    value={line.productId}
+                    onChange={(event) =>
+                      setLines(lines.map((item, i) => (i === index ? { ...item, productId: event.target.value } : item)))
+                    }
+                  >
+                    {materials.map((material) => (
+                      <option key={material.id} value={material.id}>
+                        {material.name} · {material.sku}
+                      </option>
+                    ))}
+                  </Select>
+                </Field>
                 <Field label="Qty" hint={receivingQtyHint(product)}>
                   <Input
                     type="number"
