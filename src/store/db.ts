@@ -12,6 +12,14 @@ import {
   WAREHOUSE_MAP_KEYS,
 } from '@/features/warehouse/warehouseModel'
 import { AGENT_PERMISSION_KEYS, agentBankDetailsComplete, agentLinkedWarehouseName, calcAgentSaleDocument, canUserRequestWithdrawalForAgent, companyWarehouses, configuredAgentPrice, currentLinkedAgent, hasSaleEarningLedger, hasWithdrawalCancelledLedger, hasWithdrawalPaidLedger, hasWithdrawalPendingLedger, isAgentWarehouseId, isCompanyWarehouseId, linkedAgentForUser, nextAgentWarehouseId, normalizeAgentSaleItems, parseAgentPriceWrite, parseWithdrawalAmount, parseWithdrawalPaymentDate, parseWithdrawalPaymentReference, parseWithdrawalReceipt, SALE_EARNING_KIND, saleIsAgentSale, snapshotAgentBankDetails, summarizeAgentEarnings, WITHDRAWAL_CANCELLED_KIND, WITHDRAWAL_PAID_KIND, WITHDRAWAL_PENDING_KIND } from '@/features/agent/agentModel'
+import {
+  TASK_PERMISSION_KEYS,
+  defaultStaffTaskCategories,
+  missingTaskOccurrences,
+  parseTaskCompletionPhoto,
+  parseTaskTime,
+  resolveTaskReference,
+} from '@/features/tasks/taskModel'
 import { applyBomCosts, hydrateProducts, normalizeUnit, parseNonNegativeMoney, productHasBom, productIsSellable, productIsUsed, purchaseQtyToBaseQty, resolveProductSku, skuIsUnique, validatePurchaseConversion } from '@/features/products/masterData'
 import { bomLinesForQty, consumptionCost, hasShortage, materialAvailability } from '@/features/manufacturing/helpers'
 import { buildSessionPlan, canEditSession, currentUser, mergePicking } from '@/features/manufacturing/sessionPlan'
@@ -80,6 +88,8 @@ import type {
   SaleInput,
   SaleStatus,
   Settings,
+  StaffTask,
+  StaffTaskInput,
   StockStatus,
   StorageLocationType,
   ToastTone,
@@ -125,6 +135,8 @@ function loadPersisted(): { data: AppData; currentUserId?: string } | null {
   }
 }
 
+let lastPersistFailed = false
+
 function persist(data: AppData) {
   try {
     const { ui: _ignored, ...rest } = data as AppData & { ui?: UiState }
@@ -132,8 +144,9 @@ function persist(data: AppData) {
       STORAGE_KEY,
       JSON.stringify({ version: 1, data: rest, currentUserId: state.ui.currentUserId }),
     )
+    lastPersistFailed = false
   } catch {
-    /* ignore quota */
+    lastPersistFailed = true
   }
 }
 
@@ -146,7 +159,7 @@ function hydrateData(data: AppData): AppData {
       const raw = data.settings?.roleMatrix?.[role.id] ?? {}
       const normalized = normalizePermissions(raw)
       const defaults = defaultPermissionsForLegacy(role.legacyRole)
-      for (const key of [...WAREHOUSE_MAP_KEYS, ...AGENT_PERMISSION_KEYS]) {
+      for (const key of [...WAREHOUSE_MAP_KEYS, ...AGENT_PERMISSION_KEYS, ...TASK_PERMISSION_KEYS]) {
         if (raw[key] === undefined) normalized[key] = defaults[key]
       }
       return [role.id, normalized]
@@ -205,6 +218,9 @@ function hydrateData(data: AppData): AppData {
     displayStocks: migrated.displayStocks,
     placementLogs: data.placementLogs ?? (data.storageLocations?.length ? [] : seedOccupancy.placementLogs),
     balanceUsageLogs: data.balanceUsageLogs ?? [],
+    staffTaskCategories: data.staffTaskCategories ?? defaultStaffTaskCategories(PROTOTYPE_TODAY.toISOString()),
+    staffTasks: data.staffTasks ?? [],
+    staffTaskOccurrences: missingTaskOccurrences(data.staffTasks ?? [], data.staffTaskOccurrences ?? [], PROTOTYPE_TODAY),
     productionSessions: (data.productionSessions ?? []).map((session) => ({
       ...session,
       items: session.items.map((item) => ({
@@ -497,6 +513,80 @@ function maybeStockAlerts(productId: string, warehouseId: string, qty: number) {
 }
 
 let agentSaleInFlight = false
+
+function syncStaffTaskOccurrencesInternal() {
+  const existing = state.staffTaskOccurrences ?? []
+  const next = missingTaskOccurrences(state.staffTasks ?? [], existing, nowIso())
+  if (next === existing) return existing
+  setData({ staffTaskOccurrences: next })
+  return next
+}
+
+function scheduleSummary(task: Pick<StaffTask, 'frequency' | 'weekDay' | 'monthDay' | 'annualMonth' | 'annualDay' | 'specificDate' | 'time'>) {
+  return [task.frequency, task.weekDay, task.monthDay, task.annualMonth, task.annualDay, task.specificDate, task.time].join('|')
+}
+
+function canWorkOnStaffTask(task: StaffTask) {
+  if (hasPermission(state, 'task.edit')) return true
+  return hasPermission(state, 'task.complete') && task.assignedTo === currentUser(state).id
+}
+
+function normalizedStaffTaskFields(input: StaffTaskInput, existing?: StaffTask) {
+  const title = input.title.trim()
+  if (!title) {
+    toast('Task title is required', undefined, 'warning')
+    return null
+  }
+  const category = (state.staffTaskCategories ?? []).find((row) => row.id === input.categoryId)
+  if (!category) {
+    toast('Select a task category', undefined, 'warning')
+    return null
+  }
+  if (category.status !== 'active' && existing?.categoryId !== category.id) {
+    toast('This category is inactive', 'Choose an active category.', 'warning')
+    return null
+  }
+  const assignee = state.users.find((user) => user.id === input.assignedTo)
+  if (!assignee || assignee.status !== 'active') {
+    toast('Select a staff member', undefined, 'warning')
+    return null
+  }
+  const time = parseTaskTime(input.time)
+  if (time === null) {
+    toast('Enter a valid time', 'Use HH:MM or leave blank.', 'warning')
+    return null
+  }
+  if (input.frequency === 'specific_date') {
+    const specificDate = (input.specificDate ?? '').trim()
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(specificDate)) {
+      toast('Select a specific date', undefined, 'warning')
+      return null
+    }
+  }
+  const referenceType = input.referenceType ?? ''
+  const resolved = referenceType
+    ? resolveTaskReference(state, referenceType, input.referenceNo ?? '', input.referenceId)
+    : { id: '', no: '' }
+  return {
+    title,
+    description: (input.description ?? '').trim(),
+    categoryId: category.id,
+    assignedTo: assignee.id,
+    departmentId: (input.departmentId ?? assignee.departmentId ?? '').trim(),
+    priority: input.priority ?? existing?.priority ?? 'normal',
+    frequency: input.frequency,
+    weekDay: input.frequency === 'weekly' ? (input.weekDay ?? 1) : (existing?.weekDay ?? 1),
+    monthDay: input.frequency === 'monthly' ? (input.monthDay ?? 1) : (existing?.monthDay ?? 1),
+    annualMonth: input.frequency === 'annually' ? (input.annualMonth ?? 3) : (existing?.annualMonth ?? 3),
+    annualDay: input.frequency === 'annually' ? (input.annualDay ?? 15) : (existing?.annualDay ?? 15),
+    specificDate: input.frequency === 'specific_date' ? (input.specificDate ?? '').trim() : '',
+    time,
+    photoRequirement: input.photoRequirement ?? existing?.photoRequirement ?? 'none',
+    referenceType,
+    referenceId: resolved.id,
+    referenceNo: resolved.no,
+  }
+}
 let lastAgentSale: { key: string; sale: Sale; at: number } | null = null
 
 function agentSaleRequestKey(input: { requestId?: string }) {
@@ -1106,7 +1196,7 @@ export const db = {
   },
   resetDemo() {
     seed = createSeedData()
-    state = { ...cloneData(seed), ui: { ...defaultUi(), toasts: [] } }
+    state = { ...hydrateData(cloneData(seed)), ui: { ...defaultUi(), toasts: [] } }
     persist(state)
     listeners.forEach((listener) => listener())
     toast('Demo data reset', 'All prototype data is back to the original sample.', 'info')
@@ -4379,6 +4469,370 @@ export const db = {
       balanceUsageLogs: [log, ...(state.balanceUsageLogs ?? [])],
     })
     toast('Balance used', `${qty}${balance.unit} recorded. Inventory packs unchanged.`)
+    return true
+  },
+
+  syncStaffTaskOccurrences() {
+    return syncStaffTaskOccurrencesInternal()
+  },
+
+  createStaffTaskCategory(name: string) {
+    if (!hasPermission(state, 'task.category.manage')) {
+      toast('Permission denied', 'You cannot manage task categories.', 'danger')
+      return null
+    }
+    const nextName = name.trim()
+    if (!nextName) {
+      toast('Category name is required', undefined, 'warning')
+      return null
+    }
+    const needle = nextName.toLowerCase()
+    if ((state.staffTaskCategories ?? []).some((row) => row.name.trim().toLowerCase() === needle)) {
+      toast('Category already exists', nextName, 'warning')
+      return null
+    }
+    const stamp = nowIso()
+    const category = { id: uid('tcat'), name: nextName, status: 'active' as const, createdAt: stamp, updatedAt: stamp }
+    setData({
+      staffTaskCategories: [...(state.staffTaskCategories ?? []), category],
+      documentAuditLogs: pushDocAudit(
+        makeDocAudit({
+          action: 'task_category_created',
+          documentType: 'staff_task_category',
+          documentId: category.id,
+          documentNo: category.name,
+          field: 'name',
+          newValue: category.name,
+        }),
+      ),
+    })
+    toast('Category added', category.name)
+    return category
+  },
+
+  updateStaffTaskCategory(id: string, name: string) {
+    if (!hasPermission(state, 'task.category.manage')) {
+      toast('Permission denied', 'You cannot manage task categories.', 'danger')
+      return false
+    }
+    const category = (state.staffTaskCategories ?? []).find((row) => row.id === id)
+    if (!category) return false
+    const nextName = name.trim()
+    if (!nextName) {
+      toast('Category name is required', undefined, 'warning')
+      return false
+    }
+    const needle = nextName.toLowerCase()
+    if ((state.staffTaskCategories ?? []).some((row) => row.id !== id && row.name.trim().toLowerCase() === needle)) {
+      toast('Category already exists', nextName, 'warning')
+      return false
+    }
+    setData({
+      staffTaskCategories: (state.staffTaskCategories ?? []).map((row) =>
+        row.id === id ? { ...row, name: nextName, updatedAt: nowIso() } : row,
+      ),
+      documentAuditLogs: pushDocAudit(
+        makeDocAudit({
+          action: 'task_category_edited',
+          documentType: 'staff_task_category',
+          documentId: id,
+          documentNo: nextName,
+          field: 'name',
+          oldValue: category.name,
+          newValue: nextName,
+        }),
+      ),
+    })
+    toast('Category updated', nextName)
+    return true
+  },
+
+  deactivateStaffTaskCategory(id: string) {
+    if (!hasPermission(state, 'task.category.manage')) {
+      toast('Permission denied', 'You cannot manage task categories.', 'danger')
+      return false
+    }
+    const category = (state.staffTaskCategories ?? []).find((row) => row.id === id)
+    if (!category) return false
+    if (category.status === 'inactive') return true
+    setData({
+      staffTaskCategories: (state.staffTaskCategories ?? []).map((row) =>
+        row.id === id ? { ...row, status: 'inactive', updatedAt: nowIso() } : row,
+      ),
+      documentAuditLogs: pushDocAudit(
+        makeDocAudit({
+          action: 'task_category_deactivated',
+          documentType: 'staff_task_category',
+          documentId: id,
+          documentNo: category.name,
+          field: 'status',
+          oldValue: category.status,
+          newValue: 'inactive',
+        }),
+      ),
+    })
+    toast('Category deactivated', category.name)
+    return true
+  },
+
+  createStaffTask(input: StaffTaskInput) {
+    if (!hasPermission(state, 'task.create')) {
+      toast('Permission denied', 'You cannot create tasks.', 'danger')
+      return null
+    }
+    const fields = normalizedStaffTaskFields(input)
+    if (!fields) return null
+    const stamp = nowIso()
+    const actor = currentUser(state)
+    const task: StaffTask = {
+      id: uid('tsk'),
+      ...fields,
+      active: true,
+      createdBy: actor.id,
+      createdAt: stamp,
+      updatedAt: stamp,
+    }
+    const audits = [
+      makeDocAudit({
+        action: 'task_created',
+        documentType: 'staff_task',
+        documentId: task.id,
+        documentNo: task.title,
+        field: 'title',
+        newValue: task.title,
+      }),
+      makeDocAudit({
+        action: 'task_assigned',
+        documentType: 'staff_task',
+        documentId: task.id,
+        documentNo: task.title,
+        field: 'assignedTo',
+        newValue: state.users.find((user) => user.id === task.assignedTo)?.name ?? task.assignedTo,
+      }),
+    ]
+    setData({
+      staffTasks: [...(state.staffTasks ?? []), task],
+      documentAuditLogs: [...audits, ...(state.documentAuditLogs ?? [])],
+    })
+    syncStaffTaskOccurrencesInternal()
+    if (task.assignedTo !== actor.id) {
+      notify('info', 'New task assigned to you.', task.title, '/tasks')
+      persist(state)
+    }
+    toast('Task created', task.title)
+    return task
+  },
+
+  updateStaffTask(id: string, input: StaffTaskInput) {
+    if (!hasPermission(state, 'task.edit')) {
+      toast('Permission denied', 'You cannot edit tasks.', 'danger')
+      return false
+    }
+    const existing = (state.staffTasks ?? []).find((row) => row.id === id)
+    if (!existing) return false
+    const nextAssignedTo = hasPermission(state, 'task.assign') ? input.assignedTo : existing.assignedTo
+    const fields = normalizedStaffTaskFields({ ...input, assignedTo: nextAssignedTo }, existing)
+    if (!fields) return false
+    const stamp = nowIso()
+    const next: StaffTask = { ...existing, ...fields, updatedAt: stamp }
+    const audits: DocumentAuditLog[] = []
+    if (existing.assignedTo !== next.assignedTo) {
+      audits.push(
+        makeDocAudit({
+          action: 'task_reassigned',
+          documentType: 'staff_task',
+          documentId: id,
+          documentNo: next.title,
+          field: 'assignedTo',
+          oldValue: state.users.find((user) => user.id === existing.assignedTo)?.name ?? existing.assignedTo,
+          newValue: state.users.find((user) => user.id === next.assignedTo)?.name ?? next.assignedTo,
+        }),
+      )
+    }
+    if (scheduleSummary(existing) !== scheduleSummary(next)) {
+      audits.push(
+        makeDocAudit({
+          action: 'task_schedule_changed',
+          documentType: 'staff_task',
+          documentId: id,
+          documentNo: next.title,
+          field: 'schedule',
+          oldValue: scheduleSummary(existing),
+          newValue: scheduleSummary(next),
+        }),
+      )
+    }
+    setData({
+      staffTasks: (state.staffTasks ?? []).map((row) => (row.id === id ? next : row)),
+      documentAuditLogs: audits.length ? [...audits, ...(state.documentAuditLogs ?? [])] : state.documentAuditLogs,
+    })
+    syncStaffTaskOccurrencesInternal()
+    if (existing.assignedTo !== next.assignedTo && next.assignedTo !== currentUser(state).id) {
+      notify('info', 'New task assigned to you.', next.title, '/tasks')
+      persist(state)
+    }
+    toast('Task updated', next.title)
+    return true
+  },
+
+  deactivateStaffTask(id: string) {
+    if (!hasPermission(state, 'task.edit')) {
+      toast('Permission denied', 'You cannot deactivate tasks.', 'danger')
+      return false
+    }
+    const existing = (state.staffTasks ?? []).find((row) => row.id === id)
+    if (!existing) return false
+    if (!existing.active) return true
+    setData({
+      staffTasks: (state.staffTasks ?? []).map((row) => (row.id === id ? { ...row, active: false, updatedAt: nowIso() } : row)),
+      documentAuditLogs: pushDocAudit(
+        makeDocAudit({
+          action: 'task_deactivated',
+          documentType: 'staff_task',
+          documentId: id,
+          documentNo: existing.title,
+          field: 'active',
+          oldValue: 'true',
+          newValue: 'false',
+        }),
+      ),
+    })
+    toast('Task deactivated', existing.title)
+    return true
+  },
+
+  startStaffTaskOccurrence(occurrenceId: string) {
+    syncStaffTaskOccurrencesInternal()
+    const occurrence = (state.staffTaskOccurrences ?? []).find((row) => row.id === occurrenceId)
+    const task = (state.staffTasks ?? []).find((row) => row.id === occurrence?.taskId)
+    if (!occurrence || !task) return false
+    if (!canWorkOnStaffTask(task)) {
+      toast('Permission denied', 'You cannot start this task.', 'danger')
+      return false
+    }
+    if (occurrence.status === 'completed') {
+      toast('Task already completed', undefined, 'warning')
+      return false
+    }
+    if (occurrence.status === 'in_progress') return true
+    setData({
+      staffTaskOccurrences: (state.staffTaskOccurrences ?? []).map((row) =>
+        row.id === occurrenceId ? { ...row, status: 'in_progress', startedAt: nowIso() } : row,
+      ),
+    })
+    toast('Task started', task.title)
+    return true
+  },
+
+  attachStaffTaskPhoto(occurrenceId: string, photoUrl: string, fileName?: string) {
+    syncStaffTaskOccurrencesInternal()
+    const occurrence = (state.staffTaskOccurrences ?? []).find((row) => row.id === occurrenceId)
+    const task = (state.staffTasks ?? []).find((row) => row.id === occurrence?.taskId)
+    if (!occurrence || !task) return false
+    if (!canWorkOnStaffTask(task)) {
+      toast('Permission denied', 'You cannot update this task.', 'danger')
+      return false
+    }
+    if (occurrence.status === 'completed') {
+      toast('Task already completed', 'Completion history cannot be changed.', 'warning')
+      return false
+    }
+    if (task.photoRequirement === 'none') {
+      toast('This task does not use a photo', undefined, 'warning')
+      return false
+    }
+    const parsed = parseTaskCompletionPhoto(photoUrl, fileName)
+    if (!parsed.ok) {
+      toast('Use a JPG, PNG, or WebP image up to 5 MB.', undefined, 'warning')
+      return false
+    }
+    setData({
+      staffTaskOccurrences: (state.staffTaskOccurrences ?? []).map((row) =>
+        row.id === occurrenceId
+          ? { ...row, completionPhotoUrl: parsed.url, completionPhotoName: parsed.name }
+          : row,
+      ),
+    })
+    if (lastPersistFailed) {
+      setData({
+        staffTaskOccurrences: (state.staffTaskOccurrences ?? []).map((row) =>
+          row.id === occurrenceId
+            ? { ...row, completionPhotoUrl: occurrence.completionPhotoUrl, completionPhotoName: occurrence.completionPhotoName }
+            : row,
+        ),
+      })
+      toast('Photo could not be saved', 'Storage is full or unavailable. The photo was not kept.', 'danger')
+      return false
+    }
+    toast('Photo uploaded', parsed.name)
+    return true
+  },
+
+  completeStaffTaskOccurrence(occurrenceId: string, input?: { note?: string; photoUrl?: string; photoName?: string }) {
+    syncStaffTaskOccurrencesInternal()
+    const occurrence = (state.staffTaskOccurrences ?? []).find((row) => row.id === occurrenceId)
+    const task = (state.staffTasks ?? []).find((row) => row.id === occurrence?.taskId)
+    if (!occurrence || !task) return false
+    if (!canWorkOnStaffTask(task)) {
+      toast('Permission denied', 'You cannot complete this task.', 'danger')
+      return false
+    }
+    if (occurrence.status === 'completed') {
+      toast('Task already completed', undefined, 'warning')
+      return false
+    }
+    let photoUrl = occurrence.completionPhotoUrl
+    let photoName = occurrence.completionPhotoName
+    if (input?.photoUrl) {
+      const parsed = parseTaskCompletionPhoto(input.photoUrl, input.photoName)
+      if (!parsed.ok) {
+        toast('Use a JPG, PNG, or WebP image up to 5 MB.', undefined, 'warning')
+        return false
+      }
+      photoUrl = parsed.url
+      photoName = parsed.name
+    }
+    if (task.photoRequirement === 'required' && !photoUrl) {
+      toast('Please upload a photo before completing this task.', undefined, 'warning')
+      return false
+    }
+    const actor = currentUser(state)
+    const stamp = nowIso()
+    setData({
+      staffTaskOccurrences: (state.staffTaskOccurrences ?? []).map((row) =>
+        row.id === occurrenceId
+          ? {
+              ...row,
+              status: 'completed',
+              startedAt: row.startedAt || stamp,
+              completedBy: actor.id,
+              completedAt: stamp,
+              completionNote: (input?.note ?? row.completionNote ?? '').trim(),
+              completionPhotoUrl: photoUrl,
+              completionPhotoName: photoName,
+            }
+          : row,
+      ),
+      documentAuditLogs: pushDocAudit(
+        makeDocAudit({
+          action: 'task_completed',
+          documentType: 'staff_task',
+          documentId: task.id,
+          documentNo: task.title,
+          field: 'status',
+          oldValue: occurrence.status,
+          newValue: 'completed',
+        }),
+      ),
+    })
+    if (lastPersistFailed) {
+      setData({
+        staffTaskOccurrences: (state.staffTaskOccurrences ?? []).map((row) => (row.id === occurrenceId ? occurrence : row)),
+      })
+      toast('Could not save completion', 'Storage is full or unavailable.', 'danger')
+      return false
+    }
+    toast('Task completed', task.title)
     return true
   },
 }
