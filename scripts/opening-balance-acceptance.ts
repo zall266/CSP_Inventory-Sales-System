@@ -312,6 +312,12 @@ const fgAsStock = db.createOpeningBalance({
 })
 check('Finished goods cannot be posted as Stock Item', fgAsStock === null)
 
+const matchaNoExpiry = db.createOpeningBalance({
+  type: 'finished_goods',
+  items: [{ productId: 'p-pack-mt', qty: 1, unit: 'packs', warehouseId: 'wh-main' }],
+})
+check('Finished goods expiry is optional even when the product tracks expiry', matchaNoExpiry?.status === 'confirmed')
+
 const stockAsFg = db.createOpeningBalance({
   type: 'finished_goods',
   items: [{ productId: 'p-sugar', qty: 1, unit: 'KG', warehouseId: 'wh-main' }],

@@ -151,9 +151,6 @@ export function buildOpeningBalanceLines(
     const key = `${product.id}:${warehouse.id}`
     if (seen.has(key)) return { ok: false, reason: `Duplicate ${product.name} in the same warehouse.` }
     seen.add(key)
-    if (product.trackExpiry && item.expiry?.trim() === '') {
-      return { ok: false, reason: `Enter an expiry date for ${product.name}.` }
-    }
     let locationKind = item.locationKind
     const locationId = item.locationId?.trim() || undefined
     if (type === 'finished_goods' && locationId) {
