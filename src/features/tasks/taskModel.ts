@@ -1,4 +1,5 @@
 import type {
+  AppNotification,
   AppState,
   StaffTask,
   StaffTaskCategory,
@@ -333,6 +334,41 @@ export function dueYmd(iso: string) {
 
 export function isDueToday(iso: string, now: Date | string = PROTOTYPE_TODAY) {
   return dueYmd(iso) === dueYmd(typeof now === 'string' ? now : now.toISOString())
+}
+
+export function myTaskSummary(
+  state: Pick<AppState, 'staffTasks' | 'staffTaskOccurrences'>,
+  userId: string,
+  now: Date | string = PROTOTYPE_TODAY,
+) {
+  let overdue = 0
+  let dueToday = 0
+  let upcoming = 0
+  for (const occurrence of state.staffTaskOccurrences ?? []) {
+    if (occurrence.status === 'completed') continue
+    const task = taskById(state, occurrence.taskId)
+    if (!task || task.assignedTo !== userId) continue
+    if (occurrenceIsOverdue(occurrence, now)) overdue += 1
+    else if (isDueToday(occurrence.dueAt, now)) dueToday += 1
+    else upcoming += 1
+  }
+  return { overdue, dueToday, upcoming, pending: overdue + dueToday + upcoming }
+}
+
+export function visibleNotifications(notifications: AppNotification[] | undefined, userId: string) {
+  return (notifications ?? []).filter((row) => !row.userId || row.userId === userId)
+}
+
+export function taskAssignedEventKey(taskId: string, assignedTo: string) {
+  return `task_assigned:${taskId}:${assignedTo}`
+}
+
+export function taskDueTodayEventKey(taskId: string, periodKey: string) {
+  return `task_due_today:${taskId}:${periodKey}`
+}
+
+export function taskOverdueEventKey(taskId: string, periodKey: string) {
+  return `task_overdue:${taskId}:${periodKey}`
 }
 
 export function emptyStaffTaskDraft(): {

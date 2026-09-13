@@ -16,6 +16,7 @@ import { Dropdown, MenuItem } from '@/components/ui'
 import { currentUser } from '@/features/manufacturing/sessionPlan'
 import { displayRoleName } from '@/features/settings/permissions'
 import { companyWarehouses } from '@/features/agent/agentModel'
+import { visibleNotifications } from '@/features/tasks/taskModel'
 
 export function Header() {
   const state = useStore()
@@ -54,7 +55,9 @@ export function Header() {
     return { products, sales, purchases, customers, suppliers, production, batches, sessions }
   }, [query, state])
 
-  const unread = state.notifications.filter((n) => !n.read).length
+  const user = currentUser(state)
+  const notifications = visibleNotifications(state.notifications, user.id)
+  const unread = notifications.filter((n) => !n.read).length
 
   return (
     <header className="no-print sticky top-0 z-30 flex h-16 items-center gap-3 border-b border-slate-200/80 bg-white/90 px-4 backdrop-blur lg:px-6">
@@ -239,7 +242,7 @@ export function Header() {
             </button>
           )}
         </div>
-        {state.notifications.slice(0, 6).map((item) => (
+        {notifications.slice(0, 6).map((item) => (
           <button
             key={item.id}
             type="button"

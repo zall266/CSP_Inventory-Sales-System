@@ -15,10 +15,16 @@ import { AGENT_PERMISSION_KEYS, agentBankDetailsComplete, agentLinkedWarehouseNa
 import {
   TASK_PERMISSION_KEYS,
   defaultStaffTaskCategories,
+  isDueToday,
   missingTaskOccurrences,
+  occurrenceIsOverdue,
   parseTaskCompletionPhoto,
   parseTaskTime,
   resolveTaskReference,
+  taskAssignedEventKey,
+  taskById,
+  taskDueTodayEventKey,
+  taskOverdueEventKey,
 } from '@/features/tasks/taskModel'
 import { applyBomCosts, hydrateProducts, normalizeUnit, parseNonNegativeMoney, productHasBom, productIsSellable, productIsUsed, purchaseQtyToBaseQty, resolveProductSku, skuIsUnique, validatePurchaseConversion } from '@/features/products/masterData'
 import { bomLinesForQty, consumptionCost, hasShortage, materialAvailability } from '@/features/manufacturing/helpers'
@@ -90,6 +96,7 @@ import type {
   Settings,
   StaffTask,
   StaffTaskInput,
+  StaffTaskOccurrence,
   StockStatus,
   StorageLocationType,
   ToastTone,
@@ -475,11 +482,28 @@ function toast(title: string, description?: string, tone: ToastTone = 'success')
   }, 3200)
 }
 
-function notify(type: AppState['notifications'][number]['type'], title: string, body: string, href?: string) {
+function notify(
+  type: AppState['notifications'][number]['type'],
+  title: string,
+  body: string,
+  href?: string,
+  options?: { userId?: string; eventKey?: string },
+) {
+  if (options?.eventKey && (state.notifications ?? []).some((row) => row.eventKey === options.eventKey)) return
   state = {
     ...state,
     notifications: [
-      { id: uid('nt'), type, title, body, date: nowIso(), read: false, href },
+      {
+        id: uid('nt'),
+        type,
+        title,
+        body,
+        date: nowIso(),
+        read: false,
+        href,
+        userId: options?.userId,
+        eventKey: options?.eventKey,
+      },
       ...state.notifications,
     ],
   }
@@ -518,8 +542,33 @@ function syncStaffTaskOccurrencesInternal() {
   const existing = state.staffTaskOccurrences ?? []
   const next = missingTaskOccurrences(state.staffTasks ?? [], existing, nowIso())
   if (next === existing) return existing
+  const created = next.filter((row) => !existing.some((item) => item.id === row.id))
   setData({ staffTaskOccurrences: next })
+  for (const occurrence of created) {
+    notifyNewTaskOccurrence(occurrence)
+  }
+  persist(state)
   return next
+}
+
+function notifyNewTaskOccurrence(occurrence: StaffTaskOccurrence) {
+  if (occurrence.status === 'completed') return
+  const task = taskById(state, occurrence.taskId)
+  if (!task) return
+  const href = '/tasks'
+  if (occurrenceIsOverdue(occurrence)) {
+    notify('info', 'Task Overdue', `${task.title} is overdue.`, href, {
+      userId: task.assignedTo,
+      eventKey: taskOverdueEventKey(task.id, occurrence.periodKey),
+    })
+    return
+  }
+  if (isDueToday(occurrence.dueAt)) {
+    notify('info', 'Task Due Today', `${task.title} is due today.`, href, {
+      userId: task.assignedTo,
+      eventKey: taskDueTodayEventKey(task.id, occurrence.periodKey),
+    })
+  }
 }
 
 function scheduleSummary(task: Pick<StaffTask, 'frequency' | 'weekDay' | 'monthDay' | 'annualMonth' | 'annualDay' | 'specificDate' | 'time'>) {
@@ -1192,7 +1241,12 @@ export const db = {
     })
   },
   markAllNotificationsRead() {
-    setData({ notifications: state.notifications.map((item) => ({ ...item, read: true })) })
+    const userId = currentUser(state).id
+    setData({
+      notifications: state.notifications.map((item) =>
+        !item.userId || item.userId === userId ? { ...item, read: true } : item,
+      ),
+    })
   },
   resetDemo() {
     seed = createSeedData()
@@ -4616,7 +4670,10 @@ export const db = {
     })
     syncStaffTaskOccurrencesInternal()
     if (task.assignedTo !== actor.id) {
-      notify('info', 'New task assigned to you.', task.title, '/tasks')
+      notify('info', 'New Task Assigned', `${task.title} has been assigned to you.`, '/tasks', {
+        userId: task.assignedTo,
+        eventKey: taskAssignedEventKey(task.id, task.assignedTo),
+      })
       persist(state)
     }
     toast('Task created', task.title)
@@ -4668,7 +4725,10 @@ export const db = {
     })
     syncStaffTaskOccurrencesInternal()
     if (existing.assignedTo !== next.assignedTo && next.assignedTo !== currentUser(state).id) {
-      notify('info', 'New task assigned to you.', next.title, '/tasks')
+      notify('info', 'New Task Assigned', `${next.title} has been assigned to you.`, '/tasks', {
+        userId: next.assignedTo,
+        eventKey: taskAssignedEventKey(next.id, next.assignedTo),
+      })
       persist(state)
     }
     toast('Task updated', next.title)

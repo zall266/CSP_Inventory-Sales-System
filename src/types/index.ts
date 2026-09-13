@@ -830,6 +830,8 @@ export type AppNotification = {
   date: string
   read: boolean
   href?: string
+  userId?: string
+  eventKey?: string
 }
 
 export type PermissionKey =
