@@ -226,18 +226,24 @@ export function DashboardPage() {
             <div className="text-sm text-slate-600">No pending tasks</div>
           ) : (
             <div className="space-y-1.5 text-sm">
-              <div className="flex items-center justify-between">
-                <span className="text-rose-600">Overdue</span>
-                <span className="tabular font-semibold text-rose-700">{taskSummary.overdue}</span>
-              </div>
-              <div className="flex items-center justify-between">
-                <span className="text-amber-600">Due Today</span>
-                <span className="tabular font-semibold text-amber-700">{taskSummary.dueToday}</span>
-              </div>
-              <div className="flex items-center justify-between">
-                <span className="text-sky-600">Upcoming</span>
-                <span className="tabular font-semibold text-sky-700">{taskSummary.upcoming}</span>
-              </div>
+              {taskSummary.overdue > 0 ? (
+                <div className="flex items-center justify-between">
+                  <span className="text-rose-600">Overdue</span>
+                  <span className="tabular font-semibold text-rose-700">{taskSummary.overdue}</span>
+                </div>
+              ) : null}
+              {taskSummary.dueToday > 0 ? (
+                <div className="flex items-center justify-between">
+                  <span className="text-amber-600">Due Today</span>
+                  <span className="tabular font-semibold text-amber-700">{taskSummary.dueToday}</span>
+                </div>
+              ) : null}
+              {taskSummary.upcoming > 0 ? (
+                <div className="flex items-center justify-between">
+                  <span className="text-sky-600">Upcoming</span>
+                  <span className="tabular font-semibold text-sky-700">{taskSummary.upcoming}</span>
+                </div>
+              ) : null}
             </div>
           )}
           <Button className="mt-4 w-full sm:w-auto" variant="secondary" onClick={() => navigate('/tasks')}>

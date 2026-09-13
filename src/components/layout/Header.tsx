@@ -222,7 +222,7 @@ export function Header() {
 
       <Dropdown
         trigger={
-          <button type="button" className="relative rounded-xl p-2 text-slate-500 hover:bg-slate-100">
+          <button type="button" aria-label="Notifications" className="relative rounded-xl p-2 text-slate-500 hover:bg-slate-100">
             <Bell size={18} />
             {unread > 0 && (
               <span className="absolute right-1.5 top-1.5 h-2 w-2 rounded-full bg-rose-500" />
