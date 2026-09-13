@@ -22,6 +22,9 @@ export type MovementType =
   | 'production_balance_out'
   | 'receiving'
   | 'opening_balance'
+  | 'sales_return_good'
+  | 'sales_return_repack'
+  | 'sales_return_waste'
 export type ProductionStatus = 'draft' | 'planned' | 'in_progress' | 'paused' | 'completed' | 'cancelled'
 export type ProductionSessionStatus = 'planned' | 'accepted' | 'in_progress' | 'completed'
 export type ShortProductionReason =
@@ -498,11 +501,14 @@ export type DocumentAuditAction =
   | 'task_category_deactivated'
   | 'opening_balance_created'
   | 'opening_balance_confirmed'
+  | 'sales_return_created'
+  | 'sales_return_confirmed'
+  | 'sales_return_cancelled'
 
 export type DocumentAuditLog = {
   id: string
   action: DocumentAuditAction
-  documentType: 'quotation' | 'invoice' | 'delivery' | 'agent_sale' | 'agent_withdrawal' | 'staff_task' | 'staff_task_category' | 'opening_balance'
+  documentType: 'quotation' | 'invoice' | 'delivery' | 'agent_sale' | 'agent_withdrawal' | 'staff_task' | 'staff_task_category' | 'opening_balance' | 'sales_return'
   documentId: string
   documentNo: string
   field: string
@@ -597,15 +603,96 @@ export type OpeningBalance = {
   confirmedAt?: string
 }
 
+export type SalesReturnStatus = 'draft' | 'confirmed' | 'cancelled'
+
+export type ReturnSource = {
+  id: string
+  name: string
+  active: boolean
+  createdAt: string
+  updatedAt: string
+}
+
+export type ReturnReason = {
+  id: string
+  name: string
+  active: boolean
+  createdAt: string
+  updatedAt: string
+}
+
+export type SalesReturnLine = {
+  id: string
+  productId: string
+  productNameSnapshot: string
+  skuSnapshot: string
+  returnedQty: number
+  unit: string
+  goodQty: number
+  repackQty: number
+  repackRecoveredGrams?: number
+  repackStorageBoxId?: string
+  wasteQty: number
+  wasteReason?: string
+  notes?: string
+  qty?: number
+  price?: number
+}
+
 export type SalesReturn = {
   id: string
   returnNo: string
+  returnDate: string
   date: string
-  saleId: string
+  sourceId: string
+  sourceNameSnapshot: string
+  originalSaleId?: string
+  originalDocumentNo?: string
+  saleId?: string
+  customerId?: string
+  customerNameSnapshot?: string
+  reasonId: string
+  reasonNameSnapshot: string
   warehouseId: string
-  items: Array<{ productId: string; qty: number; price: number }>
-  reason: string
-  total: number
+  items: SalesReturnLine[]
+  status: SalesReturnStatus
+  notes?: string
+  photoUrl?: string
+  photoName?: string
+  createdBy: string
+  createdByName: string
+  createdAt: string
+  confirmedBy?: string
+  confirmedAt?: string
+  cancelledBy?: string
+  cancelledAt?: string
+  reason?: string
+  total?: number
+}
+
+export type SalesReturnInput = {
+  returnDate?: string
+  sourceId: string
+  originalSaleId?: string
+  originalDocumentNo?: string
+  customerId?: string
+  reasonId: string
+  warehouseId?: string
+  notes?: string
+  photoUrl?: string
+  photoName?: string
+  items: Array<{
+    productId: string
+    returnedQty: number
+    unit?: string
+    goodQty: number
+    repackQty: number
+    repackRecoveredGrams?: number
+    repackStorageBoxId?: string
+    wasteQty: number
+    wasteReason?: string
+    notes?: string
+  }>
 }
 
 export type PurchaseReturn = {
@@ -986,6 +1073,11 @@ export type PermissionKey =
   | 'task.assign'
   | 'task.complete'
   | 'task.category.manage'
+  | 'sales_return.view'
+  | 'sales_return.create'
+  | 'sales_return.manage'
+  | 'return_source.manage'
+  | 'return_reason.manage'
 
 export type RolePermissions = Record<PermissionKey, boolean>
 export type RoleMatrix = Record<string, RolePermissions>
@@ -1082,6 +1174,8 @@ export type AppData = {
   purchases: Purchase[]
   receivings: Receiving[]
   salesReturns: SalesReturn[]
+  returnSources: ReturnSource[]
+  returnReasons: ReturnReason[]
   purchaseReturns: PurchaseReturn[]
   stockMovements: StockMovement[]
   payments: Payment[]

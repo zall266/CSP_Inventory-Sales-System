@@ -18,6 +18,15 @@ import {
   buildOpeningBalanceLines,
 } from '@/features/openingBalance/openingBalanceModel'
 import {
+  SALES_RETURN_PERMISSION_KEYS,
+  defaultReturnReasons,
+  defaultReturnSources,
+  hydrateSalesReturns,
+  parseReturnPhoto,
+  slugifyMasterName,
+  validateSalesReturnInput,
+} from '@/features/returns/salesReturnModel'
+import {
   RECEIVING_PERMISSION_KEYS,
   buildReceivingLines,
   parseReceivingPhoto,
@@ -101,6 +110,8 @@ import type {
   Sale,
   SaleInput,
   SaleStatus,
+  SalesReturn,
+  SalesReturnInput,
   Settings,
   StaffTask,
   StaffTaskInput,
@@ -173,7 +184,7 @@ function hydrateData(data: AppData): AppData {
       const raw = data.settings?.roleMatrix?.[role.id] ?? {}
       const normalized = normalizePermissions(raw)
       const defaults = defaultPermissionsForLegacy(role.legacyRole)
-      for (const key of [...WAREHOUSE_MAP_KEYS, ...AGENT_PERMISSION_KEYS, ...TASK_PERMISSION_KEYS, ...RECEIVING_PERMISSION_KEYS, ...OPENING_BALANCE_PERMISSION_KEYS]) {
+      for (const key of [...WAREHOUSE_MAP_KEYS, ...AGENT_PERMISSION_KEYS, ...TASK_PERMISSION_KEYS, ...RECEIVING_PERMISSION_KEYS, ...OPENING_BALANCE_PERMISSION_KEYS, ...SALES_RETURN_PERMISSION_KEYS]) {
         if (raw[key] === undefined) normalized[key] = defaults[key]
       }
       return [role.id, normalized]
@@ -237,6 +248,9 @@ function hydrateData(data: AppData): AppData {
     staffTaskOccurrences: missingTaskOccurrences(data.staffTasks ?? [], data.staffTaskOccurrences ?? [], PROTOTYPE_TODAY),
     receivings: data.receivings ?? [],
     openingBalances: data.openingBalances ?? [],
+    salesReturns: hydrateSalesReturns(data.salesReturns),
+    returnSources: data.returnSources ?? defaultReturnSources(PROTOTYPE_TODAY.toISOString()),
+    returnReasons: data.returnReasons ?? defaultReturnReasons(PROTOTYPE_TODAY.toISOString()),
     productionSessions: (data.productionSessions ?? []).map((session) => ({
       ...session,
       items: session.items.map((item) => ({
@@ -530,6 +544,7 @@ function maybeStockAlerts(productId: string, warehouseId: string, qty: number) {
 
 let agentSaleInFlight = false
 let openingBalanceInFlight = false
+let salesReturnInFlight = false
 
 function postConfirmedOpeningBalance(doc: OpeningBalance) {
   const actor = currentUser(state)
@@ -666,6 +681,146 @@ function postConfirmedOpeningBalance(doc: OpeningBalance) {
     ),
   })
   toast('Opening balance confirmed', doc.documentNo)
+  return true
+}
+
+function postConfirmedSalesReturn(doc: SalesReturn) {
+  const actor = currentUser(state)
+  const warehouse = state.warehouses.find((row) => row.id === doc.warehouseId)
+  if (!warehouse || warehouse.kind === 'agent') {
+    toast('Sales Return cannot post into an Agent warehouse.', undefined, 'danger')
+    return false
+  }
+  if (doc.originalSaleId) {
+    const sale = state.sales.find((row) => row.id === doc.originalSaleId)
+    if (sale && saleIsAgentSale(state, sale)) {
+      toast('Agent sales cannot be returned in this version.', undefined, 'warning')
+      return false
+    }
+  }
+
+  let inventory = state.inventory
+  let movements = state.stockMovements
+  let balances = state.productionBalances ?? []
+  let sales = state.sales
+  const date = doc.returnDate || doc.date
+
+  for (const line of doc.items) {
+    if (line.goodQty > 0) {
+      const applied = addMovement(movements, inventory, {
+        date,
+        reference: doc.returnNo,
+        productId: line.productId,
+        warehouseId: doc.warehouseId,
+        type: 'sales_return_good',
+        stockIn: line.goodQty,
+        stockOut: 0,
+        notes: `Good ${line.goodQty} ${line.unit}`,
+      })
+      inventory = applied.inventory
+      movements = applied.movements
+    }
+
+    if (line.repackQty > 0) {
+      const grams = line.repackRecoveredGrams ?? 0
+      const box = line.repackStorageBoxId || 'Box 1'
+      const applied = addMovement(movements, inventory, {
+        date,
+        reference: doc.returnNo,
+        productId: line.productId,
+        warehouseId: doc.warehouseId,
+        type: 'sales_return_repack',
+        stockIn: 0,
+        stockOut: 0,
+        notes: `Repack ${line.repackQty} ${line.unit} → ${grams} G · ${box}`,
+        skipInventory: true,
+      })
+      inventory = applied.inventory
+      movements = applied.movements
+      balances = [
+        {
+          id: uid('pb'),
+          productId: line.productId,
+          quantity: grams,
+          unit: 'g',
+          location: warehouse.name,
+          container: box,
+          warehouseId: doc.warehouseId,
+          productionDate: date,
+          productionReference: doc.returnNo,
+          status: 'available' as const,
+        },
+        ...balances,
+      ]
+      const pbMove = addMovement(movements, inventory, {
+        date,
+        reference: doc.returnNo,
+        productId: line.productId,
+        warehouseId: doc.warehouseId,
+        type: 'production_balance_in',
+        stockIn: grams,
+        stockOut: 0,
+        notes: `Sales return recover ${box}`,
+        skipInventory: true,
+      })
+      inventory = pbMove.inventory
+      movements = pbMove.movements
+    }
+
+    if (line.wasteQty > 0) {
+      const applied = addMovement(movements, inventory, {
+        date,
+        reference: doc.returnNo,
+        productId: line.productId,
+        warehouseId: doc.warehouseId,
+        type: 'sales_return_waste',
+        stockIn: 0,
+        stockOut: line.wasteQty,
+        notes: line.wasteReason || `Waste ${line.wasteQty} ${line.unit}`,
+        skipInventory: true,
+      })
+      inventory = applied.inventory
+      movements = applied.movements
+    }
+  }
+
+  if (doc.originalSaleId) {
+    sales = state.sales.map((item) => {
+      if (item.id !== doc.originalSaleId) return item
+      const nextItems = item.items.map((saleLine) => {
+        const ret = doc.items.find((row) => row.productId === saleLine.productId)
+        return ret ? { ...saleLine, returnedQty: saleLine.returnedQty + ret.returnedQty } : saleLine
+      })
+      const fullyReturned = nextItems.every((line) => line.returnedQty >= line.qty)
+      return { ...item, items: nextItems, status: fullyReturned ? 'returned' : item.status }
+    })
+  }
+
+  const confirmed: SalesReturn = {
+    ...doc,
+    status: 'confirmed',
+    confirmedBy: actor.id,
+    confirmedAt: nowIso(),
+  }
+  setData({
+    salesReturns: (state.salesReturns ?? []).map((row) => (row.id === doc.id ? confirmed : row)),
+    inventory,
+    stockMovements: movements,
+    productionBalances: balances,
+    sales,
+    documentAuditLogs: pushDocAudit(
+      makeDocAudit({
+        action: 'sales_return_confirmed',
+        documentType: 'sales_return',
+        documentId: doc.id,
+        documentNo: doc.returnNo,
+        field: 'status',
+        oldValue: 'draft',
+        newValue: 'confirmed',
+      }),
+    ),
+  })
+  toast('Return confirmed', doc.returnNo)
   return true
 }
 
@@ -3350,80 +3505,383 @@ export const db = {
     return true
   },
 
-  createSalesReturn(input: { saleId: string; items: Array<{ productId: string; qty: number }>; reason: string }) {
+  createSalesReturn(input: SalesReturnInput) {
+    if (salesReturnInFlight) {
+      toast('Already posting', 'Wait for the current sales return to finish.', 'warning')
+      return null
+    }
+    salesReturnInFlight = true
+    try {
+      const saved = this.saveSalesReturn(input)
+      if (!saved) return null
+      const ok = postConfirmedSalesReturn(saved)
+      return ok ? (state.salesReturns ?? []).find((row) => row.id === saved.id) ?? saved : null
+    } finally {
+      salesReturnInFlight = false
+    }
+  },
+
+  saveSalesReturn(input: SalesReturnInput) {
+    if (!hasPermission(state, 'sales_return.create')) {
+      toast('Permission denied', 'You cannot create a sales return.', 'danger')
+      return null
+    }
     if (!state.settings.allowReturns) {
       toast('Returns disabled', 'Enable returns in Sales Settings.', 'warning')
       return null
     }
-    const sale = state.sales.find((item) => item.id === input.saleId)
-    if (!sale) return null
-    if (saleIsAgentSale(state, sale)) {
-      toast('Agent sales cannot be returned in this version.', undefined, 'warning')
+    const returnDate = input.returnDate || nowIso()
+    const built = validateSalesReturnInput(state, { ...input, returnDate })
+    if (!built.ok) {
+      toast('Cannot save return', built.reason, 'warning')
       return null
     }
-    const returning = input.items.filter((item) => item.qty > 0)
-    if (!returning.length) {
-      toast('Select quantities to return', undefined, 'warning')
-      return null
-    }
-    for (const row of returning) {
-      const line = sale.items.find((item) => item.productId === row.productId)
-      const available = (line?.qty ?? 0) - (line?.returnedQty ?? 0)
-      if (row.qty > available) {
-        toast('Return qty too high', undefined, 'danger')
+    let photoUrl: string | undefined
+    let photoName: string | undefined
+    if (input.photoUrl) {
+      const parsed = parseReturnPhoto(input.photoUrl, input.photoName)
+      if (!parsed.ok) {
+        toast('Photo could not be saved', 'Use a JPG, PNG, or WebP image up to 5 MB.', 'danger')
         return null
       }
+      photoUrl = parsed.url
+      photoName = parsed.name
     }
-    const returnNo = nextDocNo(state.salesReturns.map((item) => item.returnNo), 'SR-')
-    const date = nowIso()
-    let inventory = state.inventory
-    let movements = state.stockMovements
-    const items = returning.map((row) => {
-      const line = sale.items.find((item) => item.productId === row.productId)!
-      const applied = addMovement(movements, inventory, {
-        date,
-        reference: returnNo,
-        productId: row.productId,
-        warehouseId: sale.warehouseId,
-        type: 'sales_return',
-        stockIn: row.qty,
-        stockOut: 0,
-        notes: input.reason,
-      })
-      inventory = applied.inventory
-      movements = applied.movements
-      return { productId: row.productId, qty: row.qty, price: line.price }
-    })
-    const total = round2(items.reduce((sum, item) => sum + item.qty * item.price, 0))
-    const sales = state.sales.map((item) => {
-      if (item.id !== sale.id) return item
-      const nextItems = item.items.map((line) => {
-        const ret = returning.find((row) => row.productId === line.productId)
-        return ret ? { ...line, returnedQty: line.returnedQty + ret.qty } : line
-      })
-      const fullyReturned = nextItems.every((line) => line.returnedQty >= line.qty)
-      return { ...item, items: nextItems, status: fullyReturned ? 'returned' : item.status }
-    })
+    const actor = currentUser(state)
+    const returnNo = nextDocNo(
+      (state.salesReturns ?? []).map((row) => row.returnNo).filter((no) => no.startsWith('RT-')),
+      'RT-',
+    )
+    const doc: SalesReturn = {
+      id: uid('sret'),
+      returnNo,
+      returnDate,
+      date: returnDate,
+      sourceId: built.source.id,
+      sourceNameSnapshot: built.source.name,
+      originalSaleId: built.saleId,
+      originalDocumentNo: built.documentNo,
+      saleId: built.saleId,
+      customerId: built.customerId,
+      customerNameSnapshot: built.customerName,
+      reasonId: built.reason.id,
+      reasonNameSnapshot: built.reason.name,
+      reason: built.reason.name,
+      warehouseId: built.warehouseId,
+      items: built.lines,
+      status: 'draft',
+      notes: input.notes?.trim() || undefined,
+      photoUrl,
+      photoName,
+      createdBy: actor.id,
+      createdByName: actor.name,
+      createdAt: nowIso(),
+      total: 0,
+    }
     setData({
-      sales,
-      inventory,
-      stockMovements: movements,
-      salesReturns: [
-        {
-          id: uid('sret'),
-          returnNo,
-          date,
-          saleId: sale.id,
-          warehouseId: sale.warehouseId,
-          items,
-          reason: input.reason,
-          total,
-        },
-        ...state.salesReturns,
-      ],
+      salesReturns: [doc, ...(state.salesReturns ?? [])],
+      documentAuditLogs: pushDocAudit(
+        makeDocAudit({
+          action: 'sales_return_created',
+          documentType: 'sales_return',
+          documentId: doc.id,
+          documentNo: doc.returnNo,
+          field: 'status',
+          oldValue: '',
+          newValue: 'draft',
+        }),
+      ),
     })
-    toast('Return processed', returnNo)
-    return returnNo
+    if (lastPersistFailed) {
+      setData({
+        salesReturns: (state.salesReturns ?? []).filter((row) => row.id !== doc.id),
+        documentAuditLogs: (state.documentAuditLogs ?? []).filter((row) => row.documentId !== doc.id),
+      })
+      toast('Photo could not be saved', 'Storage is full or unavailable. The photo was not kept.', 'danger')
+      return null
+    }
+    toast('Return saved', returnNo)
+    return doc
+  },
+
+  updateSalesReturn(id: string, input: SalesReturnInput) {
+    if (!hasPermission(state, 'sales_return.create')) {
+      toast('Permission denied', 'You cannot update a sales return.', 'danger')
+      return null
+    }
+    const current = (state.salesReturns ?? []).find((row) => row.id === id)
+    if (!current) {
+      toast('Return not found', undefined, 'warning')
+      return null
+    }
+    if (current.status === 'confirmed') {
+      toast('Already confirmed', `${current.returnNo} is locked.`, 'info')
+      return null
+    }
+    if (current.status === 'cancelled') {
+      toast('Return cancelled', `${current.returnNo} cannot be edited.`, 'warning')
+      return null
+    }
+    const built = validateSalesReturnInput(state, input, current)
+    if (!built.ok) {
+      toast('Cannot update return', built.reason, 'warning')
+      return null
+    }
+    let photoUrl = current.photoUrl
+    let photoName = current.photoName
+    if (input.photoUrl) {
+      const parsed = parseReturnPhoto(input.photoUrl, input.photoName)
+      if (!parsed.ok) {
+        toast('Photo could not be saved', 'Use a JPG, PNG, or WebP image up to 5 MB.', 'danger')
+        return null
+      }
+      photoUrl = parsed.url
+      photoName = parsed.name
+    }
+    const returnDate = input.returnDate || current.returnDate
+    const doc: SalesReturn = {
+      ...current,
+      returnDate,
+      date: returnDate,
+      sourceId: built.source.id,
+      sourceNameSnapshot: built.source.name,
+      originalSaleId: built.saleId,
+      originalDocumentNo: built.documentNo,
+      saleId: built.saleId,
+      customerId: built.customerId,
+      customerNameSnapshot: built.customerName,
+      reasonId: built.reason.id,
+      reasonNameSnapshot: built.reason.name,
+      reason: built.reason.name,
+      warehouseId: built.warehouseId,
+      items: built.lines,
+      notes: input.notes?.trim() || undefined,
+      photoUrl,
+      photoName,
+      total: 0,
+    }
+    setData({
+      salesReturns: (state.salesReturns ?? []).map((row) => (row.id === id ? doc : row)),
+    })
+    toast('Return updated', doc.returnNo)
+    return doc
+  },
+
+  confirmSalesReturn(id: string) {
+    if (!hasPermission(state, 'sales_return.create')) {
+      toast('Permission denied', 'You cannot confirm a sales return.', 'danger')
+      return false
+    }
+    if (salesReturnInFlight) {
+      toast('Already posting', 'Wait for the current sales return to finish.', 'warning')
+      return false
+    }
+    const doc = (state.salesReturns ?? []).find((row) => row.id === id)
+    if (!doc) {
+      toast('Return not found', undefined, 'warning')
+      return false
+    }
+    if (doc.status === 'confirmed') {
+      toast('Already confirmed', `${doc.returnNo} is locked.`, 'info')
+      return false
+    }
+    if (doc.status === 'cancelled') {
+      toast('Return cancelled', `${doc.returnNo} cannot be confirmed.`, 'warning')
+      return false
+    }
+    const built = validateSalesReturnInput(
+      state,
+      {
+        returnDate: doc.returnDate,
+        sourceId: doc.sourceId,
+        originalSaleId: doc.originalSaleId,
+        originalDocumentNo: doc.originalDocumentNo,
+        customerId: doc.customerId,
+        reasonId: doc.reasonId,
+        warehouseId: doc.warehouseId,
+        notes: doc.notes,
+        items: doc.items.map((line) => ({
+          productId: line.productId,
+          returnedQty: line.returnedQty,
+          unit: line.unit,
+          goodQty: line.goodQty,
+          repackQty: line.repackQty,
+          repackRecoveredGrams: line.repackRecoveredGrams,
+          repackStorageBoxId: line.repackStorageBoxId,
+          wasteQty: line.wasteQty,
+          wasteReason: line.wasteReason,
+          notes: line.notes,
+        })),
+      },
+      doc,
+    )
+    if (!built.ok) {
+      toast('Cannot confirm return', built.reason, 'warning')
+      return false
+    }
+    salesReturnInFlight = true
+    try {
+      return postConfirmedSalesReturn({ ...doc, items: built.lines, warehouseId: built.warehouseId })
+    } finally {
+      salesReturnInFlight = false
+    }
+  },
+
+  cancelSalesReturn(id: string) {
+    if (!hasPermission(state, 'sales_return.manage') && !hasPermission(state, 'sales_return.create')) {
+      toast('Permission denied', 'You cannot cancel a sales return.', 'danger')
+      return false
+    }
+    const doc = (state.salesReturns ?? []).find((row) => row.id === id)
+    if (!doc) {
+      toast('Return not found', undefined, 'warning')
+      return false
+    }
+    if (doc.status === 'confirmed') {
+      toast('Already confirmed', `${doc.returnNo} is locked.`, 'info')
+      return false
+    }
+    if (doc.status === 'cancelled') {
+      toast('Already cancelled', doc.returnNo, 'info')
+      return false
+    }
+    const actor = currentUser(state)
+    setData({
+      salesReturns: (state.salesReturns ?? []).map((row) =>
+        row.id === id
+          ? { ...row, status: 'cancelled' as const, cancelledBy: actor.id, cancelledAt: nowIso() }
+          : row,
+      ),
+      documentAuditLogs: pushDocAudit(
+        makeDocAudit({
+          action: 'sales_return_cancelled',
+          documentType: 'sales_return',
+          documentId: doc.id,
+          documentNo: doc.returnNo,
+          field: 'status',
+          oldValue: doc.status,
+          newValue: 'cancelled',
+        }),
+      ),
+    })
+    toast('Return cancelled', doc.returnNo)
+    return true
+  },
+
+  upsertReturnSource(input: { id?: string; name: string; active?: boolean }) {
+    if (!hasPermission(state, 'return_source.manage')) {
+      toast('Permission denied', 'You cannot manage Return Sources.', 'danger')
+      return null
+    }
+    const name = input.name.trim()
+    if (!name) {
+      toast('Source name is required', undefined, 'warning')
+      return null
+    }
+    const existing = (state.returnSources ?? []).find((row) => row.id === input.id)
+    const clash = (state.returnSources ?? []).find(
+      (row) => row.id !== input.id && row.name.trim().toLowerCase() === name.toLowerCase(),
+    )
+    if (clash) {
+      toast('Source already exists', clash.name, 'warning')
+      return null
+    }
+    const stamp = nowIso()
+    if (existing) {
+      const next = { ...existing, name, active: input.active ?? existing.active, updatedAt: stamp }
+      setData({
+        returnSources: (state.returnSources ?? []).map((row) => (row.id === existing.id ? next : row)),
+      })
+      toast('Return Source updated', next.name)
+      return next
+    }
+    const created = {
+      id: uid(`rs-${slugifyMasterName(name)}`),
+      name,
+      active: input.active ?? true,
+      createdAt: stamp,
+      updatedAt: stamp,
+    }
+    setData({ returnSources: [...(state.returnSources ?? []), created] })
+    toast('Return Source added', created.name)
+    return created
+  },
+
+  setReturnSourceActive(id: string, active: boolean) {
+    if (!hasPermission(state, 'return_source.manage')) {
+      toast('Permission denied', 'You cannot manage Return Sources.', 'danger')
+      return false
+    }
+    const existing = (state.returnSources ?? []).find((row) => row.id === id)
+    if (!existing) {
+      toast('Return Source not found', undefined, 'warning')
+      return false
+    }
+    setData({
+      returnSources: (state.returnSources ?? []).map((row) =>
+        row.id === id ? { ...row, active, updatedAt: nowIso() } : row,
+      ),
+    })
+    toast(active ? 'Return Source activated' : 'Return Source deactivated', existing.name)
+    return true
+  },
+
+  upsertReturnReason(input: { id?: string; name: string; active?: boolean }) {
+    if (!hasPermission(state, 'return_reason.manage')) {
+      toast('Permission denied', 'You cannot manage Return Reasons.', 'danger')
+      return null
+    }
+    const name = input.name.trim()
+    if (!name) {
+      toast('Reason name is required', undefined, 'warning')
+      return null
+    }
+    const existing = (state.returnReasons ?? []).find((row) => row.id === input.id)
+    const clash = (state.returnReasons ?? []).find(
+      (row) => row.id !== input.id && row.name.trim().toLowerCase() === name.toLowerCase(),
+    )
+    if (clash) {
+      toast('Reason already exists', clash.name, 'warning')
+      return null
+    }
+    const stamp = nowIso()
+    if (existing) {
+      const next = { ...existing, name, active: input.active ?? existing.active, updatedAt: stamp }
+      setData({
+        returnReasons: (state.returnReasons ?? []).map((row) => (row.id === existing.id ? next : row)),
+      })
+      toast('Return Reason updated', next.name)
+      return next
+    }
+    const created = {
+      id: uid(`rr-${slugifyMasterName(name)}`),
+      name,
+      active: input.active ?? true,
+      createdAt: stamp,
+      updatedAt: stamp,
+    }
+    setData({ returnReasons: [...(state.returnReasons ?? []), created] })
+    toast('Return Reason added', created.name)
+    return created
+  },
+
+  setReturnReasonActive(id: string, active: boolean) {
+    if (!hasPermission(state, 'return_reason.manage')) {
+      toast('Permission denied', 'You cannot manage Return Reasons.', 'danger')
+      return false
+    }
+    const existing = (state.returnReasons ?? []).find((row) => row.id === id)
+    if (!existing) {
+      toast('Return Reason not found', undefined, 'warning')
+      return false
+    }
+    setData({
+      returnReasons: (state.returnReasons ?? []).map((row) =>
+        row.id === id ? { ...row, active, updatedAt: nowIso() } : row,
+      ),
+    })
+    toast(active ? 'Return Reason activated' : 'Return Reason deactivated', existing.name)
+    return true
   },
 
   createPurchaseReturn(input: { purchaseId: string; items: Array<{ productId: string; qty: number }>; reason: string }) {

@@ -1,8 +1,9 @@
 import { useRef, useState } from 'react'
 import { Button, Card, Field, Input, PageHeader, Select, Textarea, Toggle } from '@/components/ui'
 import { companyWarehouses } from '@/features/agent/agentModel'
+import { hasPermission } from '@/features/settings/permissions'
 import { useApi, useStore } from '@/store/hooks'
-import type { PaymentMethod } from '@/types'
+import type { PaymentMethod, ReturnReason, ReturnSource } from '@/types'
 
 export { UsersSettingsPage } from './UsersRolesPage'
 
@@ -186,6 +187,91 @@ export function SalesSettingsPage() {
           </div>
         </div>
       </Card>
+      {(hasPermission(state, 'return_source.manage') || hasPermission(state, 'return_reason.manage')) && (
+        <div className="mt-5 space-y-5">
+          {hasPermission(state, 'return_source.manage') ? <ReturnMasterCard kind="source" /> : null}
+          {hasPermission(state, 'return_reason.manage') ? <ReturnMasterCard kind="reason" /> : null}
+        </div>
+      )}
     </div>
+  )
+}
+
+function ReturnMasterCard({ kind }: { kind: 'source' | 'reason' }) {
+  const state = useStore()
+  const api = useApi()
+  const rows: Array<ReturnSource | ReturnReason> = kind === 'source' ? state.returnSources ?? [] : state.returnReasons ?? []
+  const [name, setName] = useState('')
+  const [editingId, setEditingId] = useState('')
+  const title = kind === 'source' ? 'Return Sources' : 'Return Reasons'
+  const hint = kind === 'source' ? 'Where the return came from. Inactive sources stay in history.' : 'Why the product was returned. Inactive reasons stay in history.'
+
+  const save = () => {
+    if (kind === 'source') {
+      const saved = api.upsertReturnSource({ id: editingId || undefined, name })
+      if (saved) {
+        setName('')
+        setEditingId('')
+      }
+      return
+    }
+    const saved = api.upsertReturnReason({ id: editingId || undefined, name })
+    if (saved) {
+      setName('')
+      setEditingId('')
+    }
+  }
+
+  return (
+    <Card className="space-y-4 p-6">
+      <div>
+        <div className="text-sm font-semibold">{title}</div>
+        <div className="text-xs text-slate-500">{hint}</div>
+      </div>
+      <div className="flex flex-col gap-2 sm:flex-row">
+        <Input
+          className="flex-1"
+          value={name}
+          onChange={(event) => setName(event.target.value)}
+          placeholder={kind === 'source' ? 'New source name' : 'New reason name'}
+        />
+        <Button className="w-full sm:w-auto" onClick={save}>
+          {editingId ? 'Save' : 'Add'}
+        </Button>
+      </div>
+      <div className="space-y-2">
+        {rows.map((row) => (
+          <div key={row.id} className="flex flex-col gap-2 rounded-xl border border-slate-100 p-3 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <div className="font-medium">{row.name}</div>
+              <div className="text-xs text-slate-400">{row.active ? 'Active' : 'Inactive'}</div>
+            </div>
+            <div className="flex flex-col gap-2 sm:flex-row">
+              <Button
+                size="sm"
+                variant="secondary"
+                className="w-full sm:w-auto"
+                onClick={() => {
+                  setEditingId(row.id)
+                  setName(row.name)
+                }}
+              >
+                Edit
+              </Button>
+              <Button
+                size="sm"
+                variant="secondary"
+                className="w-full sm:w-auto"
+                onClick={() =>
+                  kind === 'source' ? api.setReturnSourceActive(row.id, !row.active) : api.setReturnReasonActive(row.id, !row.active)
+                }
+              >
+                {row.active ? 'Deactivate' : 'Activate'}
+              </Button>
+            </div>
+          </div>
+        ))}
+      </div>
+    </Card>
   )
 }

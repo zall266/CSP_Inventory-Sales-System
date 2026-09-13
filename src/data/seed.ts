@@ -24,6 +24,7 @@ import type {
 } from '@/types'
 import { defaultPermissionsForLegacy } from '@/features/settings/permissions'
 import { defaultStaffTaskCategories } from '@/features/tasks/taskModel'
+import { defaultReturnReasons, defaultReturnSources } from '@/features/returns/salesReturnModel'
 import { createMainWarehouseLayout, seedDisplayStocks, seedWarehouseOccupancy } from '@/features/warehouse/warehouseModel'
 import { PROTOTYPE_TODAY, round2, uid } from '@/utils/format'
 
@@ -1275,6 +1276,8 @@ export function createSeedData(): AppData {
     documentAuditLogs: [],
     purchases,
     salesReturns: [],
+    returnSources: defaultReturnSources(iso(8, 1, 9)),
+    returnReasons: defaultReturnReasons(iso(8, 1, 9)),
     purchaseReturns: [],
     stockMovements: movements.sort((a, b) => a.date.localeCompare(b.date)),
     payments,
