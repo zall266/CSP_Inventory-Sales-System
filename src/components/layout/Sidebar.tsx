@@ -4,6 +4,7 @@ import {
   BadgePercent,
   BarChart3,
   Boxes,
+  CheckSquare,
   ClipboardList,
   CreditCard,
   Factory,
@@ -92,6 +93,15 @@ export const navGroups: NavGroup[] = [
     ],
   },
   {
+    id: 'tasks',
+    label: 'TASKS',
+    items: [
+      { to: '/tasks', label: 'My Tasks', icon: CheckSquare },
+      { to: '/tasks/manage', label: 'Manage Tasks', icon: ClipboardList },
+      { to: '/tasks/categories', label: 'Categories', icon: Tags },
+    ],
+  },
+  {
     id: 'products',
     label: 'PRODUCTS',
     items: [
@@ -140,7 +150,20 @@ function pathActive(pathname: string, to: string) {
   if (to === '/inventory') return pathname === '/inventory'
   if (to === '/products') return pathname === '/products'
   if (to === '/manufacturing/today') return pathname === '/manufacturing/today' || pathname.startsWith('/manufacturing/today/')
+  if (to === '/tasks') {
+    return pathname === '/tasks' || (pathname.startsWith('/tasks/') && !pathname.startsWith('/tasks/manage') && !pathname.startsWith('/tasks/categories'))
+  }
   return pathname === to || pathname.startsWith(`${to}/`)
+}
+
+function navItemVisible(state: ReturnType<typeof useStore>, item: NavItem) {
+  if (item.to === '/settings/users') return canAccessUsersAndRoles(state, actorUser(state))
+  if (item.to === '/inventory/warehouse-map') return hasPermission(state, 'warehouse_map.view')
+  if (item.to === '/sales/agents') return hasPermission(state, 'agent.view') || hasPermission(state, 'agent.manage') || Boolean(currentLinkedAgent(state))
+  if (item.to === '/tasks') return hasPermission(state, 'task.view')
+  if (item.to === '/tasks/manage') return hasPermission(state, 'task.create') || hasPermission(state, 'task.edit') || hasPermission(state, 'task.assign')
+  if (item.to === '/tasks/categories') return hasPermission(state, 'task.category.manage')
+  return true
 }
 
 export function Sidebar() {
@@ -149,9 +172,6 @@ export function Sidebar() {
   const state = useStore()
   const ui = state.ui
   const collapsed = ui.sidebarCollapsed
-  const canUsers = canAccessUsersAndRoles(state, actorUser(state))
-  const canWarehouseMap = hasPermission(state, 'warehouse_map.view')
-  const canAgents = hasPermission(state, 'agent.view') || hasPermission(state, 'agent.manage') || Boolean(currentLinkedAgent(state))
 
   const initialOpen = useMemo(() => {
     const open: Record<string, boolean> = {}
@@ -183,6 +203,8 @@ export function Sidebar() {
       </div>
       <nav className="flex-1 overflow-y-auto px-3 pb-6">
         {navGroups.map((group) => {
+          const items = group.items.filter((item) => navItemVisible(state, item))
+          if (!items.length) return null
           const isOpen = collapsed ? true : openGroups[group.id] !== false
           return (
             <div key={group.id} className="mb-3">
@@ -197,9 +219,7 @@ export function Sidebar() {
                 </button>
               )}
               {isOpen &&
-                group.items
-                  .filter((item) => (item.to !== '/settings/users' || canUsers) && (item.to !== '/inventory/warehouse-map' || canWarehouseMap) && (item.to !== '/sales/agents' || canAgents))
-                  .map((item) => {
+                items.map((item) => {
                   const Icon = item.icon
                   const active = pathActive(location.pathname, item.to)
                   return (
@@ -232,9 +252,6 @@ export function MobileSidebar() {
   const state = useStore()
   const open = state.ui.mobileNavOpen
   const location = useLocation()
-  const canUsers = canAccessUsersAndRoles(state, actorUser(state))
-  const canWarehouseMap = hasPermission(state, 'warehouse_map.view')
-  const canAgents = hasPermission(state, 'agent.view') || hasPermission(state, 'agent.manage') || Boolean(currentLinkedAgent(state))
   if (!open) return null
   return (
     <div className="fixed inset-0 z-50 lg:hidden">
@@ -249,12 +266,13 @@ export function MobileSidebar() {
             <div className="text-[11px] text-slate-400">{brand.subtitle}</div>
           </div>
         </div>
-        {navGroups.map((group) => (
+        {navGroups.map((group) => {
+          const items = group.items.filter((item) => navItemVisible(state, item))
+          if (!items.length) return null
+          return (
           <div key={group.id} className="mb-3">
             <div className="px-2 py-1 text-[10px] font-semibold tracking-[0.14em] text-slate-400">{group.label}</div>
-            {group.items
-              .filter((item) => (item.to !== '/settings/users' || canUsers) && (item.to !== '/inventory/warehouse-map' || canWarehouseMap) && (item.to !== '/sales/agents' || canAgents))
-              .map((item) => {
+            {items.map((item) => {
               const Icon = item.icon
               const active = pathActive(location.pathname, item.to)
               return (
@@ -273,7 +291,8 @@ export function MobileSidebar() {
               )
             })}
           </div>
-        ))}
+          )
+        })}
       </div>
     </div>
   )
