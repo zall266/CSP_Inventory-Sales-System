@@ -374,8 +374,8 @@ function SaleDrawer({ id, onClose }: { id: string; onClose: () => void }) {
           {hasPermission(state, 'sales.invoice.print') || hasPermission(state, 'sales.invoice.view') || hasPermission(state, 'sales.view') ? (
             <Button className="w-full" variant="secondary" onClick={() => { onClose(); navigate(`/print/invoice/${sale.id}`) }}>Preview / Print</Button>
           ) : null}
-          {!agentSale && (
-            <Button className="w-full" variant="secondary" onClick={() => { onClose(); navigate(`/sales-returns?invoice=${sale.invoiceNo}`) }}>Return</Button>
+          {!agentSale && hasPermission(state, 'sales_return.create') && (
+            <Button className="w-full" variant="secondary" onClick={() => { onClose(); navigate(`/sales/returns/new?invoice=${sale.invoiceNo}`) }}>Return</Button>
           )}
           {!agentSale && (
             <Button className="w-full" variant="danger" disabled={sale.status === 'voided'} onClick={() => { api.voidSale(sale.id); onClose() }}>Void</Button>
@@ -532,7 +532,7 @@ function CustomerDrawer({ id, onClose }: { id: string; onClose: () => void }) {
   if (!customer) return null
   const sales = state.sales.filter((s) => s.customerId === id)
   const payments = state.payments.filter((p) => p.partyType === 'customer' && p.partyId === id)
-  const returns = state.salesReturns.filter((r) => sales.some((s) => s.id === r.saleId))
+  const returns = state.salesReturns.filter((r) => sales.some((s) => s.id === (r.originalSaleId ?? r.saleId)))
   return (
     <Drawer open onClose={onClose} width="max-w-2xl" title={customer.name} subtitle={customer.phone}>
       <div className="space-y-5 p-6">
@@ -578,7 +578,7 @@ function CustomerDrawer({ id, onClose }: { id: string; onClose: () => void }) {
               {returns.map((r) => (
                 <div key={r.id} className="flex justify-between rounded-xl bg-slate-50 px-3 py-2 text-sm">
                   <span>{r.returnNo}</span>
-                  <span>{formatMoney(r.total)}</span>
+                  <span>{formatMoney(r.total ?? 0)}</span>
                 </div>
               ))}
             </div>

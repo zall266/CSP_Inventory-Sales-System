@@ -9,7 +9,8 @@ import { WarehouseMapPage } from '@/features/warehouse/WarehouseMapPage'
 import { StockAdjustmentPage, StockCountPage, StockMovementsPage, StockTransferPage } from '@/features/inventory/StockPages'
 import { NewPurchasePage, PurchasesPage } from '@/features/purchases/PurchasesPage'
 import { CustomersPage, SuppliersPage } from '@/features/parties/PartiesPages'
-import { PurchaseReturnsPage, SalesReturnsPage } from '@/features/returns/ReturnsPages'
+import { PurchaseReturnsPage } from '@/features/returns/ReturnsPages'
+import { LegacySalesReturnsRedirect, SalesReturnDetailPage, SalesReturnEditorPage, SalesReturnsListPage } from '@/features/returns/SalesReturnPages'
 import { ExpensesPage, PayablesPage, PaymentsPage, ReceivablesPage } from '@/features/finance/FinancePages'
 import { InventoryReportPage, ProfitReportPage, PurchaseReportPage, SalesReportPage } from '@/features/reports/ReportsPages'
 import { BusinessSettingsPage, InventorySettingsPage, SalesSettingsPage, UsersSettingsPage } from '@/features/settings/SettingsPages'
@@ -54,7 +55,10 @@ export default function App() {
           <Route path="/pos" element={<PosPage />} />
           <Route path="/sales/agents" element={<AgentsPage />} />
           <Route path="/sales/agents/:id" element={<AgentDetailPage />} />
-          <Route path="/sales-returns" element={<SalesReturnsPage />} />
+          <Route path="/sales/returns" element={<SalesReturnsListPage />} />
+          <Route path="/sales/returns/new" element={<SalesReturnEditorPage />} />
+          <Route path="/sales/returns/:id" element={<SalesReturnDetailPage />} />
+          <Route path="/sales-returns" element={<LegacySalesReturnsRedirect />} />
           <Route path="/customers" element={<CustomersPage />} />
           <Route path="/purchases" element={<PurchasesPage />} />
           <Route path="/purchases/new" element={<NewPurchasePage />} />

@@ -196,6 +196,7 @@ export function StatusBadge({ status }: { status: string }) {
     pending: { label: 'Pending', tone: 'amber' },
     requested: { label: 'Requested', tone: 'amber' },
     draft: { label: 'Draft', tone: 'slate' },
+    confirmed: { label: 'Confirmed', tone: 'emerald' },
     completed: { label: 'Completed', tone: 'emerald' },
     planned: { label: 'Planned', tone: 'indigo' },
     accepted: { label: 'Accepted', tone: 'sky' },

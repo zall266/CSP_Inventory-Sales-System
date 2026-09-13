@@ -84,6 +84,11 @@ export const PERMISSION_KEYS: PermissionKey[] = [
   'task.assign',
   'task.complete',
   'task.category.manage',
+  'sales_return.view',
+  'sales_return.create',
+  'sales_return.manage',
+  'return_source.manage',
+  'return_reason.manage',
 ]
 
 export const PERMISSION_GROUPS: Array<{ id: string; label: string; keys: PermissionKey[] }> = [
@@ -114,6 +119,11 @@ export const PERMISSION_GROUPS: Array<{ id: string; label: string; keys: Permiss
       'sales.delivery.issue',
       'sales.delivery.cancel',
       'sales.delivery.print',
+      'sales_return.view',
+      'sales_return.create',
+      'sales_return.manage',
+      'return_source.manage',
+      'return_reason.manage',
     ],
   },
   {
@@ -267,6 +277,11 @@ export const PERMISSION_LABELS: Record<PermissionKey, string> = {
   'task.assign': 'Assign Task',
   'task.complete': 'Complete Task',
   'task.category.manage': 'Manage Task Categories',
+  'sales_return.view': 'View Sales Returns',
+  'sales_return.create': 'Create Sales Return',
+  'sales_return.manage': 'Manage Sales Returns',
+  'return_source.manage': 'Manage Return Sources',
+  'return_reason.manage': 'Manage Return Reasons',
 }
 
 export function emptyPermissions(): RolePermissions {

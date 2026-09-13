@@ -56,8 +56,8 @@ export const navGroups: NavGroup[] = [
       { to: '/sales/quotations', label: 'Quotations', icon: FileText },
       { to: '/sales/delivery-orders', label: 'Delivery Orders', icon: Truck },
       { to: '/pos', label: 'POS', icon: ShoppingCart },
-      { to: '/sales/agents', label: 'Agent', icon: Contact },
-      { to: '/sales-returns', label: 'Sales Returns', icon: PackageMinus },
+      { to: '/sales/returns', label: 'Returns', icon: PackageMinus },
+      { to: '/sales/agents', label: 'Agents', icon: Contact },
       { to: '/customers', label: 'Customers', icon: Users },
     ],
   },
@@ -169,6 +169,7 @@ function navItemVisible(state: ReturnType<typeof useStore>, item: NavItem) {
   if (item.to === '/tasks/manage') return hasPermission(state, 'task.create') || hasPermission(state, 'task.edit') || hasPermission(state, 'task.assign')
   if (item.to === '/tasks/categories') return hasPermission(state, 'task.category.manage')
   if (item.to === '/receiving') return hasPermission(state, 'receiving.view')
+  if (item.to === '/sales/returns') return hasPermission(state, 'sales_return.view')
   return true
 }
 
