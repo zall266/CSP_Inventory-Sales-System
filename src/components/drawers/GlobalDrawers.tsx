@@ -10,6 +10,7 @@ import { ProductForm } from '@/features/products/ProductForm'
 import { formatUnit, productHasBom } from '@/features/products/masterData'
 import { isCompanyWarehouseId, saleIsAgentSale } from '@/features/agent/agentModel'
 import { hasPermission } from '@/features/settings/permissions'
+import { receivingSourceLabel } from '@/features/receiving/receivingModel'
 
 export function GlobalDrawers() {
   const drawer = useStore().ui.drawer
@@ -19,6 +20,7 @@ export function GlobalDrawers() {
   if (drawer.type === 'product') return <ProductDrawer id={drawer.id} onClose={close} />
   if (drawer.type === 'sale') return <SaleDrawer id={drawer.id} onClose={close} />
   if (drawer.type === 'purchase') return <PurchaseDrawer id={drawer.id} onClose={close} />
+  if (drawer.type === 'receiving') return <ReceivingDrawer id={drawer.id} onClose={close} />
   if (drawer.type === 'customer') return <CustomerDrawer id={drawer.id} onClose={close} />
   if (drawer.type === 'supplier') return <SupplierDrawer id={drawer.id} onClose={close} />
   if (drawer.type === 'movement') return <MovementDrawer id={drawer.id} onClose={close} />
@@ -413,6 +415,7 @@ function PurchaseDrawer({ id, onClose }: { id: string; onClose: () => void }) {
           <StatusBadge status={purchase.status} />
           <Badge>{warehouseName(purchase.warehouseId)}</Badge>
           <Badge tone="slate">{formatDate(purchase.date)}</Badge>
+          {purchase.receivingId ? <Badge tone="emerald">Linked receiving</Badge> : null}
         </div>
         <div className="sf-table-wrap rounded-xl border border-slate-100">
           <table>
@@ -447,9 +450,75 @@ function PurchaseDrawer({ id, onClose }: { id: string; onClose: () => void }) {
         </div>
         <div className="flex flex-wrap gap-2">
           {purchase.status === 'draft' && <Button onClick={() => api.receivePurchase(purchase.id)}>Receive Purchase</Button>}
+          {purchase.receivingId ? (
+            <Button
+              variant="secondary"
+              onClick={() => {
+                onClose()
+                navigate(`/receiving/${purchase.receivingId}`)
+              }}
+            >
+              Open receiving
+            </Button>
+          ) : null}
           <Button variant="secondary" onClick={() => { onClose(); navigate(`/purchase-returns?purchase=${purchase.purchaseNo}`) }}>Return</Button>
           {purchase.balance > 0 && <Button variant="secondary" onClick={() => api.openModal('payment')}>Record Payment</Button>}
         </div>
+      </div>
+    </Drawer>
+  )
+}
+
+function ReceivingDrawer({ id, onClose }: { id: string; onClose: () => void }) {
+  const state = useStore()
+  const navigate = useNavigate()
+  const { warehouseName, supplierName, productName } = useLookups()
+  const receiving = (state.receivings ?? []).find((item) => item.id === id)
+  if (!receiving) return null
+  return (
+    <Drawer open onClose={onClose} width="max-w-3xl" title={receiving.receivingNo} subtitle={receivingSourceLabel(receiving.source)}>
+      <div className="space-y-5 p-6">
+        <div className="flex flex-wrap gap-2">
+          <StatusBadge status={receiving.status} />
+          <Badge>{warehouseName(receiving.warehouseId)}</Badge>
+          {receiving.purchaseNo ? <Badge tone="emerald">{receiving.purchaseNo}</Badge> : <Badge tone="amber">Purchase not linked</Badge>}
+        </div>
+        <div className="sf-table-wrap rounded-xl border border-slate-100">
+          <table>
+            <thead>
+              <tr>
+                <th>Raw material</th>
+                <th>Qty</th>
+                <th>Unit</th>
+                <th>Batch / lot</th>
+                <th>Expiry</th>
+              </tr>
+            </thead>
+            <tbody>
+              {receiving.items.map((line, index) => (
+                <tr key={`${line.productId}-${index}`} className="cursor-default">
+                  <td>{productName(line.productId)}</td>
+                  <td className="tabular">{formatQty(line.qty)}</td>
+                  <td>{line.unit}</td>
+                  <td>{line.batchNo || '—'}</td>
+                  <td>{line.expiry || '—'}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        <div className="text-sm text-slate-500">
+          Received by {receiving.receivedByName}
+          {receiving.supplierId ? ` · ${supplierName(receiving.supplierId)}` : receiving.supplierNote ? ` · ${receiving.supplierNote}` : ''}
+        </div>
+        <Button
+          onClick={() => {
+            onClose()
+            navigate(`/receiving/${receiving.id}`)
+          }}
+        >
+          Open receiving
+        </Button>
       </div>
     </Drawer>
   )

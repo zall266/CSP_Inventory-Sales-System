@@ -14,6 +14,7 @@ import {
   LayoutDashboard,
   MapPin,
   Package,
+  PackageCheck,
   PackageMinus,
   PackagePlus,
   Receipt,
@@ -64,6 +65,7 @@ export const navGroups: NavGroup[] = [
     label: 'PURCHASES',
     items: [
       { to: '/purchases', label: 'Purchases', icon: ShoppingBag },
+      { to: '/receiving', label: 'Receiving', icon: PackageCheck },
       { to: '/purchase-returns', label: 'Purchase Returns', icon: PackagePlus },
       { to: '/suppliers', label: 'Suppliers', icon: Truck },
     ],
@@ -163,6 +165,7 @@ function navItemVisible(state: ReturnType<typeof useStore>, item: NavItem) {
   if (item.to === '/tasks') return hasPermission(state, 'task.view')
   if (item.to === '/tasks/manage') return hasPermission(state, 'task.create') || hasPermission(state, 'task.edit') || hasPermission(state, 'task.assign')
   if (item.to === '/tasks/categories') return hasPermission(state, 'task.category.manage')
+  if (item.to === '/receiving') return hasPermission(state, 'receiving.view')
   return true
 }
 

@@ -45,6 +45,7 @@ export function movementLabel(type: string) {
     production_wastage: 'Waste',
     production_balance_in: 'Production Balance',
     production_balance_out: 'Production Balance Used',
+    receiving: 'Receiving',
   }
   return map[type] ?? type
 }

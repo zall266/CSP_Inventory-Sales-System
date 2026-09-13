@@ -28,6 +28,9 @@ export const PERMISSION_KEYS: PermissionKey[] = [
   'purchases.create',
   'purchases.edit',
   'purchases.delete',
+  'receiving.view',
+  'receiving.create',
+  'receiving.link_purchase',
   'inventory.view',
   'inventory.adjust',
   'inventory.transfer',
@@ -111,7 +114,16 @@ export const PERMISSION_GROUPS: Array<{ id: string; label: string; keys: Permiss
       'sales.delivery.print',
     ],
   },
-  { id: 'purchases', label: 'Purchases', keys: ['purchases.view', 'purchases.create', 'purchases.edit', 'purchases.delete'] },
+  {
+    id: 'purchases',
+    label: 'Purchases',
+    keys: ['purchases.view', 'purchases.create', 'purchases.edit', 'purchases.delete'],
+  },
+  {
+    id: 'receiving',
+    label: 'Receiving',
+    keys: ['receiving.view', 'receiving.create', 'receiving.link_purchase'],
+  },
   { id: 'inventory', label: 'Inventory', keys: ['inventory.view', 'inventory.adjust', 'inventory.transfer', 'inventory.count'] },
   {
     id: 'warehouse_map',
@@ -193,6 +205,9 @@ export const PERMISSION_LABELS: Record<PermissionKey, string> = {
   'purchases.create': 'Create Purchase',
   'purchases.edit': 'Edit Purchase',
   'purchases.delete': 'Delete Purchase',
+  'receiving.view': 'View Receiving',
+  'receiving.create': 'Receive Raw Materials',
+  'receiving.link_purchase': 'Link Receiving to Purchase',
   'inventory.view': 'View Inventory',
   'inventory.adjust': 'Adjust Stock',
   'inventory.transfer': 'Stock Transfer',
@@ -282,6 +297,8 @@ const DOCUMENT_KEYS: PermissionKey[] = [
   'sales.delivery.print',
 ]
 const PURCHASES_ALL: PermissionKey[] = ['purchases.view', 'purchases.create', 'purchases.edit', 'purchases.delete']
+const RECEIVING_STAFF: PermissionKey[] = ['receiving.view', 'receiving.create']
+const RECEIVING_ALL: PermissionKey[] = ['receiving.view', 'receiving.create', 'receiving.link_purchase']
 const INVENTORY_ALL: PermissionKey[] = ['inventory.view', 'inventory.adjust', 'inventory.transfer', 'inventory.count']
 const AGENT_STOCK_OPS: PermissionKey[] = ['agent.view', 'agent.stock.view', 'agent.stock.transfer']
 const WAREHOUSE_MAP_STAFF: PermissionKey[] = ['warehouse_map.view', 'warehouse_map.putaway', 'warehouse_map.move', 'warehouse_map.balance.use']
@@ -314,6 +331,7 @@ export function defaultPermissionsForLegacy(role: UserRole): RolePermissions {
       'sales.void',
       ...DOCUMENT_KEYS,
       ...PURCHASES_ALL,
+      ...RECEIVING_ALL,
       ...INVENTORY_ALL,
       ...AGENT_STOCK_OPS,
       ...WAREHOUSE_MAP_ALL,
@@ -329,6 +347,7 @@ export function defaultPermissionsForLegacy(role: UserRole): RolePermissions {
       'dashboard.view',
       ...SALES_CORE,
       ...DOCUMENT_KEYS,
+      ...RECEIVING_STAFF,
       'inventory.view',
       ...WAREHOUSE_MAP_STAFF,
       ...MFG_RUN,
@@ -349,6 +368,7 @@ export function defaultPermissionsForLegacy(role: UserRole): RolePermissions {
   return withKeys([
     'dashboard.view',
     ...PURCHASES_ALL,
+    ...RECEIVING_STAFF,
     ...INVENTORY_ALL,
     ...AGENT_STOCK_OPS,
     ...WAREHOUSE_MAP_ALL,

@@ -13,6 +13,11 @@ import {
 } from '@/features/warehouse/warehouseModel'
 import { AGENT_PERMISSION_KEYS, agentBankDetailsComplete, agentLinkedWarehouseName, calcAgentSaleDocument, canUserRequestWithdrawalForAgent, companyWarehouses, configuredAgentPrice, currentLinkedAgent, hasSaleEarningLedger, hasWithdrawalCancelledLedger, hasWithdrawalPaidLedger, hasWithdrawalPendingLedger, isAgentWarehouseId, isCompanyWarehouseId, linkedAgentForUser, nextAgentWarehouseId, normalizeAgentSaleItems, parseAgentPriceWrite, parseWithdrawalAmount, parseWithdrawalPaymentDate, parseWithdrawalPaymentReference, parseWithdrawalReceipt, SALE_EARNING_KIND, saleIsAgentSale, snapshotAgentBankDetails, summarizeAgentEarnings, WITHDRAWAL_CANCELLED_KIND, WITHDRAWAL_PAID_KIND, WITHDRAWAL_PENDING_KIND } from '@/features/agent/agentModel'
 import {
+  RECEIVING_PERMISSION_KEYS,
+  buildReceivingLines,
+  parseReceivingPhoto,
+} from '@/features/receiving/receivingModel'
+import {
   TASK_PERMISSION_KEYS,
   defaultStaffTaskCategories,
   missingTaskOccurrences,
@@ -77,6 +82,8 @@ import type {
   ProductionWastage,
   PurchaseInput,
   PurchaseStatus,
+  Receiving,
+  ReceivingInput,
   QuickModal,
   Quotation,
   QuotationInput,
@@ -159,7 +166,7 @@ function hydrateData(data: AppData): AppData {
       const raw = data.settings?.roleMatrix?.[role.id] ?? {}
       const normalized = normalizePermissions(raw)
       const defaults = defaultPermissionsForLegacy(role.legacyRole)
-      for (const key of [...WAREHOUSE_MAP_KEYS, ...AGENT_PERMISSION_KEYS, ...TASK_PERMISSION_KEYS]) {
+      for (const key of [...WAREHOUSE_MAP_KEYS, ...AGENT_PERMISSION_KEYS, ...TASK_PERMISSION_KEYS, ...RECEIVING_PERMISSION_KEYS]) {
         if (raw[key] === undefined) normalized[key] = defaults[key]
       }
       return [role.id, normalized]
@@ -221,6 +228,7 @@ function hydrateData(data: AppData): AppData {
     staffTaskCategories: data.staffTaskCategories ?? defaultStaffTaskCategories(PROTOTYPE_TODAY.toISOString()),
     staffTasks: data.staffTasks ?? [],
     staffTaskOccurrences: missingTaskOccurrences(data.staffTasks ?? [], data.staffTaskOccurrences ?? [], PROTOTYPE_TODAY),
+    receivings: data.receivings ?? [],
     productionSessions: (data.productionSessions ?? []).map((session) => ({
       ...session,
       items: session.items.map((item) => ({
@@ -2581,6 +2589,17 @@ export const db = {
       toast('Add products', 'A purchase needs at least one line.', 'warning')
       return null
     }
+    const linkedReceiving = input.receivingId
+      ? (state.receivings ?? []).find((row) => row.id === input.receivingId)
+      : undefined
+    if (input.receivingId && !linkedReceiving) {
+      toast('Receiving not found', undefined, 'warning')
+      return null
+    }
+    if (linkedReceiving?.purchaseId) {
+      toast('Receiving already linked', linkedReceiving.receivingNo, 'warning')
+      return null
+    }
     const subtotal = round2(items.reduce((sum, item) => sum + item.total, 0))
     const discount = input.discount ?? 0
     const tax = input.tax ?? 0
@@ -2607,11 +2626,13 @@ export const db = {
       balance: round2(total - paidAmount),
       status: status as PurchaseStatus,
       notes: input.notes,
+      receivingId: linkedReceiving?.id,
     }
 
     let inventory = state.inventory
     let movements = state.stockMovements
-    if (input.receive) {
+    const skipStock = Boolean(linkedReceiving)
+    if (input.receive && !skipStock) {
       for (const item of items) {
         const product = productById(item.productId)
         const stockIn = purchaseQtyToBaseQty(item.qty, product ?? { unit: 'PCS', purchaseUnit: 'PCS', purchaseConversionQty: 1 })
@@ -2645,8 +2666,17 @@ export const db = {
       })
     }
 
-    setData({ purchases: [purchase, ...state.purchases], inventory, stockMovements: movements, payments })
-    toast(input.receive ? 'Purchase received' : 'Draft saved', purchaseNo)
+    const receivings = linkedReceiving
+      ? (state.receivings ?? []).map((row) =>
+          row.id === linkedReceiving.id ? { ...row, purchaseId: purchase.id, purchaseNo } : row,
+        )
+      : state.receivings ?? []
+
+    setData({ purchases: [purchase, ...state.purchases], inventory, stockMovements: movements, payments, receivings })
+    toast(
+      skipStock ? 'Purchase saved — stock already received' : input.receive ? 'Purchase received' : 'Draft saved',
+      purchaseNo,
+    )
     return purchase
   },
 
@@ -2658,20 +2688,23 @@ export const db = {
     }
     let inventory = state.inventory
     let movements = state.stockMovements
-    for (const item of purchase.items) {
-      const product = productById(item.productId)
-      const stockIn = purchaseQtyToBaseQty(item.qty, product ?? { unit: 'PCS', purchaseUnit: 'PCS', purchaseConversionQty: 1 })
-      const applied = addMovement(movements, inventory, {
-        date: nowIso(),
-        reference: purchase.purchaseNo,
-        productId: item.productId,
-        warehouseId: purchase.warehouseId,
-        type: 'purchase',
-        stockIn,
-        stockOut: 0,
-      })
-      inventory = applied.inventory
-      movements = applied.movements
+    const skipStock = Boolean(purchase.receivingId)
+    if (!skipStock) {
+      for (const item of purchase.items) {
+        const product = productById(item.productId)
+        const stockIn = purchaseQtyToBaseQty(item.qty, product ?? { unit: 'PCS', purchaseUnit: 'PCS', purchaseConversionQty: 1 })
+        const applied = addMovement(movements, inventory, {
+          date: nowIso(),
+          reference: purchase.purchaseNo,
+          productId: item.productId,
+          warehouseId: purchase.warehouseId,
+          type: 'purchase',
+          stockIn,
+          stockOut: 0,
+        })
+        inventory = applied.inventory
+        movements = applied.movements
+      }
     }
     setData({
       purchases: state.purchases.map((item) =>
@@ -2680,7 +2713,129 @@ export const db = {
       inventory,
       stockMovements: movements,
     })
-    toast('Purchase received', purchase.purchaseNo)
+    toast(skipStock ? 'Purchase marked received — stock already in' : 'Purchase received', purchase.purchaseNo)
+  },
+
+  createReceiving(input: ReceivingInput) {
+    if (!hasPermission(state, 'receiving.create')) {
+      toast('Permission denied', 'You cannot receive raw materials.', 'danger')
+      return null
+    }
+    if (!isCompanyWarehouseId(state.warehouses, input.warehouseId)) {
+      toast('Choose a company warehouse', undefined, 'warning')
+      return null
+    }
+    const built = buildReceivingLines(state, input.items)
+    if (!built.ok) {
+      toast('Cannot complete receiving', built.reason, 'warning')
+      return null
+    }
+    let photoUrl: string | undefined
+    let photoName: string | undefined
+    if (input.photoUrl) {
+      const parsed = parseReceivingPhoto(input.photoUrl, input.photoName)
+      if (!parsed.ok) {
+        toast('Use a JPG, PNG, or WebP image up to 5 MB.', undefined, 'warning')
+        return null
+      }
+      photoUrl = parsed.url
+      photoName = parsed.name
+    }
+    const actor = currentUser(state)
+    const date = input.date ?? nowIso()
+    const receivingNo = nextDocNo((state.receivings ?? []).map((row) => row.receivingNo), 'RCV-')
+    const receiving: Receiving = {
+      id: uid('rcv'),
+      receivingNo,
+      date,
+      warehouseId: input.warehouseId,
+      source: input.source ?? 'other',
+      supplierId: input.supplierId || undefined,
+      supplierNote: input.supplierNote?.trim() || undefined,
+      items: built.lines,
+      photoUrl,
+      photoName,
+      notes: input.notes?.trim() || undefined,
+      receivedBy: actor.id,
+      receivedByName: actor.name,
+      status: 'completed',
+    }
+
+    let inventory = state.inventory
+    let movements = state.stockMovements
+    for (const line of built.lines) {
+      const applied = addMovement(movements, inventory, {
+        date,
+        reference: receivingNo,
+        productId: line.productId,
+        warehouseId: input.warehouseId,
+        type: 'receiving',
+        stockIn: line.baseQty,
+        stockOut: 0,
+        notes: [line.batchNo && `Lot ${line.batchNo}`, line.expiry && `Exp ${line.expiry}`].filter(Boolean).join(' · ') || undefined,
+      })
+      inventory = applied.inventory
+      movements = applied.movements
+    }
+
+    const previousReceivings = state.receivings ?? []
+    const previousInventory = state.inventory
+    const previousMovements = state.stockMovements
+    setData({
+      receivings: [receiving, ...previousReceivings],
+      inventory,
+      stockMovements: movements,
+    })
+    if (lastPersistFailed) {
+      setData({
+        receivings: previousReceivings,
+        inventory: previousInventory,
+        stockMovements: previousMovements,
+      })
+      toast('Receiving could not be saved', 'Storage is full or unavailable. Stock was not updated.', 'danger')
+      return null
+    }
+    toast('Receiving completed', `${receivingNo} — stock increased.`)
+    return receiving
+  },
+
+  linkReceivingToPurchase(receivingId: string, purchaseId: string) {
+    if (!hasPermission(state, 'receiving.link_purchase')) {
+      toast('Permission denied', 'You cannot link receiving to a purchase.', 'danger')
+      return false
+    }
+    const receiving = (state.receivings ?? []).find((row) => row.id === receivingId)
+    const purchase = state.purchases.find((row) => row.id === purchaseId)
+    if (!receiving || !purchase) {
+      toast('Record not found', undefined, 'warning')
+      return false
+    }
+    if (receiving.purchaseId && receiving.purchaseId !== purchaseId) {
+      toast('Already linked', `This receiving is linked to ${receiving.purchaseNo}.`, 'warning')
+      return false
+    }
+    if (purchase.receivingId && purchase.receivingId !== receivingId) {
+      toast('Purchase already linked', 'This purchase is already linked to another receiving.', 'warning')
+      return false
+    }
+    if (purchase.status !== 'draft' && purchase.receivingId !== receivingId) {
+      toast('Link a draft purchase', 'This purchase already posted stock. Create a new purchase from the receiving instead.', 'warning')
+      return false
+    }
+    const inventoryFingerprint = state.inventory.map((row) => `${row.productId}:${row.warehouseId}:${row.qty}`).join('|')
+    setData({
+      receivings: (state.receivings ?? []).map((row) =>
+        row.id === receivingId ? { ...row, purchaseId: purchase.id, purchaseNo: purchase.purchaseNo } : row,
+      ),
+      purchases: state.purchases.map((row) => (row.id === purchaseId ? { ...row, receivingId: receiving.id } : row)),
+    })
+    const after = state.inventory.map((row) => `${row.productId}:${row.warehouseId}:${row.qty}`).join('|')
+    if (after !== inventoryFingerprint) {
+      toast('Link failed', 'Inventory must not change when linking a purchase.', 'danger')
+      return false
+    }
+    toast('Receiving linked', `${receiving.receivingNo} → ${purchase.purchaseNo}`)
+    return true
   },
 
   adjustStock(input: {

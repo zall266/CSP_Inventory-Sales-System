@@ -14,7 +14,7 @@ import { useApi, useStore } from '@/store/hooks'
 import { formatDate, initials, PROTOTYPE_TODAY } from '@/utils/format'
 import { Dropdown, MenuItem } from '@/components/ui'
 import { currentUser } from '@/features/manufacturing/sessionPlan'
-import { displayRoleName } from '@/features/settings/permissions'
+import { displayRoleName, hasPermission } from '@/features/settings/permissions'
 import { companyWarehouses } from '@/features/agent/agentModel'
 
 export function Header() {
@@ -43,6 +43,7 @@ export function Header() {
     const products = state.products.filter((p) => `${p.name} ${p.sku} ${p.barcode}`.toLowerCase().includes(q)).slice(0, 5)
     const sales = state.sales.filter((s) => s.invoiceNo.toLowerCase().includes(q)).slice(0, 5)
     const purchases = state.purchases.filter((p) => `${p.purchaseNo} ${p.invoiceNumber}`.toLowerCase().includes(q)).slice(0, 5)
+    const receivings = (state.receivings ?? []).filter((r) => r.receivingNo.toLowerCase().includes(q)).slice(0, 5)
     const customers = state.customers.filter((c) => `${c.name} ${c.phone}`.toLowerCase().includes(q)).slice(0, 5)
     const suppliers = state.suppliers.filter((s) => `${s.name} ${s.contact}`.toLowerCase().includes(q)).slice(0, 5)
     const production = state.productionOrders.filter((o) => {
@@ -51,7 +52,7 @@ export function Header() {
     }).slice(0, 5)
     const sessions = state.productionSessions.filter((s) => s.reference.toLowerCase().includes(q)).slice(0, 5)
     const batches = state.batches.filter((b) => b.batchNo.toLowerCase().includes(q)).slice(0, 5)
-    return { products, sales, purchases, customers, suppliers, production, batches, sessions }
+    return { products, sales, purchases, receivings, customers, suppliers, production, batches, sessions }
   }, [query, state])
 
   const unread = state.notifications.filter((n) => !n.read).length
@@ -119,6 +120,14 @@ export function Header() {
               }}
             />
             <SearchGroup
+              label="Receiving"
+              items={results.receivings.map((r) => ({ id: r.id, title: r.receivingNo, meta: r.purchaseNo ?? 'Unlinked' }))}
+              onPick={(id) => {
+                navigate(`/receiving/${id}`)
+                setQuery('')
+              }}
+            />
+            <SearchGroup
               label="Customers"
               items={results.customers.map((c) => ({ id: c.id, title: c.name, meta: c.phone }))}
               onPick={(id) => {
@@ -173,6 +182,7 @@ export function Header() {
             {!results.products.length &&
               !results.sales.length &&
               !results.purchases.length &&
+              !results.receivings.length &&
               !results.customers.length &&
               !results.suppliers.length &&
               !results.production.length &&
@@ -207,6 +217,9 @@ export function Header() {
       >
         <MenuItem onClick={() => navigate('/pos')}>New Sale</MenuItem>
         <MenuItem onClick={() => navigate('/purchases/new')}>New Purchase</MenuItem>
+        {hasPermission(state, 'receiving.create') ? (
+          <MenuItem onClick={() => navigate('/receiving/new')}>New Receiving</MenuItem>
+        ) : null}
         <MenuItem onClick={() => api.openModal('product')}>Add Product</MenuItem>
         <MenuItem onClick={() => api.openModal('customer')}>Add Customer</MenuItem>
         <MenuItem onClick={() => api.openModal('supplier')}>Add Supplier</MenuItem>

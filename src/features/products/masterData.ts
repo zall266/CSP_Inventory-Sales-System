@@ -291,11 +291,12 @@ export function hydrateProducts(products: Product[], boms: Bom[]) {
 }
 
 export function productIsUsed(
-  state: Pick<AppState, 'sales' | 'purchases' | 'stockMovements' | 'productionOrders' | 'agentSales' | 'quotations' | 'deliveryOrders' | 'boms' | 'inventory'>,
+  state: Pick<AppState, 'sales' | 'purchases' | 'receivings' | 'stockMovements' | 'productionOrders' | 'agentSales' | 'quotations' | 'deliveryOrders' | 'boms' | 'inventory'>,
   productId: string,
 ) {
   if ((state.sales ?? []).some((sale) => sale.items.some((line) => line.productId === productId))) return true
   if ((state.purchases ?? []).some((purchase) => purchase.items.some((line) => line.productId === productId))) return true
+  if ((state.receivings ?? []).some((row) => row.items.some((line) => line.productId === productId))) return true
   if ((state.stockMovements ?? []).some((row) => row.productId === productId)) return true
   if ((state.productionOrders ?? []).some((order) => order.productId === productId || order.consumptions?.some((line) => line.productId === productId))) return true
   if ((state.agentSales ?? []).some((sale) => sale.items.some((line) => line.productId === productId))) return true

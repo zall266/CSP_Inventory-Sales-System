@@ -29,6 +29,7 @@ import { InvoiceDetailPage, InvoicePrintPage } from '@/features/documents/Invoic
 import { DeliveryOrdersPage, DeliveryEditorPage, DeliveryDetailPage, DeliveryPrintPage } from '@/features/documents/DeliveryPages'
 import { AgentDetailPage, AgentsPage } from '@/features/agent/AgentPages'
 import { MyTasksPage, TaskCategoriesPage, TaskDetailPage, TaskEditorPage, TaskManagePage } from '@/features/tasks/TaskPages'
+import { NewReceivingPage, ReceivingDetailPage, ReceivingListPage } from '@/features/receiving/ReceivingPages'
 
 export default function App() {
   return (
@@ -56,6 +57,9 @@ export default function App() {
           <Route path="/customers" element={<CustomersPage />} />
           <Route path="/purchases" element={<PurchasesPage />} />
           <Route path="/purchases/new" element={<NewPurchasePage />} />
+          <Route path="/receiving" element={<ReceivingListPage />} />
+          <Route path="/receiving/new" element={<NewReceivingPage />} />
+          <Route path="/receiving/:id" element={<ReceivingDetailPage />} />
           <Route path="/purchase-returns" element={<PurchaseReturnsPage />} />
           <Route path="/suppliers" element={<SuppliersPage />} />
           <Route path="/inventory" element={<InventoryPage />} />

@@ -20,6 +20,7 @@ export type MovementType =
   | 'production_wastage'
   | 'production_balance_in'
   | 'production_balance_out'
+  | 'receiving'
 export type ProductionStatus = 'draft' | 'planned' | 'in_progress' | 'paused' | 'completed' | 'cancelled'
 export type ProductionSessionStatus = 'planned' | 'accepted' | 'in_progress' | 'completed'
 export type ShortProductionReason =
@@ -525,6 +526,39 @@ export type Purchase = {
   balance: number
   status: PurchaseStatus
   notes?: string
+  receivingId?: string
+}
+
+export type ReceivingSource = 'supplier' | 'shopee' | 'direct' | 'other'
+export type ReceivingStatus = 'completed'
+
+export type ReceivingLine = {
+  productId: string
+  qty: number
+  unit: string
+  baseQty: number
+  batchNo?: string
+  expiry?: string
+  notes?: string
+}
+
+export type Receiving = {
+  id: string
+  receivingNo: string
+  date: string
+  warehouseId: string
+  source: ReceivingSource
+  supplierId?: string
+  supplierNote?: string
+  items: ReceivingLine[]
+  photoUrl?: string
+  photoName?: string
+  notes?: string
+  purchaseId?: string
+  purchaseNo?: string
+  receivedBy: string
+  receivedByName: string
+  status: ReceivingStatus
 }
 
 export type SalesReturn = {
@@ -860,6 +894,9 @@ export type PermissionKey =
   | 'purchases.create'
   | 'purchases.edit'
   | 'purchases.delete'
+  | 'receiving.view'
+  | 'receiving.create'
+  | 'receiving.link_purchase'
   | 'inventory.view'
   | 'inventory.adjust'
   | 'inventory.transfer'
@@ -952,6 +989,7 @@ export type DrawerState =
   | { type: 'product'; id: string }
   | { type: 'sale'; id: string }
   | { type: 'purchase'; id: string }
+  | { type: 'receiving'; id: string }
   | { type: 'customer'; id: string }
   | { type: 'supplier'; id: string }
   | { type: 'movement'; id: string }
@@ -1004,6 +1042,7 @@ export type AppData = {
   deliveryOrders: DeliveryOrder[]
   documentAuditLogs: DocumentAuditLog[]
   purchases: Purchase[]
+  receivings: Receiving[]
   salesReturns: SalesReturn[]
   purchaseReturns: PurchaseReturn[]
   stockMovements: StockMovement[]
@@ -1147,4 +1186,23 @@ export type PurchaseInput = {
   paidAmount?: number
   date?: string
   notes?: string
+  receivingId?: string
+}
+
+export type ReceivingInput = {
+  warehouseId: string
+  source?: ReceivingSource
+  supplierId?: string
+  supplierNote?: string
+  items: Array<{
+    productId: string
+    qty: number
+    batchNo?: string
+    expiry?: string
+    notes?: string
+  }>
+  photoUrl?: string
+  photoName?: string
+  notes?: string
+  date?: string
 }

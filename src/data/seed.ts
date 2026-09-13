@@ -1293,6 +1293,7 @@ export function createSeedData(): AppData {
     staffTaskCategories,
     staffTasks,
     staffTaskOccurrences: [],
+    receivings: [],
     ...createMainWarehouseLayout(iso(9, 8, 9)),
     ...seedWarehouseOccupancy(iso(9, 8, 16), 'Admin'),
     settings: {
