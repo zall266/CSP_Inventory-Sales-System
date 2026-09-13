@@ -11,6 +11,7 @@ import {
   FileText,
   FlaskConical,
   History,
+  Layers,
   LayoutDashboard,
   MapPin,
   Package,
@@ -76,6 +77,7 @@ export const navGroups: NavGroup[] = [
     items: [
       { to: '/inventory', label: 'Inventory', icon: Warehouse },
       { to: '/inventory/warehouse-map', label: 'Warehouse Map', icon: MapPin },
+      { to: '/inventory/opening-balance', label: 'Opening Balance', icon: Layers },
       { to: '/stock-movements', label: 'Stock Movements', icon: ClipboardList },
       { to: '/stock-adjustment', label: 'Stock Adjustment', icon: BadgePercent },
       { to: '/stock-transfer', label: 'Stock Transfer', icon: ArrowLeftRight },
@@ -161,6 +163,7 @@ function pathActive(pathname: string, to: string) {
 function navItemVisible(state: ReturnType<typeof useStore>, item: NavItem) {
   if (item.to === '/settings/users') return canAccessUsersAndRoles(state, actorUser(state))
   if (item.to === '/inventory/warehouse-map') return hasPermission(state, 'warehouse_map.view')
+  if (item.to === '/inventory/opening-balance') return hasPermission(state, 'opening_balance.view')
   if (item.to === '/sales/agents') return hasPermission(state, 'agent.view') || hasPermission(state, 'agent.manage') || Boolean(currentLinkedAgent(state))
   if (item.to === '/tasks') return hasPermission(state, 'task.view')
   if (item.to === '/tasks/manage') return hasPermission(state, 'task.create') || hasPermission(state, 'task.edit') || hasPermission(state, 'task.assign')

@@ -1294,6 +1294,7 @@ export function createSeedData(): AppData {
     staffTasks,
     staffTaskOccurrences: [],
     receivings: [],
+    openingBalances: [],
     ...createMainWarehouseLayout(iso(9, 8, 9)),
     ...seedWarehouseOccupancy(iso(9, 8, 16), 'Admin'),
     settings: {

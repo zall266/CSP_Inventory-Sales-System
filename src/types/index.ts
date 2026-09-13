@@ -21,6 +21,7 @@ export type MovementType =
   | 'production_balance_in'
   | 'production_balance_out'
   | 'receiving'
+  | 'opening_balance'
 export type ProductionStatus = 'draft' | 'planned' | 'in_progress' | 'paused' | 'completed' | 'cancelled'
 export type ProductionSessionStatus = 'planned' | 'accepted' | 'in_progress' | 'completed'
 export type ShortProductionReason =
@@ -495,11 +496,13 @@ export type DocumentAuditAction =
   | 'task_category_created'
   | 'task_category_edited'
   | 'task_category_deactivated'
+  | 'opening_balance_created'
+  | 'opening_balance_confirmed'
 
 export type DocumentAuditLog = {
   id: string
   action: DocumentAuditAction
-  documentType: 'quotation' | 'invoice' | 'delivery' | 'agent_sale' | 'agent_withdrawal' | 'staff_task' | 'staff_task_category'
+  documentType: 'quotation' | 'invoice' | 'delivery' | 'agent_sale' | 'agent_withdrawal' | 'staff_task' | 'staff_task_category' | 'opening_balance'
   documentId: string
   documentNo: string
   field: string
@@ -559,6 +562,39 @@ export type Receiving = {
   receivedBy: string
   receivedByName: string
   status: ReceivingStatus
+}
+
+export type OpeningBalanceType = 'stock_item' | 'finished_goods' | 'production_balance'
+export type OpeningBalanceStatus = 'draft' | 'confirmed'
+export type OpeningBalanceLocationKind = 'inventory' | 'display' | 'rack' | 'pallet' | 'floor'
+
+export type OpeningBalanceLine = {
+  productId: string
+  qty: number
+  unit: string
+  baseQty: number
+  warehouseId: string
+  batchNo?: string
+  expiry?: string
+  notes?: string
+  locationKind?: OpeningBalanceLocationKind
+  locationId?: string
+  container?: string
+}
+
+export type OpeningBalance = {
+  id: string
+  documentNo: string
+  date: string
+  type: OpeningBalanceType
+  status: OpeningBalanceStatus
+  items: OpeningBalanceLine[]
+  notes?: string
+  createdBy: string
+  createdByName: string
+  createdAt: string
+  confirmedBy?: string
+  confirmedAt?: string
 }
 
 export type SalesReturn = {
@@ -897,6 +933,8 @@ export type PermissionKey =
   | 'receiving.view'
   | 'receiving.create'
   | 'receiving.link_purchase'
+  | 'opening_balance.view'
+  | 'opening_balance.create'
   | 'inventory.view'
   | 'inventory.adjust'
   | 'inventory.transfer'
@@ -1067,6 +1105,7 @@ export type AppData = {
   staffTaskCategories: StaffTaskCategory[]
   staffTasks: StaffTask[]
   staffTaskOccurrences: StaffTaskOccurrence[]
+  openingBalances: OpeningBalance[]
 }
 
 export type AppState = AppData & {
@@ -1205,4 +1244,22 @@ export type ReceivingInput = {
   photoName?: string
   notes?: string
   date?: string
+}
+
+export type OpeningBalanceInput = {
+  type: OpeningBalanceType
+  date?: string
+  notes?: string
+  items: Array<{
+    productId: string
+    qty: number
+    unit?: string
+    warehouseId: string
+    batchNo?: string
+    expiry?: string
+    notes?: string
+    locationKind?: OpeningBalanceLocationKind
+    locationId?: string
+    container?: string
+  }>
 }

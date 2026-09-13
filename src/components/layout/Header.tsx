@@ -52,7 +52,10 @@ export function Header() {
     }).slice(0, 5)
     const sessions = state.productionSessions.filter((s) => s.reference.toLowerCase().includes(q)).slice(0, 5)
     const batches = state.batches.filter((b) => b.batchNo.toLowerCase().includes(q)).slice(0, 5)
-    return { products, sales, purchases, receivings, customers, suppliers, production, batches, sessions }
+    const openingBalances = (state.openingBalances ?? [])
+      .filter((row) => `${row.documentNo} ${row.type}`.toLowerCase().includes(q))
+      .slice(0, 5)
+    return { products, sales, purchases, receivings, customers, suppliers, production, batches, sessions, openingBalances }
   }, [query, state])
 
   const unread = state.notifications.filter((n) => !n.read).length
@@ -179,6 +182,14 @@ export function Header() {
                 setQuery('')
               }}
             />
+            <SearchGroup
+              label="Opening Balance"
+              items={results.openingBalances.map((row) => ({ id: row.id, title: row.documentNo, meta: row.type }))}
+              onPick={(id) => {
+                navigate(`/inventory/opening-balance/${id}`)
+                setQuery('')
+              }}
+            />
             {!results.products.length &&
               !results.sales.length &&
               !results.purchases.length &&
@@ -187,7 +198,8 @@ export function Header() {
               !results.suppliers.length &&
               !results.production.length &&
               !results.batches.length &&
-              !results.sessions.length && (
+              !results.sessions.length &&
+              !results.openingBalances.length && (
                 <div className="px-3 py-6 text-center text-sm text-slate-500">No results for “{query}”</div>
               )}
           </div>
