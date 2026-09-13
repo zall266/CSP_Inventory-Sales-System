@@ -13,6 +13,11 @@ import {
 } from '@/features/warehouse/warehouseModel'
 import { AGENT_PERMISSION_KEYS, agentBankDetailsComplete, agentLinkedWarehouseName, calcAgentSaleDocument, canUserRequestWithdrawalForAgent, companyWarehouses, configuredAgentPrice, currentLinkedAgent, hasSaleEarningLedger, hasWithdrawalCancelledLedger, hasWithdrawalPaidLedger, hasWithdrawalPendingLedger, isAgentWarehouseId, isCompanyWarehouseId, linkedAgentForUser, nextAgentWarehouseId, normalizeAgentSaleItems, parseAgentPriceWrite, parseWithdrawalAmount, parseWithdrawalPaymentDate, parseWithdrawalPaymentReference, parseWithdrawalReceipt, SALE_EARNING_KIND, saleIsAgentSale, snapshotAgentBankDetails, summarizeAgentEarnings, WITHDRAWAL_CANCELLED_KIND, WITHDRAWAL_PAID_KIND, WITHDRAWAL_PENDING_KIND } from '@/features/agent/agentModel'
 import {
+  OPENING_BALANCE_ORIGIN_DATE,
+  OPENING_BALANCE_PERMISSION_KEYS,
+  buildOpeningBalanceLines,
+} from '@/features/openingBalance/openingBalanceModel'
+import {
   RECEIVING_PERMISSION_KEYS,
   buildReceivingLines,
   parseReceivingPhoto,
@@ -74,6 +79,8 @@ import type {
   InventoryRow,
   LineItem,
   MovementType,
+  OpeningBalance,
+  OpeningBalanceInput,
   PaymentMethod,
   PermissionKey,
   ProductInput,
@@ -166,7 +173,7 @@ function hydrateData(data: AppData): AppData {
       const raw = data.settings?.roleMatrix?.[role.id] ?? {}
       const normalized = normalizePermissions(raw)
       const defaults = defaultPermissionsForLegacy(role.legacyRole)
-      for (const key of [...WAREHOUSE_MAP_KEYS, ...AGENT_PERMISSION_KEYS, ...TASK_PERMISSION_KEYS, ...RECEIVING_PERMISSION_KEYS]) {
+      for (const key of [...WAREHOUSE_MAP_KEYS, ...AGENT_PERMISSION_KEYS, ...TASK_PERMISSION_KEYS, ...RECEIVING_PERMISSION_KEYS, ...OPENING_BALANCE_PERMISSION_KEYS]) {
         if (raw[key] === undefined) normalized[key] = defaults[key]
       }
       return [role.id, normalized]
@@ -229,6 +236,7 @@ function hydrateData(data: AppData): AppData {
     staffTasks: data.staffTasks ?? [],
     staffTaskOccurrences: missingTaskOccurrences(data.staffTasks ?? [], data.staffTaskOccurrences ?? [], PROTOTYPE_TODAY),
     receivings: data.receivings ?? [],
+    openingBalances: data.openingBalances ?? [],
     productionSessions: (data.productionSessions ?? []).map((session) => ({
       ...session,
       items: session.items.map((item) => ({
@@ -521,6 +529,145 @@ function maybeStockAlerts(productId: string, warehouseId: string, qty: number) {
 }
 
 let agentSaleInFlight = false
+let openingBalanceInFlight = false
+
+function postConfirmedOpeningBalance(doc: OpeningBalance) {
+  const actor = currentUser(state)
+  let inventory = state.inventory
+  let movements = state.stockMovements
+  let balances = state.productionBalances ?? []
+  let displayStocks = state.displayStocks ?? []
+  let storageSlots = state.storageSlots
+  let occupancies = state.slotOccupancies
+  let placementLogs = state.placementLogs ?? []
+  const date = doc.date
+
+  for (const line of doc.items) {
+    if (doc.type === 'production_balance') {
+      balances = [
+        {
+          id: uid('pb'),
+          productId: line.productId,
+          quantity: line.baseQty,
+          unit: 'g',
+          location: state.warehouses.find((row) => row.id === line.warehouseId)?.name ?? 'Main Warehouse',
+          container: line.container || 'Box 1',
+          warehouseId: line.warehouseId,
+          productionDate: OPENING_BALANCE_ORIGIN_DATE,
+          productionReference: doc.documentNo,
+          status: 'available' as const,
+        },
+        ...balances,
+      ]
+      const applied = addMovement(movements, inventory, {
+        date,
+        reference: doc.documentNo,
+        productId: line.productId,
+        warehouseId: line.warehouseId,
+        type: 'production_balance_in',
+        stockIn: line.baseQty,
+        stockOut: 0,
+        notes: `Opening balance ${line.container}`,
+        skipInventory: true,
+      })
+      inventory = applied.inventory
+      movements = applied.movements
+      continue
+    }
+
+    const applied = addMovement(movements, inventory, {
+      date,
+      reference: doc.documentNo,
+      productId: line.productId,
+      warehouseId: line.warehouseId,
+      type: 'opening_balance',
+      stockIn: line.baseQty,
+      stockOut: 0,
+      notes: line.batchNo ? `Lot ${line.batchNo}` : doc.type === 'finished_goods' ? 'Finished goods opening balance' : 'Stock item opening balance',
+    })
+    inventory = applied.inventory
+    movements = applied.movements
+
+    if (doc.type === 'finished_goods' && line.locationKind === 'display') {
+      displayStocks = applyDisplayDelta(displayStocks, line.productId, line.warehouseId, line.baseQty, date, uid('ds'))
+    }
+
+    if (doc.type === 'finished_goods' && line.locationId && line.locationKind && line.locationKind !== 'inventory' && line.locationKind !== 'display') {
+      const location = state.storageLocations.find((row) => row.id === line.locationId && row.active)
+      if (location && location.type !== 'BALANCE_AREA' && location.type !== 'DISPLAY') {
+        let slot = storageSlots.find(
+          (row) => row.locationId === location.id && row.active && !occupancies.some((occ) => occ.slotId === row.id),
+        )
+        if (!slot && (location.type === 'PALLET' || location.type === 'FLOOR')) {
+          slot = nextGenericSlot(location.id, storageSlots)
+          storageSlots = [...storageSlots, slot]
+        }
+        if (slot) {
+          occupancies = [
+            ...occupancies,
+            {
+              id: uid('occ'),
+              slotId: slot.id,
+              productId: line.productId,
+              quantityPacks: line.baseQty,
+              batchRef: line.batchNo || doc.documentNo,
+              productionSessionRef: '',
+              placedBy: actor.name,
+              placedAt: date,
+              updatedAt: date,
+            },
+          ]
+          placementLogs = [
+            {
+              id: uid('pl'),
+              action: 'PLACED' as const,
+              productId: line.productId,
+              quantity: line.baseQty,
+              fromSlotId: '',
+              toSlotId: slot.id,
+              batchRef: line.batchNo || doc.documentNo,
+              referenceId: doc.documentNo,
+              performedBy: actor.name,
+              performedAt: date,
+              reason: 'Opening balance',
+            },
+            ...placementLogs,
+          ]
+        }
+      }
+    }
+  }
+
+  const confirmed: OpeningBalance = {
+    ...doc,
+    status: 'confirmed',
+    confirmedBy: actor.id,
+    confirmedAt: nowIso(),
+  }
+  setData({
+    openingBalances: (state.openingBalances ?? []).map((row) => (row.id === doc.id ? confirmed : row)),
+    inventory,
+    stockMovements: movements,
+    productionBalances: balances,
+    displayStocks,
+    storageSlots,
+    slotOccupancies: occupancies,
+    placementLogs,
+    documentAuditLogs: pushDocAudit(
+      makeDocAudit({
+        action: 'opening_balance_confirmed',
+        documentType: 'opening_balance',
+        documentId: doc.id,
+        documentNo: doc.documentNo,
+        field: 'status',
+        oldValue: 'draft',
+        newValue: 'confirmed',
+      }),
+    ),
+  })
+  toast('Opening balance confirmed', doc.documentNo)
+  return true
+}
 
 function syncStaffTaskOccurrencesInternal() {
   const existing = state.staffTaskOccurrences ?? []
@@ -2836,6 +2983,124 @@ export const db = {
     }
     toast('Receiving linked', `${receiving.receivingNo} → ${purchase.purchaseNo}`)
     return true
+  },
+
+  saveOpeningBalance(input: OpeningBalanceInput) {
+    if (!hasPermission(state, 'opening_balance.create')) {
+      toast('Permission denied', 'You cannot create opening balance.', 'danger')
+      return null
+    }
+    const built = buildOpeningBalanceLines(state, input.type, input.items)
+    if (!built.ok) {
+      toast('Cannot save opening balance', built.reason, 'warning')
+      return null
+    }
+    const actor = currentUser(state)
+    const date = input.date ?? nowIso()
+    const documentNo = nextDocNo((state.openingBalances ?? []).map((row) => row.documentNo), 'OB-')
+    const doc: OpeningBalance = {
+      id: uid('ob'),
+      documentNo,
+      date,
+      type: input.type,
+      status: 'draft',
+      items: built.lines,
+      notes: input.notes?.trim() || undefined,
+      createdBy: actor.id,
+      createdByName: actor.name,
+      createdAt: nowIso(),
+    }
+    setData({
+      openingBalances: [doc, ...(state.openingBalances ?? [])],
+      documentAuditLogs: pushDocAudit(
+        makeDocAudit({
+          action: 'opening_balance_created',
+          documentType: 'opening_balance',
+          documentId: doc.id,
+          documentNo: doc.documentNo,
+          field: 'status',
+          oldValue: '',
+          newValue: 'draft',
+        }),
+      ),
+    })
+    toast('Opening balance saved', documentNo)
+    return doc
+  },
+
+  updateOpeningBalance(id: string, input: OpeningBalanceInput) {
+    if (!hasPermission(state, 'opening_balance.create')) {
+      toast('Permission denied', 'You cannot update opening balance.', 'danger')
+      return null
+    }
+    const current = (state.openingBalances ?? []).find((row) => row.id === id)
+    if (!current) {
+      toast('Opening balance not found', undefined, 'warning')
+      return null
+    }
+    if (current.status === 'confirmed') {
+      toast('Already confirmed', `${current.documentNo} is locked.`, 'info')
+      return null
+    }
+    const built = buildOpeningBalanceLines(state, input.type, input.items)
+    if (!built.ok) {
+      toast('Cannot update opening balance', built.reason, 'warning')
+      return null
+    }
+    const doc: OpeningBalance = {
+      ...current,
+      type: input.type,
+      items: built.lines,
+      notes: input.notes?.trim() || undefined,
+      date: input.date ?? current.date,
+    }
+    setData({
+      openingBalances: (state.openingBalances ?? []).map((row) => (row.id === id ? doc : row)),
+    })
+    toast('Opening balance updated', doc.documentNo)
+    return doc
+  },
+
+  confirmOpeningBalance(id: string) {
+    if (!hasPermission(state, 'opening_balance.create')) {
+      toast('Permission denied', 'You cannot confirm opening balance.', 'danger')
+      return false
+    }
+    if (openingBalanceInFlight) {
+      toast('Already posting', 'Wait for the current opening balance to finish.', 'warning')
+      return false
+    }
+    const doc = (state.openingBalances ?? []).find((row) => row.id === id)
+    if (!doc) {
+      toast('Opening balance not found', undefined, 'warning')
+      return false
+    }
+    if (doc.status === 'confirmed') {
+      toast('Already confirmed', `${doc.documentNo} is locked.`, 'info')
+      return false
+    }
+    openingBalanceInFlight = true
+    try {
+      return postConfirmedOpeningBalance(doc)
+    } finally {
+      openingBalanceInFlight = false
+    }
+  },
+
+  createOpeningBalance(input: OpeningBalanceInput) {
+    if (openingBalanceInFlight) {
+      toast('Already posting', 'Wait for the current opening balance to finish.', 'warning')
+      return null
+    }
+    openingBalanceInFlight = true
+    try {
+      const saved = this.saveOpeningBalance(input)
+      if (!saved) return null
+      const ok = postConfirmedOpeningBalance(saved)
+      return ok ? (state.openingBalances ?? []).find((row) => row.id === saved.id) ?? saved : null
+    } finally {
+      openingBalanceInFlight = false
+    }
   },
 
   adjustStock(input: {

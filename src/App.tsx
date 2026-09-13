@@ -30,6 +30,7 @@ import { DeliveryOrdersPage, DeliveryEditorPage, DeliveryDetailPage, DeliveryPri
 import { AgentDetailPage, AgentsPage } from '@/features/agent/AgentPages'
 import { MyTasksPage, TaskCategoriesPage, TaskDetailPage, TaskEditorPage, TaskManagePage } from '@/features/tasks/TaskPages'
 import { NewReceivingPage, ReceivingDetailPage, ReceivingListPage } from '@/features/receiving/ReceivingPages'
+import { OpeningBalancePage } from '@/features/openingBalance/OpeningBalancePages'
 
 export default function App() {
   return (
@@ -64,6 +65,8 @@ export default function App() {
           <Route path="/suppliers" element={<SuppliersPage />} />
           <Route path="/inventory" element={<InventoryPage />} />
           <Route path="/inventory/warehouse-map" element={<WarehouseMapPage />} />
+          <Route path="/inventory/opening-balance/:id" element={<OpeningBalancePage />} />
+          <Route path="/inventory/opening-balance" element={<OpeningBalancePage />} />
           <Route path="/stock-movements" element={<StockMovementsPage />} />
           <Route path="/stock-adjustment" element={<StockAdjustmentPage />} />
           <Route path="/stock-transfer" element={<StockTransferPage />} />
