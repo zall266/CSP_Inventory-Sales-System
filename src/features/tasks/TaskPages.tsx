@@ -115,7 +115,7 @@ export function MyTasksPage() {
 
   const section = (title: string, rows: typeof mine) =>
     rows.length ? (
-      <section className="mb-6">
+      <section className="mb-6" data-task-section={title.toLowerCase()}>
         <h2 className="mb-3 text-xs font-semibold uppercase tracking-[0.14em] text-slate-400">{title}</h2>
         <div className="space-y-3">
           {rows.map(({ task, occurrence }) => (
@@ -218,7 +218,8 @@ export function TaskDetailPage() {
       />
       <Card className="space-y-3 p-4">
         <div className="flex flex-wrap gap-2">
-          <StatusBadge status={visual} />
+          <StatusBadge status={occurrence.status} />
+          {visual === 'overdue' ? <StatusBadge status="overdue" /> : null}
           <Badge>{priorityLabel(task.priority)}</Badge>
           <Badge tone={task.photoRequirement === 'required' ? 'amber' : 'slate'}>{photoRequirementLabel(task.photoRequirement)}</Badge>
         </div>
