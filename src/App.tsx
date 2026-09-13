@@ -28,6 +28,7 @@ import { QuotationsPage, QuotationEditorPage, QuotationDetailPage, QuotationPrin
 import { InvoiceDetailPage, InvoicePrintPage } from '@/features/documents/InvoicePages'
 import { DeliveryOrdersPage, DeliveryEditorPage, DeliveryDetailPage, DeliveryPrintPage } from '@/features/documents/DeliveryPages'
 import { AgentDetailPage, AgentsPage } from '@/features/agent/AgentPages'
+import { MyTasksPage, TaskCategoriesPage, TaskDetailPage, TaskEditorPage, TaskManagePage } from '@/features/tasks/TaskPages'
 
 export default function App() {
   return (
@@ -96,6 +97,12 @@ export default function App() {
           <Route path="/settings/inventory" element={<InventorySettingsPage />} />
           <Route path="/settings/sales" element={<SalesSettingsPage />} />
           <Route path="/settings/payments" element={<SalesSettingsPage />} />
+          <Route path="/tasks" element={<MyTasksPage />} />
+          <Route path="/tasks/manage/new" element={<TaskEditorPage />} />
+          <Route path="/tasks/manage/:id" element={<TaskEditorPage />} />
+          <Route path="/tasks/manage" element={<TaskManagePage />} />
+          <Route path="/tasks/categories" element={<TaskCategoriesPage />} />
+          <Route path="/tasks/:occurrenceId" element={<TaskDetailPage />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Route>
       </Routes>

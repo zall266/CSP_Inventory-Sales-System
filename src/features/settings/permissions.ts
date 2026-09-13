@@ -73,6 +73,12 @@ export const PERMISSION_KEYS: PermissionKey[] = [
   'agent.earnings.view',
   'agent.withdrawal.create',
   'agent.withdrawal.process',
+  'task.view',
+  'task.create',
+  'task.edit',
+  'task.assign',
+  'task.complete',
+  'task.category.manage',
 ]
 
 export const PERMISSION_GROUPS: Array<{ id: string; label: string; keys: PermissionKey[] }> = [
@@ -152,6 +158,11 @@ export const PERMISSION_GROUPS: Array<{ id: string; label: string; keys: Permiss
       'agent.withdrawal.process',
     ],
   },
+  {
+    id: 'tasks',
+    label: 'Tasks',
+    keys: ['task.view', 'task.create', 'task.edit', 'task.assign', 'task.complete', 'task.category.manage'],
+  },
 ]
 
 export const PERMISSION_LABELS: Record<PermissionKey, string> = {
@@ -227,6 +238,12 @@ export const PERMISSION_LABELS: Record<PermissionKey, string> = {
   'agent.earnings.view': 'View Agent Earnings',
   'agent.withdrawal.create': 'Request Withdrawal',
   'agent.withdrawal.process': 'Process Withdrawal',
+  'task.view': 'View Tasks',
+  'task.create': 'Create Task',
+  'task.edit': 'Edit Task',
+  'task.assign': 'Assign Task',
+  'task.complete': 'Complete Task',
+  'task.category.manage': 'Manage Task Categories',
 }
 
 export function emptyPermissions(): RolePermissions {
@@ -285,6 +302,8 @@ const MFG_RUN: PermissionKey[] = [
   'manufacturing.history.view',
 ]
 const FINANCE_VIEW: PermissionKey[] = ['finance.view', 'payments.view', 'receivables.view', 'payables.view']
+const TASK_STAFF: PermissionKey[] = ['task.view', 'task.complete']
+const TASK_OPERATIONS: PermissionKey[] = ['task.view', 'task.create', 'task.edit', 'task.assign', 'task.complete']
 
 export function defaultPermissionsForLegacy(role: UserRole): RolePermissions {
   if (role === 'owner' || role === 'admin') return fullPermissions()
@@ -302,6 +321,7 @@ export function defaultPermissionsForLegacy(role: UserRole): RolePermissions {
       'reports.view',
       ...FINANCE_VIEW,
       'settings.view',
+      ...TASK_OPERATIONS,
     ])
   }
   if (role === 'staff') {
@@ -313,6 +333,7 @@ export function defaultPermissionsForLegacy(role: UserRole): RolePermissions {
       ...WAREHOUSE_MAP_STAFF,
       ...MFG_RUN,
       'reports.view',
+      ...TASK_STAFF,
     ])
   }
   if (role === 'cashier') {
@@ -322,6 +343,7 @@ export function defaultPermissionsForLegacy(role: UserRole): RolePermissions {
       'sales.invoice.print',
       'sales.quotation.view',
       'sales.quotation.print',
+      ...TASK_STAFF,
     ])
   }
   return withKeys([
@@ -336,6 +358,7 @@ export function defaultPermissionsForLegacy(role: UserRole): RolePermissions {
     'sales.delivery.edit',
     'sales.delivery.issue',
     'sales.delivery.print',
+    ...TASK_STAFF,
   ])
 }
 

@@ -389,6 +389,81 @@ export type DeliveryOrder = {
   updatedAt: string
 }
 
+export type StaffTaskFrequency = 'daily' | 'weekly' | 'monthly' | 'annually' | 'specific_date'
+export type StaffTaskPhotoRequirement = 'none' | 'optional' | 'required'
+export type StaffTaskPriority = 'low' | 'normal' | 'high'
+export type StaffTaskOccurrenceStatus = 'pending' | 'in_progress' | 'completed'
+export type StaffTaskCategoryStatus = 'active' | 'inactive'
+export type StaffTaskReferenceType = 'invoice' | 'purchase' | 'production'
+
+export type StaffTaskCategory = {
+  id: string
+  name: string
+  status: StaffTaskCategoryStatus
+  createdAt: string
+  updatedAt: string
+}
+
+export type StaffTask = {
+  id: string
+  title: string
+  description: string
+  categoryId: string
+  assignedTo: string
+  departmentId: string
+  priority: StaffTaskPriority
+  frequency: StaffTaskFrequency
+  weekDay: number
+  monthDay: number
+  annualMonth: number
+  annualDay: number
+  specificDate: string
+  time: string
+  photoRequirement: StaffTaskPhotoRequirement
+  active: boolean
+  referenceType: StaffTaskReferenceType | ''
+  referenceId: string
+  referenceNo: string
+  createdBy: string
+  createdAt: string
+  updatedAt: string
+}
+
+export type StaffTaskOccurrence = {
+  id: string
+  taskId: string
+  periodKey: string
+  dueAt: string
+  status: StaffTaskOccurrenceStatus
+  startedAt: string
+  completedBy: string
+  completedAt: string
+  completionNote: string
+  completionPhotoUrl: string
+  completionPhotoName: string
+  createdAt: string
+}
+
+export type StaffTaskInput = {
+  title: string
+  description?: string
+  categoryId: string
+  assignedTo: string
+  departmentId?: string
+  priority?: StaffTaskPriority
+  frequency: StaffTaskFrequency
+  weekDay?: number
+  monthDay?: number
+  annualMonth?: number
+  annualDay?: number
+  specificDate?: string
+  time?: string
+  photoRequirement?: StaffTaskPhotoRequirement
+  referenceType?: StaffTaskReferenceType | ''
+  referenceId?: string
+  referenceNo?: string
+}
+
 export type DocumentAuditAction =
   | 'quotation_created'
   | 'quotation_edited'
@@ -410,11 +485,20 @@ export type DocumentAuditAction =
   | 'agent_sale_created'
   | 'agent_withdrawal_paid'
   | 'agent_withdrawal_cancelled'
+  | 'task_created'
+  | 'task_assigned'
+  | 'task_reassigned'
+  | 'task_schedule_changed'
+  | 'task_completed'
+  | 'task_deactivated'
+  | 'task_category_created'
+  | 'task_category_edited'
+  | 'task_category_deactivated'
 
 export type DocumentAuditLog = {
   id: string
   action: DocumentAuditAction
-  documentType: 'quotation' | 'invoice' | 'delivery' | 'agent_sale' | 'agent_withdrawal'
+  documentType: 'quotation' | 'invoice' | 'delivery' | 'agent_sale' | 'agent_withdrawal' | 'staff_task' | 'staff_task_category'
   documentId: string
   documentNo: string
   field: string
@@ -821,6 +905,12 @@ export type PermissionKey =
   | 'agent.earnings.view'
   | 'agent.withdrawal.create'
   | 'agent.withdrawal.process'
+  | 'task.view'
+  | 'task.create'
+  | 'task.edit'
+  | 'task.assign'
+  | 'task.complete'
+  | 'task.category.manage'
 
 export type RolePermissions = Record<PermissionKey, boolean>
 export type RoleMatrix = Record<string, RolePermissions>
@@ -935,6 +1025,9 @@ export type AppData = {
   slotOccupancies: SlotOccupancy[]
   placementLogs: PlacementLog[]
   balanceUsageLogs: BalanceUsageLog[]
+  staffTaskCategories: StaffTaskCategory[]
+  staffTasks: StaffTask[]
+  staffTaskOccurrences: StaffTaskOccurrence[]
 }
 
 export type AppState = AppData & {

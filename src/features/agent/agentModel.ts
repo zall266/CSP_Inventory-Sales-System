@@ -210,7 +210,6 @@ export function isOwnLinkedAgent(state: Pick<AppState, 'agents' | 'ui'>, agentId
 
 export function agentPosItemAvailable(product: Product, qtyOnHand: number) {
   if (!productIsSellable(product)) return false
-  if (configuredAgentPrice(product) === null) return false
   return qtyOnHand > 0
 }
 
