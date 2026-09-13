@@ -10,8 +10,8 @@ import {
   XAxis,
   YAxis,
 } from 'recharts'
-import { AlertTriangle, PackageX } from 'lucide-react'
-import { Card, KpiCard, PageHeader, Segmented, StatusBadge } from '@/components/ui'
+import { AlertTriangle, Bell, PackageX } from 'lucide-react'
+import { Button, Card, KpiCard, PageHeader, Segmented, StatusBadge } from '@/components/ui'
 import { ProductMark, movementLabel } from '@/components/ProductMark'
 import {
   dateRangeFromState,
@@ -26,12 +26,16 @@ import {
   useStore,
 } from '@/store/hooks'
 import { currentUser } from '@/features/manufacturing/sessionPlan'
+import { hasPermission } from '@/features/settings/permissions'
+import { myTaskSummary } from '@/features/tasks/taskModel'
 import { isCompanyWarehouseId } from '@/features/agent/agentModel'
 import { formatDate, formatMoney, formatQty, greeting, round2, startOfDay } from '@/utils/format'
+import { useNavigate } from 'react-router-dom'
 
 export function DashboardPage() {
   const state = useStore()
   const api = useApi()
+  const navigate = useNavigate()
   const { product, warehouseName, customerName, supplierName } = useLookups()
   const [customOpen, setCustomOpen] = useState(state.ui.datePreset === 'custom')
   const sales = filteredSales(state)
@@ -157,6 +161,9 @@ export function DashboardPage() {
     .slice(0, 8)
 
   const alerts = [...out.slice(0, 3), ...low.slice(0, 5)]
+  const user = currentUser(state)
+  const canViewTasks = hasPermission(state, 'task.view', user)
+  const taskSummary = canViewTasks ? myTaskSummary(state, user.id) : null
 
   return (
     <div>
@@ -208,6 +215,42 @@ export function DashboardPage() {
         <KpiCard label="Low stock" value={`${low.length} items`} tone="warning" />
         <KpiCard label="Out of stock" value={`${out.length} items`} tone="danger" />
       </div>
+
+      {taskSummary ? (
+        <Card className="mt-4 max-w-md p-4">
+          <div className="mb-3 flex items-center gap-2 text-sm font-semibold text-slate-900">
+            <Bell size={16} className="text-indigo-600" />
+            My Tasks
+          </div>
+          {taskSummary.pending === 0 ? (
+            <div className="text-sm text-slate-600">No pending tasks</div>
+          ) : (
+            <div className="space-y-1.5 text-sm">
+              {taskSummary.overdue > 0 ? (
+                <div className="flex items-center justify-between">
+                  <span className="text-rose-600">Overdue</span>
+                  <span className="tabular font-semibold text-rose-700">{taskSummary.overdue}</span>
+                </div>
+              ) : null}
+              {taskSummary.dueToday > 0 ? (
+                <div className="flex items-center justify-between">
+                  <span className="text-amber-600">Due Today</span>
+                  <span className="tabular font-semibold text-amber-700">{taskSummary.dueToday}</span>
+                </div>
+              ) : null}
+              {taskSummary.upcoming > 0 ? (
+                <div className="flex items-center justify-between">
+                  <span className="text-sky-600">Upcoming</span>
+                  <span className="tabular font-semibold text-sky-700">{taskSummary.upcoming}</span>
+                </div>
+              ) : null}
+            </div>
+          )}
+          <Button className="mt-4 w-full sm:w-auto" variant="secondary" onClick={() => navigate('/tasks')}>
+            View My Tasks
+          </Button>
+        </Card>
+      ) : null}
 
       <div className="mt-6 grid gap-4 xl:grid-cols-3">
         <Card className="p-5 xl:col-span-2">
