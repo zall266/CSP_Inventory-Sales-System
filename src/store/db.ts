@@ -578,7 +578,7 @@ function postAgentSale(input: {
     }
     const agentPrice = configuredAgentPrice(product)
     if (agentPrice === null) {
-      toast('Agent Price must be configured', `Set Agent Price on ${product.name} before creating an agent sale.`, 'warning')
+      toast('Agent Price has not been configured for this product.', product.name, 'warning')
       return null
     }
     const qty = Number(line.qty)
