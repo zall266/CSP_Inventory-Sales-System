@@ -621,6 +621,22 @@ export type ReturnReason = {
   updatedAt: string
 }
 
+export type EvidenceFile = {
+  fileId: string
+  fileName: string
+  mimeType: string
+  size: number
+  uploadedBy: string
+  uploadedAt: string
+  retentionUntil?: string
+  expired?: boolean
+}
+
+export type SalesReturnEvidence = {
+  photos?: EvidenceFile[]
+  video?: EvidenceFile
+}
+
 export type SalesReturnLine = {
   id: string
   productId: string
@@ -659,6 +675,7 @@ export type SalesReturn = {
   notes?: string
   photoUrl?: string
   photoName?: string
+  evidence?: SalesReturnEvidence
   createdBy: string
   createdByName: string
   createdAt: string
@@ -681,6 +698,7 @@ export type SalesReturnInput = {
   notes?: string
   photoUrl?: string
   photoName?: string
+  evidence?: SalesReturnEvidence
   items: Array<{
     productId: string
     returnedQty: number

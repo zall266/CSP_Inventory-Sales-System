@@ -21,8 +21,14 @@ import {
   SALES_RETURN_PERMISSION_KEYS,
   defaultReturnReasons,
   defaultReturnSources,
+  hydrateSalesReturn,
   hydrateSalesReturns,
+  isLegacyEvidenceFileId,
+  listSalesReturnEvidenceFiles,
   parseReturnPhoto,
+  purgeSalesReturnEvidenceFiles,
+  stampSalesReturnEvidence,
+  validateReturnEvidence,
   slugifyMasterName,
   validateSalesReturnInput,
 } from '@/features/returns/salesReturnModel'
@@ -39,6 +45,7 @@ import {
   parseTaskTime,
   resolveTaskReference,
 } from '@/features/tasks/taskModel'
+import { clearAttachmentBlobs, deleteAttachmentBlob } from '@/store/attachmentBlobs'
 import { applyBomCosts, hydrateProducts, normalizeUnit, parseNonNegativeMoney, productHasBom, productIsSellable, productIsUsed, purchaseQtyToBaseQty, resolveProductSku, skuIsUnique, validatePurchaseConversion } from '@/features/products/masterData'
 import { bomLinesForQty, consumptionCost, hasShortage, materialAvailability } from '@/features/manufacturing/helpers'
 import { buildSessionPlan, canEditSession, currentUser, mergePicking } from '@/features/manufacturing/sessionPlan'
@@ -111,6 +118,7 @@ import type {
   SaleInput,
   SaleStatus,
   SalesReturn,
+  SalesReturnEvidence,
   SalesReturnInput,
   Settings,
   StaffTask,
@@ -682,6 +690,48 @@ function postConfirmedOpeningBalance(doc: OpeningBalance) {
   })
   toast('Opening balance confirmed', doc.documentNo)
   return true
+}
+
+function resolveSalesReturnEvidence(
+  input: SalesReturnInput,
+  current: SalesReturn | undefined,
+  returnDate: string,
+  actorName: string,
+):
+  | { ok: true; evidence?: SalesReturnEvidence; photoUrl?: string; photoName?: string }
+  | { ok: false; reason: 'photo' | string } {
+  if (input.evidence) {
+    const stamped = stampSalesReturnEvidence(input.evidence, returnDate, actorName, nowIso())
+    const valid = validateReturnEvidence(stamped)
+    if (!valid.ok) return valid
+    const keepLegacy = (stamped?.photos ?? []).some((file) => isLegacyEvidenceFileId(file.fileId))
+    return {
+      ok: true,
+      evidence: stamped,
+      photoUrl: keepLegacy ? current?.photoUrl ?? input.photoUrl : undefined,
+      photoName: keepLegacy ? current?.photoName ?? input.photoName : undefined,
+    }
+  }
+  if (input.photoUrl) {
+    const parsed = parseReturnPhoto(input.photoUrl, input.photoName)
+    if (!parsed.ok) return { ok: false, reason: 'photo' }
+    return { ok: true, photoUrl: parsed.url, photoName: parsed.name, evidence: current?.evidence }
+  }
+  return {
+    ok: true,
+    evidence: current?.evidence,
+    photoUrl: current?.photoUrl,
+    photoName: current?.photoName,
+  }
+}
+
+function releaseOrphanReturnEvidence(previous: SalesReturn | undefined, next: SalesReturn) {
+  if (!previous) return
+  const keep = new Set(listSalesReturnEvidenceFiles(next.evidence).map((file) => file.fileId))
+  for (const file of listSalesReturnEvidenceFiles(previous.evidence)) {
+    if (keep.has(file.fileId) || isLegacyEvidenceFileId(file.fileId)) continue
+    void deleteAttachmentBlob(file.fileId)
+  }
 }
 
 function postConfirmedSalesReturn(doc: SalesReturn) {
@@ -1509,6 +1559,7 @@ export const db = {
     state = { ...hydrateData(cloneData(seed)), ui: { ...defaultUi(), toasts: [] } }
     persist(state)
     listeners.forEach((listener) => listener())
+    void clearAttachmentBlobs()
     toast('Demo data reset', 'All prototype data is back to the original sample.', 'info')
   },
 
@@ -3536,23 +3587,21 @@ export const db = {
       toast('Cannot save return', built.reason, 'warning')
       return null
     }
-    let photoUrl: string | undefined
-    let photoName: string | undefined
-    if (input.photoUrl) {
-      const parsed = parseReturnPhoto(input.photoUrl, input.photoName)
-      if (!parsed.ok) {
-        toast('Photo could not be saved', 'Use a JPG, PNG, or WebP image up to 5 MB.', 'danger')
-        return null
-      }
-      photoUrl = parsed.url
-      photoName = parsed.name
-    }
     const actor = currentUser(state)
+    const evidenceSaved = resolveSalesReturnEvidence(input, undefined, returnDate, actor.name)
+    if (!evidenceSaved.ok) {
+      toast(
+        evidenceSaved.reason === 'photo' ? 'Photo could not be saved' : 'Evidence could not be saved',
+        evidenceSaved.reason === 'photo' ? 'Use a JPG, PNG, or WebP image up to 5 MB.' : evidenceSaved.reason,
+        'danger',
+      )
+      return null
+    }
     const returnNo = nextDocNo(
       (state.salesReturns ?? []).map((row) => row.returnNo).filter((no) => no.startsWith('RT-')),
       'RT-',
     )
-    const doc: SalesReturn = {
+    const doc = hydrateSalesReturn({
       id: uid('sret'),
       returnNo,
       returnDate,
@@ -3571,13 +3620,14 @@ export const db = {
       items: built.lines,
       status: 'draft',
       notes: input.notes?.trim() || undefined,
-      photoUrl,
-      photoName,
+      photoUrl: evidenceSaved.photoUrl,
+      photoName: evidenceSaved.photoName,
+      evidence: evidenceSaved.evidence,
       createdBy: actor.id,
       createdByName: actor.name,
       createdAt: nowIso(),
       total: 0,
-    }
+    })
     setData({
       salesReturns: [doc, ...(state.salesReturns ?? [])],
       documentAuditLogs: pushDocAudit(
@@ -3627,19 +3677,18 @@ export const db = {
       toast('Cannot update return', built.reason, 'warning')
       return null
     }
-    let photoUrl = current.photoUrl
-    let photoName = current.photoName
-    if (input.photoUrl) {
-      const parsed = parseReturnPhoto(input.photoUrl, input.photoName)
-      if (!parsed.ok) {
-        toast('Photo could not be saved', 'Use a JPG, PNG, or WebP image up to 5 MB.', 'danger')
-        return null
-      }
-      photoUrl = parsed.url
-      photoName = parsed.name
-    }
+    const actor = currentUser(state)
     const returnDate = input.returnDate || current.returnDate
-    const doc: SalesReturn = {
+    const evidenceSaved = resolveSalesReturnEvidence(input, current, returnDate, actor.name)
+    if (!evidenceSaved.ok) {
+      toast(
+        evidenceSaved.reason === 'photo' ? 'Photo could not be saved' : 'Evidence could not be saved',
+        evidenceSaved.reason === 'photo' ? 'Use a JPG, PNG, or WebP image up to 5 MB.' : evidenceSaved.reason,
+        'danger',
+      )
+      return null
+    }
+    const doc = hydrateSalesReturn({
       ...current,
       returnDate,
       date: returnDate,
@@ -3656,13 +3705,15 @@ export const db = {
       warehouseId: built.warehouseId,
       items: built.lines,
       notes: input.notes?.trim() || undefined,
-      photoUrl,
-      photoName,
+      photoUrl: evidenceSaved.photoUrl,
+      photoName: evidenceSaved.photoName,
+      evidence: evidenceSaved.evidence,
       total: 0,
-    }
+    })
     setData({
       salesReturns: (state.salesReturns ?? []).map((row) => (row.id === id ? doc : row)),
     })
+    releaseOrphanReturnEvidence(current, doc)
     toast('Return updated', doc.returnNo)
     return doc
   },
@@ -5713,6 +5764,13 @@ export const db = {
     toast('Task completed', task.title)
     return true
   },
+  async purgeExpiredSalesReturnEvidence(now = nowIso()) {
+    const result = await purgeSalesReturnEvidenceFiles(state.salesReturns ?? [], now)
+    if (result.changed) setData({ salesReturns: result.returns })
+    return result
+  },
 }
+
+void db.purgeExpiredSalesReturnEvidence()
 
 export type MockApi = typeof db

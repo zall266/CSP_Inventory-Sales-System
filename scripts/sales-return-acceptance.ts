@@ -36,7 +36,14 @@ const {
   DEFAULT_RETURN_SOURCE_NAMES,
   DISPOSITION_EQUALITY_ERROR,
   SALES_RETURN_PERMISSION_KEYS,
+  evidenceCountLabel,
+  evidenceRetentionUntil,
+  hydrateSalesReturn,
+  isAllowedReturnPhotoFile,
+  isAllowedReturnVideoFile,
+  validateReturnEvidence,
 } = await import('@/features/returns/salesReturnModel')
+const { putAttachmentBlob, getAttachmentBlob, deleteAttachmentBlob, SALES_RETURN_EVIDENCE_KIND } = await import('@/store/attachmentBlobs')
 const { allocateBalanceFifo } = await import('@/features/manufacturing/sessionPlan')
 
 type Check = { name: string; ok: boolean; detail?: string }
@@ -481,7 +488,267 @@ check(
   'Mobile-compatible return entry uses stacked cards and full-width actions',
   pagesSrc.includes('space-y-3') && pagesSrc.includes('w-full sm:w-auto') && pagesSrc.includes('Add Item') && !pagesSrc.includes('nested modal'),
 )
-check('Photo evidence is optional in the editor', pagesSrc.includes('Optional') && pagesSrc.includes('Photo evidence'))
+check(
+  'Return Evidence section supports photos and one video',
+  pagesSrc.includes('Return Evidence') &&
+    pagesSrc.includes('Add Photos') &&
+    pagesSrc.includes('Add Video') &&
+    pagesSrc.includes('Optional') &&
+    pagesSrc.includes('Only one video can be attached to a Sales Return.') &&
+    pagesSrc.includes('Evidence expired / removed'),
+)
+check('Confirmed evidence is locked in the detail view', pagesSrc.includes('locked') && pagesSrc.includes('Return Evidence'))
+
+const tinyJpeg = 'data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQABAAD/2wAAAQQ='
+const returnDate = '2026-09-14T12:00:00+08:00'
+const until = evidenceRetentionUntil(returnDate)
+check('retentionUntil is Sales Return Date plus 2 years', until.includes('2028-09-14'), until)
+
+check(
+  'Image over 5MB is rejected',
+  isAllowedReturnPhotoFile({ name: 'big.jpg', type: 'image/jpeg', size: 5 * 1024 * 1024 + 1 }) === false,
+)
+check(
+  'Video over 50MB is rejected',
+  isAllowedReturnVideoFile({ name: 'big.mp4', type: 'video/mp4', size: 50 * 1024 * 1024 + 1 }) === false,
+)
+check(
+  'Unsupported image type is rejected',
+  isAllowedReturnPhotoFile({ name: 'scan.gif', type: 'image/gif', size: 1200 }) === false,
+)
+check(
+  'Unsupported video type is rejected',
+  isAllowedReturnVideoFile({ name: 'clip.mov', type: 'video/quicktime', size: 1200 }) === false,
+)
+check(
+  'Model blocks a video stored as a photo',
+  validateReturnEvidence({
+    photos: [{ fileId: 'x', fileName: 'clip.mp4', mimeType: 'video/mp4', size: 1000, uploadedBy: 'Admin', uploadedAt: returnDate }],
+  }).ok === false,
+)
+
+async function storeEvidenceFile(fileId: string, fileName: string, mimeType: string, body: string) {
+  await putAttachmentBlob({
+    fileId,
+    kind: SALES_RETURN_EVIDENCE_KIND,
+    fileName,
+    mimeType,
+    blob: new Blob([body], { type: mimeType }),
+  })
+  return {
+    fileId,
+    fileName,
+    mimeType,
+    size: body.length,
+    uploadedBy: 'Admin',
+    uploadedAt: returnDate,
+  }
+}
+
+const photoA = await storeEvidenceFile('evf-a', 'photo-1.jpg', 'image/jpeg', 'photo-a')
+const photoB = await storeEvidenceFile('evf-b', 'photo-2.jpg', 'image/jpeg', 'photo-b')
+const photoC = await storeEvidenceFile('evf-c', 'photo-3.jpg', 'image/jpeg', 'photo-c')
+const videoA = await storeEvidenceFile('evf-v', 'return-video.mp4', 'video/mp4', 'video-bytes')
+
+const none = db.saveSalesReturn({
+  sourceId: shopee!.id,
+  reasonId: reason!.id,
+  returnDate,
+  items: [{ productId: 'p-pack-st', returnedQty: 1, goodQty: 1, repackQty: 0, wasteQty: 0 }],
+})
+check('Return can be saved with no evidence', Boolean(none && !none.evidence?.photos?.length && !none.evidence?.video))
+
+const threePhotos = db.saveSalesReturn({
+  sourceId: shopee!.id,
+  reasonId: reason!.id,
+  returnDate,
+  evidence: { photos: [photoA, photoB, photoC] },
+  items: [{ productId: 'p-pack-st', returnedQty: 1, goodQty: 1, repackQty: 0, wasteQty: 0 }],
+})
+check(
+  'Return can be saved with 3 photos',
+  threePhotos?.evidence?.photos?.length === 3 && threePhotos.evidence.photos.every((file) => file.retentionUntil?.includes('2028-09-14')),
+  evidenceCountLabel(threePhotos?.evidence?.photos?.length ?? 0, 0),
+)
+check(
+  'Photo evidence is stored as file references, not Base64',
+  JSON.stringify(threePhotos?.evidence) !== undefined &&
+    !JSON.stringify(threePhotos?.evidence).includes('data:image') &&
+    !JSON.stringify(threePhotos).includes(tinyJpeg),
+)
+
+const oneVideo = db.saveSalesReturn({
+  sourceId: shopee!.id,
+  reasonId: reason!.id,
+  returnDate,
+  evidence: { video: videoA },
+  items: [{ productId: 'p-pack-st', returnedQty: 1, goodQty: 1, repackQty: 0, wasteQty: 0 }],
+})
+check('Return can be saved with 1 video', oneVideo?.evidence?.video?.fileName === 'return-video.mp4')
+check('Video bytes are not stored on the Sales Return record', !JSON.stringify(oneVideo).includes('video-bytes'))
+
+const mixed = db.saveSalesReturn({
+  sourceId: shopee!.id,
+  reasonId: reason!.id,
+  returnDate,
+  evidence: { photos: [photoA, photoB, photoC], video: videoA },
+  items: [{ productId: 'p-pack-st', returnedQty: 1, goodQty: 1, repackQty: 0, wasteQty: 0 }],
+})
+check(
+  'Return can be saved with 3 photos and 1 video',
+  mixed?.status === 'draft' && mixed.evidence?.photos?.length === 3 && Boolean(mixed.evidence.video),
+)
+
+const mixedKept = db.updateSalesReturn(mixed!.id, {
+  sourceId: shopee!.id,
+  reasonId: reason!.id,
+  returnDate,
+  evidence: mixed!.evidence,
+  items: [{ productId: 'p-pack-st', returnedQty: 1, goodQty: 1, repackQty: 0, wasteQty: 0 }],
+})
+check('Draft keeps evidence after save', mixedKept?.evidence?.photos?.length === 3 && mixedKept.evidence.video?.fileId === 'evf-v')
+
+const confirmedEvidence = db.createSalesReturn({
+  sourceId: shopee!.id,
+  reasonId: reason!.id,
+  returnDate,
+  evidence: { photos: [photoA], video: videoA },
+  items: [{ productId: 'p-pack-st', returnedQty: 1, goodQty: 1, repackQty: 0, wasteQty: 0 }],
+})
+check('Confirmed return keeps evidence attached', confirmedEvidence?.status === 'confirmed' && confirmedEvidence.evidence?.photos?.length === 1 && Boolean(confirmedEvidence.evidence.video))
+const lockedUpdate = db.updateSalesReturn(confirmedEvidence!.id, {
+  sourceId: shopee!.id,
+  reasonId: reason!.id,
+  returnDate,
+  evidence: { photos: [] },
+  items: [{ productId: 'p-pack-st', returnedQty: 1, goodQty: 1, repackQty: 0, wasteQty: 0 }],
+})
+check('Confirmed evidence cannot be replaced or deleted', lockedUpdate === null)
+const stillLocked = (db.getSnapshot().salesReturns ?? []).find((row) => row.id === confirmedEvidence!.id)
+check('Confirmed evidence remains after lock attempt', stillLocked?.evidence?.photos?.length === 1 && Boolean(stillLocked.evidence?.video))
+
+const oversized = db.saveSalesReturn({
+  sourceId: shopee!.id,
+  reasonId: reason!.id,
+  returnDate,
+  evidence: {
+    photos: [{ ...photoA, size: 6 * 1024 * 1024 }],
+  },
+  items: [{ productId: 'p-pack-st', returnedQty: 1, goodQty: 1, repackQty: 0, wasteQty: 0 }],
+})
+check('Save rejects an image larger than 5MB', oversized === null)
+
+const oversizedVideo = db.saveSalesReturn({
+  sourceId: shopee!.id,
+  reasonId: reason!.id,
+  returnDate,
+  evidence: {
+    video: { ...videoA, size: 51 * 1024 * 1024 },
+  },
+  items: [{ productId: 'p-pack-st', returnedQty: 1, goodQty: 1, repackQty: 0, wasteQty: 0 }],
+})
+check('Save rejects a video larger than 50MB', oversizedVideo === null)
+
+const badType = db.saveSalesReturn({
+  sourceId: shopee!.id,
+  reasonId: reason!.id,
+  returnDate,
+  evidence: {
+    photos: [{ ...photoA, fileName: 'notes.txt', mimeType: 'text/plain' }],
+  },
+  items: [{ productId: 'p-pack-st', returnedQty: 1, goodQty: 1, repackQty: 0, wasteQty: 0 }],
+})
+check('Save rejects an unsupported evidence type', badType === null)
+
+const livePhoto = await storeEvidenceFile('evf-live', 'keep.jpg', 'image/jpeg', 'keep-bytes')
+const liveReturn = db.saveSalesReturn({
+  sourceId: shopee!.id,
+  reasonId: reason!.id,
+  returnDate,
+  evidence: { photos: [livePhoto] },
+  items: [{ productId: 'p-pack-st', returnedQty: 1, goodQty: 1, repackQty: 0, wasteQty: 0 }],
+})
+const liveUntil = liveReturn?.evidence?.photos?.[0]?.retentionUntil ?? ''
+const beforeExpiry = new Date(new Date(liveUntil).getTime() - 1000).toISOString()
+const earlyPurge = await db.purgeExpiredSalesReturnEvidence(beforeExpiry)
+check('Non-expired evidence is not deleted', Boolean(await getAttachmentBlob('evf-live')) && (db.getSnapshot().salesReturns ?? []).some((row) => row.id === liveReturn?.id && !row.evidence?.photos?.[0]?.expired))
+check('Cleanup before retentionUntil does not mark evidence expired', !earlyPurge.deletedFileIds.includes('evf-live'))
+
+const expiredPhoto = await storeEvidenceFile('evf-old', 'old.jpg', 'image/jpeg', 'old-bytes')
+const expiredReturn = db.saveSalesReturn({
+  sourceId: shopee!.id,
+  reasonId: reason!.id,
+  returnDate: '2024-09-14T12:00:00+08:00',
+  evidence: { photos: [expiredPhoto] },
+  items: [{ productId: 'p-pack-st', returnedQty: 1, goodQty: 1, repackQty: 0, wasteQty: 0 }],
+})
+const expiryAt = expiredReturn?.evidence?.photos?.[0]?.retentionUntil ?? until
+const expiredPurge = await db.purgeExpiredSalesReturnEvidence(expiryAt)
+const expiredRow = (db.getSnapshot().salesReturns ?? []).find((row) => row.id === expiredReturn?.id)
+check('Expired evidence is eligible for cleanup', expiredPurge.deletedFileIds.includes('evf-old'))
+check('Physical expired file is removed from storage', (await getAttachmentBlob('evf-old')) === undefined)
+check('Sales Return record remains after evidence expiry', Boolean(expiredRow) && expiredRow?.status === 'draft')
+check(
+  'Expired evidence keeps historical metadata',
+  expiredRow?.evidence?.photos?.[0]?.fileName === 'old.jpg' && expiredRow?.evidence?.photos?.[0]?.expired === true,
+)
+
+await storeEvidenceFile('evf-missing', 'gone.jpg', 'image/jpeg', 'gone')
+const missingReturn = db.saveSalesReturn({
+  sourceId: shopee!.id,
+  reasonId: reason!.id,
+  returnDate,
+  evidence: {
+    photos: [
+      {
+        fileId: 'evf-missing',
+        fileName: 'gone.jpg',
+        mimeType: 'image/jpeg',
+        size: 4,
+        uploadedBy: 'Admin',
+        uploadedAt: returnDate,
+      },
+    ],
+  },
+  items: [{ productId: 'p-pack-st', returnedQty: 1, goodQty: 1, repackQty: 0, wasteQty: 0 }],
+})
+await deleteAttachmentBlob('evf-missing')
+let missingPurgeOk = true
+try {
+  await db.purgeExpiredSalesReturnEvidence(missingReturn?.evidence?.photos?.[0]?.retentionUntil ?? until)
+} catch {
+  missingPurgeOk = false
+}
+const missingRow = (db.getSnapshot().salesReturns ?? []).find((row) => row.id === missingReturn?.id)
+check('Missing evidence does not break cleanup', missingPurgeOk && missingRow?.evidence?.photos?.[0]?.expired === true)
+
+const legacy = db.saveSalesReturn({
+  sourceId: shopee!.id,
+  reasonId: reason!.id,
+  returnDate,
+  photoUrl: tinyJpeg,
+  photoName: 'legacy.jpg',
+  items: [{ productId: 'p-pack-st', returnedQty: 1, goodQty: 1, repackQty: 0, wasteQty: 0 }],
+})
+check(
+  'Legacy single photo hydrates without retentionUntil',
+  Boolean(legacy?.photoUrl) &&
+    legacy?.photoName === 'legacy.jpg' &&
+    legacy.evidence?.photos?.[0]?.fileName === 'legacy.jpg' &&
+    legacy.evidence?.photos?.[0]?.retentionUntil === undefined,
+)
+const legacyHydrated = hydrateSalesReturn({
+  ...(legacy as NonNullable<typeof legacy>),
+  evidence: undefined,
+})
+check('Legacy photo is preserved when evidence metadata is missing', legacyHydrated.evidence?.photos?.[0]?.fileId.startsWith('legacy:') === true && Boolean(legacyHydrated.photoUrl))
+await db.purgeExpiredSalesReturnEvidence('2030-01-01T00:00:00+08:00')
+const legacyAfter = (db.getSnapshot().salesReturns ?? []).find((row) => row.id === legacy?.id)
+check(
+  'Legacy photo without retentionUntil is not silently deleted',
+  Boolean(legacyAfter?.photoUrl) && legacyAfter?.evidence?.photos?.[0]?.expired !== true,
+)
+
 check('TypeScript sources are used', pkg.scripts.build.includes('tsc --noEmit'))
 check('Lint script uses TypeScript noEmit', pkg.scripts.lint.includes('tsc --noEmit'))
 check('Build script exists', Boolean(pkg.scripts.build))
