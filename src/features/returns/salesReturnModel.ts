@@ -1,12 +1,15 @@
 import { isAllowedReceivingPhotoFile, parseReceivingPhoto } from '@/features/receiving/receivingModel'
 import { DEFAULT_STORAGE_BOXES, storageBoxOptions } from '@/features/openingBalance/openingBalanceModel'
 import { companyWarehouses, isAgentWarehouseId, saleIsAgentSale } from '@/features/agent/agentModel'
+import { SALES_RETURN_EVIDENCE_KIND, deleteAttachmentBlob, getAttachmentBlob } from '@/store/attachmentBlobs'
 import type {
   AppState,
+  EvidenceFile,
   Product,
   ReturnReason,
   ReturnSource,
   SalesReturn,
+  SalesReturnEvidence,
   SalesReturnInput,
   SalesReturnLine,
 } from '@/types'
@@ -97,11 +100,231 @@ export function slugifyMasterName(name: string) {
 
 export const isAllowedReturnPhotoFile = isAllowedReceivingPhotoFile
 
+export const RETURN_VIDEO_MAX_BYTES = 50 * 1024 * 1024
+export const EVIDENCE_RETENTION_YEARS = 2
+const RETURN_VIDEO_TYPES = new Set(['video/mp4', 'video/webm'])
+
 export function parseReturnPhoto(value: unknown, fileName?: string) {
   const parsed = parseReceivingPhoto(value, fileName)
   if (!parsed.ok) return parsed
   const name = fileName?.trim() || parsed.name.replace(/^receiving-photo\./, 'return-photo.')
   return { ...parsed, name }
+}
+
+export function isLegacyEvidenceFileId(fileId: string) {
+  return fileId.startsWith('legacy:')
+}
+
+export function isLegacyEvidenceFile(file: Pick<EvidenceFile, 'fileId'>) {
+  return isLegacyEvidenceFileId(file.fileId)
+}
+
+export function evidenceRetentionUntil(returnDate: string, years = EVIDENCE_RETENTION_YEARS) {
+  const date = new Date(returnDate)
+  if (Number.isNaN(date.getTime())) return ''
+  date.setFullYear(date.getFullYear() + years)
+  return date.toISOString()
+}
+
+export function formatEvidenceSize(bytes: number) {
+  if (!(bytes > 0)) return '0 B'
+  if (bytes < 1024) return `${bytes} B`
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+}
+
+export function evidenceCountLabel(photoCount: number, videoCount: number) {
+  const photos = `${photoCount} Photo${photoCount === 1 ? '' : 's'}`
+  const videos = `${videoCount} Video${videoCount === 1 ? '' : 's'}`
+  return `${photos} · ${videos}`
+}
+
+function fileNameExt(name: string) {
+  return name.toLowerCase()
+}
+
+function normalizedImageType(type: string, name: string) {
+  const mime = type === 'image/jpg' ? 'image/jpeg' : type
+  if (mime) return mime
+  if (name.endsWith('.png')) return 'image/png'
+  if (name.endsWith('.webp')) return 'image/webp'
+  if (name.endsWith('.jpg') || name.endsWith('.jpeg')) return 'image/jpeg'
+  return mime
+}
+
+function normalizedVideoType(type: string, name: string) {
+  if (type) return type
+  if (name.endsWith('.webm')) return 'video/webm'
+  if (name.endsWith('.mp4')) return 'video/mp4'
+  return type
+}
+
+export function isAllowedReturnVideoFile(file: Pick<File, 'type' | 'name' | 'size'>) {
+  const name = fileNameExt(file.name)
+  const extOk = name.endsWith('.mp4') || name.endsWith('.webm')
+  const type = normalizedVideoType(file.type, name)
+  if (file.size > RETURN_VIDEO_MAX_BYTES) return false
+  if (RETURN_VIDEO_TYPES.has(type)) return true
+  if (!file.type || file.type === 'application/octet-stream') return extOk
+  return false
+}
+
+export function isAllowedReturnPhotoMeta(file: Pick<EvidenceFile, 'mimeType' | 'fileName' | 'size'>) {
+  return isAllowedReturnPhotoFile({ type: file.mimeType, name: file.fileName, size: file.size })
+}
+
+export function isAllowedReturnVideoMeta(file: Pick<EvidenceFile, 'mimeType' | 'fileName' | 'size'>) {
+  return isAllowedReturnVideoFile({ type: file.mimeType, name: file.fileName, size: file.size })
+}
+
+function mimeFromDataUrl(url: string) {
+  const match = url.match(/^data:([^;,]+)/)
+  return match?.[1]?.toLowerCase()
+}
+
+function dataUrlByteSize(url: string) {
+  const match = url.match(/^data:[^;]+;base64,([A-Za-z0-9+/=\s]+)$/)
+  if (!match) return 0
+  const b64 = match[1].replace(/\s/g, '')
+  const padding = b64.endsWith('==') ? 2 : b64.endsWith('=') ? 1 : 0
+  return Math.max(0, Math.floor((b64.length * 3) / 4) - padding)
+}
+
+export function legacyPhotoEvidence(row: Pick<SalesReturn, 'id' | 'photoUrl' | 'photoName' | 'createdBy' | 'createdByName' | 'createdAt' | 'returnDate'>): EvidenceFile | undefined {
+  if (!row.photoUrl) return undefined
+  const mime = mimeFromDataUrl(row.photoUrl) || 'image/jpeg'
+  return {
+    fileId: `legacy:${row.id}:photo`,
+    fileName: row.photoName || 'return-photo.jpg',
+    mimeType: mime === 'image/jpg' ? 'image/jpeg' : mime,
+    size: dataUrlByteSize(row.photoUrl),
+    uploadedBy: row.createdByName || row.createdBy || '',
+    uploadedAt: row.createdAt || row.returnDate,
+  }
+}
+
+export function listSalesReturnEvidenceFiles(evidence: SalesReturnEvidence | undefined): EvidenceFile[] {
+  const photos = evidence?.photos ?? []
+  return evidence?.video ? [...photos, evidence.video] : photos
+}
+
+export function hydrateSalesReturnEvidence(row: SalesReturn): SalesReturnEvidence | undefined {
+  const photos = [...(row.evidence?.photos ?? [])]
+  const video = row.evidence?.video
+  const hasPhotos = photos.length > 0
+  if (!hasPhotos) {
+    const legacy = legacyPhotoEvidence(row)
+    if (legacy) photos.push(legacy)
+  }
+  if (!photos.length && !video) return undefined
+  return { photos, video }
+}
+
+function evidenceMimeType(file: Pick<EvidenceFile, 'mimeType' | 'fileName'>) {
+  const name = file.fileName.toLowerCase()
+  if (file.mimeType.startsWith('video/') || name.endsWith('.mp4') || name.endsWith('.webm')) {
+    return normalizedVideoType(file.mimeType, name)
+  }
+  return normalizedImageType(file.mimeType, name) || file.mimeType
+}
+
+function stampEvidenceFile(file: EvidenceFile, returnDate: string, actorName: string, uploadedAt: string): EvidenceFile {
+  const keepOpenRetention = isLegacyEvidenceFile(file) && file.retentionUntil == null
+  return {
+    fileId: file.fileId,
+    fileName: file.fileName,
+    mimeType: evidenceMimeType(file),
+    size: file.size,
+    uploadedBy: file.uploadedBy || actorName,
+    uploadedAt: file.uploadedAt || uploadedAt,
+    retentionUntil: keepOpenRetention ? undefined : evidenceRetentionUntil(returnDate) || undefined,
+    expired: file.expired,
+  }
+}
+
+export function stampSalesReturnEvidence(
+  evidence: SalesReturnEvidence | undefined,
+  returnDate: string,
+  actorName: string,
+  uploadedAt: string,
+): SalesReturnEvidence | undefined {
+  if (!evidence) return undefined
+  const photos = (evidence.photos ?? []).map((file) => stampEvidenceFile(file, returnDate, actorName, uploadedAt))
+  const video = evidence.video ? stampEvidenceFile(evidence.video, returnDate, actorName, uploadedAt) : undefined
+  if (!photos.length && !video) return undefined
+  return { photos, video }
+}
+
+export function validateReturnEvidence(evidence: SalesReturnEvidence | undefined): { ok: true } | { ok: false; reason: string } {
+  if (!evidence) return { ok: true }
+  for (const photo of evidence.photos ?? []) {
+    if (photo.expired) continue
+    const mime = normalizedVideoType(photo.mimeType, photo.fileName)
+    if (RETURN_VIDEO_TYPES.has(mime) || photo.fileName.toLowerCase().endsWith('.mp4') || photo.fileName.toLowerCase().endsWith('.webm')) {
+      return { ok: false, reason: 'Use Add Photos for images and Add Video for video.' }
+    }
+    if (!isAllowedReturnPhotoMeta(photo)) return { ok: false, reason: 'Use a JPG, PNG, or WebP image up to 5 MB.' }
+  }
+  if (evidence.video && !evidence.video.expired) {
+    if (!isAllowedReturnVideoMeta(evidence.video)) return { ok: false, reason: 'Use an MP4 or WebM video up to 50 MB.' }
+  }
+  return { ok: true }
+}
+
+function parseRetentionMs(value?: string) {
+  if (!value) return null
+  const time = new Date(value).getTime()
+  return Number.isFinite(time) ? time : null
+}
+
+async function expireEvidenceFile(file: EvidenceFile, now: number, deletedFileIds: string[]): Promise<EvidenceFile> {
+  const until = parseRetentionMs(file.retentionUntil)
+  if (until == null || now < until) return file
+  try {
+    const record = await getAttachmentBlob(file.fileId)
+    if (record && record.kind !== SALES_RETURN_EVIDENCE_KIND) return file
+    await deleteAttachmentBlob(file.fileId)
+    deletedFileIds.push(file.fileId)
+  } catch {
+    // Missing or already-deleted blobs must not fail cleanup.
+  }
+  return file.expired ? file : { ...file, expired: true }
+}
+
+export async function purgeSalesReturnEvidenceFiles(returns: SalesReturn[], nowIso: string) {
+  const now = new Date(nowIso).getTime()
+  if (!Number.isFinite(now)) return { returns, changed: false, deletedFileIds: [] as string[] }
+  let changed = false
+  const deletedFileIds: string[] = []
+  const next: SalesReturn[] = []
+  for (const doc of returns) {
+    const evidence = hydrateSalesReturnEvidence(doc)
+    if (!evidence) {
+      next.push(doc)
+      continue
+    }
+    const photos = []
+    for (const photo of evidence.photos ?? []) photos.push(await expireEvidenceFile(photo, now, deletedFileIds))
+    const video = evidence.video ? await expireEvidenceFile(evidence.video, now, deletedFileIds) : undefined
+    const samePhotos =
+      photos.length === (evidence.photos ?? []).length && photos.every((file, index) => file === (evidence.photos ?? [])[index])
+    if (samePhotos && video === evidence.video) {
+      next.push(doc)
+      continue
+    }
+    changed = true
+    next.push({ ...doc, evidence: { photos, video } })
+  }
+  return { returns: next, changed, deletedFileIds }
+}
+
+export function salesReturnHasActiveEvidence(doc: SalesReturn) {
+  return listSalesReturnEvidenceFiles(hydrateSalesReturnEvidence(doc)).some((file) => !file.expired)
+}
+
+export function salesReturnEvidenceExpired(doc: SalesReturn) {
+  const files = listSalesReturnEvidenceFiles(hydrateSalesReturnEvidence(doc))
+  return files.length > 0 && files.every((file) => file.expired)
 }
 
 export function returnStorageBoxOptions(state: Pick<AppState, 'productionBalances'>) {
@@ -240,6 +463,7 @@ export function hydrateSalesReturn(row: SalesReturn): SalesReturn {
     createdByName: row.createdByName || '',
     createdAt: row.createdAt || returnDate,
     total,
+    evidence: hydrateSalesReturnEvidence(row),
   }
 }
 

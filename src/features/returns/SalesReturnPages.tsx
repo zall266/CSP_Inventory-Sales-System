@@ -1,6 +1,6 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Navigate, useNavigate, useParams, useSearchParams } from 'react-router-dom'
-import { Plus, Trash2 } from 'lucide-react'
+import { ImagePlus, Plus, Trash2, Video, X } from 'lucide-react'
 import { Badge, Button, Card, EmptyState, Field, FilterRow, Input, PageHeader, Select, StatusBadge, Textarea } from '@/components/ui'
 import { PermissionDenied } from '@/features/documents/A4Sheet'
 import { companyWarehouses, saleIsAgentSale } from '@/features/agent/agentModel'
@@ -8,16 +8,23 @@ import { hasPermission } from '@/features/settings/permissions'
 import {
   DISPOSITION_EQUALITY_ERROR,
   emptyReturnLine,
+  evidenceCountLabel,
+  evidenceRetentionUntil,
+  formatEvidenceSize,
+  hydrateSalesReturnEvidence,
   inputLinesFromSalesReturn,
   isAllowedReturnPhotoFile,
+  isAllowedReturnVideoFile,
+  isLegacyEvidenceFileId,
   remainingReturnableQty,
   returnStorageBoxOptions,
   returnableProducts,
   salesReturnTotals,
 } from '@/features/returns/salesReturnModel'
+import { getAttachmentObjectUrl, putAttachmentBlob, SALES_RETURN_EVIDENCE_KIND } from '@/store/attachmentBlobs'
 import { useApi, useLookups, useStore } from '@/store/hooks'
-import { formatDate, formatQty, PROTOTYPE_TODAY } from '@/utils/format'
-import type { SalesReturn, SalesReturnInput } from '@/types'
+import { formatDate, formatQty, PROTOTYPE_TODAY, uid } from '@/utils/format'
+import type { EvidenceFile, SalesReturn, SalesReturnEvidence, SalesReturnInput } from '@/types'
 
 function dateInputValue(iso?: string) {
   return (iso || PROTOTYPE_TODAY.toISOString()).slice(0, 10)
@@ -27,21 +34,127 @@ function toReturnDate(value: string) {
   return value ? `${value}T12:00:00+08:00` : PROTOTYPE_TODAY.toISOString()
 }
 
-function readPhotoFile(file: File): Promise<{ url: string; name: string } | { error: string }> {
-  if (!isAllowedReturnPhotoFile(file)) return Promise.resolve({ error: 'Use a JPG, PNG, or WebP image up to 5 MB.' })
-  return new Promise((resolve) => {
-    const reader = new FileReader()
-    reader.onload = () => {
-      const result = String(reader.result ?? '')
-      if (!result.startsWith('data:image/')) {
-        resolve({ error: 'That file could not be read as an image.' })
-        return
-      }
-      resolve({ url: result, name: file.name })
+function mimeFromFile(file: File, fallback: string) {
+  if (file.type === 'image/jpg') return 'image/jpeg'
+  return file.type || fallback
+}
+
+function makeEvidenceMeta(file: File, mimeType: string, actorName: string, returnDate: string): EvidenceFile {
+  return {
+    fileId: uid('evf'),
+    fileName: file.name,
+    mimeType,
+    size: file.size,
+    uploadedBy: actorName,
+    uploadedAt: PROTOTYPE_TODAY.toISOString(),
+    retentionUntil: evidenceRetentionUntil(toReturnDate(returnDate)),
+  }
+}
+
+function ReturnEvidenceViewer({
+  doc,
+  files,
+  locked,
+  previewUrls,
+  onRemovePhoto,
+  onRemoveVideo,
+}: {
+  doc?: SalesReturn
+  files: SalesReturnEvidence
+  locked?: boolean
+  previewUrls?: Record<string, string>
+  onRemovePhoto?: (fileId: string) => void
+  onRemoveVideo?: () => void
+}) {
+  const photos = files.photos ?? []
+  const video = files.video
+  const [urls, setUrls] = useState<Record<string, string>>(previewUrls ?? {})
+  const listed = [...photos, ...(video ? [video] : [])]
+  const allExpired = listed.length > 0 && listed.every((file) => file.expired)
+
+  useEffect(() => {
+    let cancelled = false
+    const list = [...photos, ...(video ? [video] : [])]
+    void Promise.all(
+      list.map(async (file) => {
+        if (file.expired) return [file.fileId, ''] as const
+        if (previewUrls?.[file.fileId]) return [file.fileId, previewUrls[file.fileId]] as const
+        if (isLegacyEvidenceFileId(file.fileId) && doc?.photoUrl) return [file.fileId, doc.photoUrl] as const
+        const url = await getAttachmentObjectUrl(file.fileId)
+        return [file.fileId, url ?? ''] as const
+      }),
+    ).then((entries) => {
+      if (cancelled) return
+      setUrls(Object.fromEntries(entries.filter(([, url]) => url)))
+    })
+    return () => {
+      cancelled = true
     }
-    reader.onerror = () => resolve({ error: 'That file could not be read as an image.' })
-    reader.readAsDataURL(file)
-  })
+  }, [doc?.photoUrl, photos, previewUrls, video])
+
+  if (!photos.length && !video) return null
+
+  return (
+    <div className="space-y-3">
+      {allExpired ? <div className="text-sm text-slate-500">Evidence expired / removed</div> : null}
+      {photos.length ? (
+        <div className="flex flex-wrap gap-2">
+          {photos.map((file) => (
+            <div key={file.fileId} className="relative w-20">
+              {file.expired ? (
+                <div className="flex h-20 w-20 items-center justify-center rounded-xl border border-dashed border-slate-200 bg-slate-50 p-2 text-center text-[10px] leading-tight text-slate-500">
+                  Evidence expired / removed
+                </div>
+              ) : urls[file.fileId] ? (
+                <img src={urls[file.fileId]} alt={file.fileName} className="h-20 w-20 rounded-xl object-cover" />
+              ) : (
+                <div className="flex h-20 w-20 items-center justify-center rounded-xl bg-slate-100 text-lg">📷</div>
+              )}
+              <div className="mt-1 truncate text-[10px] text-slate-500" title={file.fileName}>
+                {file.fileName}
+              </div>
+              {!locked && onRemovePhoto ? (
+                <button
+                  type="button"
+                  className="absolute -right-1 -top-1 flex h-5 w-5 items-center justify-center rounded-full bg-slate-800 text-white"
+                  aria-label={`Remove ${file.fileName}`}
+                  onClick={() => onRemovePhoto(file.fileId)}
+                >
+                  <X size={12} />
+                </button>
+              ) : null}
+            </div>
+          ))}
+        </div>
+      ) : null}
+      {video ? (
+        <div className="relative max-w-sm rounded-xl border border-slate-100 p-3">
+          <div className="flex items-start justify-between gap-2">
+            <div className="min-w-0">
+              <div className="truncate text-sm font-medium">🎥 {video.fileName}</div>
+              <div className="text-xs text-slate-500">{formatEvidenceSize(video.size)}</div>
+            </div>
+            {!locked && onRemoveVideo ? (
+              <button
+                type="button"
+                className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-slate-500 hover:bg-slate-100"
+                aria-label={`Remove ${video.fileName}`}
+                onClick={onRemoveVideo}
+              >
+                <X size={14} />
+              </button>
+            ) : null}
+          </div>
+          {video.expired ? (
+            <div className="mt-2 text-sm text-slate-500">Evidence expired / removed</div>
+          ) : urls[video.fileId] ? (
+            <video className="mt-2 max-h-48 w-full rounded-lg bg-black" src={urls[video.fileId]} controls playsInline />
+          ) : null}
+        </div>
+      ) : null}
+      <div className="text-xs text-slate-500">{evidenceCountLabel(photos.length, video ? 1 : 0)}</div>
+    </div>
+  )
 }
 
 function createdByName(state: ReturnType<typeof useStore>, row: SalesReturn) {
@@ -180,9 +293,14 @@ export function SalesReturnEditorPage({ draft }: { draft?: SalesReturn }) {
   const [saleId, setSaleId] = useState(draft?.originalSaleId || initialSale?.id || '')
   const [invoiceSearch, setInvoiceSearch] = useState(draft?.originalDocumentNo || initialSale?.invoiceNo || invoiceQuery)
   const [notes, setNotes] = useState(draft?.notes ?? '')
-  const [photoUrl, setPhotoUrl] = useState(draft?.photoUrl ?? '')
-  const [photoName, setPhotoName] = useState(draft?.photoName ?? '')
+  const initialEvidence = draft ? hydrateSalesReturnEvidence(draft) : undefined
+  const [photos, setPhotos] = useState<EvidenceFile[]>(initialEvidence?.photos ?? [])
+  const [video, setVideo] = useState<EvidenceFile | undefined>(initialEvidence?.video)
   const [photoError, setPhotoError] = useState('')
+  const pendingBlobs = useRef(new Map<string, Blob>())
+  const photoInputRef = useRef<HTMLInputElement>(null)
+  const videoInputRef = useRef<HTMLInputElement>(null)
+  const [previewUrls, setPreviewUrls] = useState<Record<string, string>>({})
   const [lines, setLines] = useState<SalesReturnInput['items']>(
     draft ? inputLinesFromSalesReturn(draft) : [emptyReturnLine(products.find((row) => row.id === 'p-pack-mt') ?? products[0])],
   )
@@ -218,9 +336,29 @@ export function SalesReturnEditorPage({ draft }: { draft?: SalesReturn }) {
     )
   }
 
-  const submit = (confirm: boolean) => {
+  const actorName = state.users.find((user) => user.id === state.ui.currentUserId)?.name ?? 'Admin'
+
+  const submit = async (confirm: boolean) => {
     if (busy) return
     setBusy(true)
+    const evidence: SalesReturnEvidence = { photos, video }
+    try {
+      for (const file of [...photos, ...(video ? [video] : [])]) {
+        const blob = pendingBlobs.current.get(file.fileId)
+        if (!blob) continue
+        await putAttachmentBlob({
+          fileId: file.fileId,
+          kind: SALES_RETURN_EVIDENCE_KIND,
+          fileName: file.fileName,
+          mimeType: file.mimeType,
+          blob,
+        })
+      }
+    } catch {
+      setPhotoError('Evidence could not be stored. Try a smaller file.')
+      setBusy(false)
+      return
+    }
     const body: SalesReturnInput = {
       returnDate: toReturnDate(returnDate),
       sourceId,
@@ -230,8 +368,7 @@ export function SalesReturnEditorPage({ draft }: { draft?: SalesReturn }) {
       reasonId,
       warehouseId: matchedSale && !saleIsAgentSale(state, matchedSale) ? matchedSale.warehouseId : state.settings.defaultWarehouseId,
       notes,
-      photoUrl: photoUrl || undefined,
-      photoName: photoName || undefined,
+      evidence,
       items: lines.filter((line) => Number(line.returnedQty) > 0),
     }
     let created: SalesReturn | null | undefined
@@ -326,27 +463,114 @@ export function SalesReturnEditorPage({ draft }: { draft?: SalesReturn }) {
             </Button>
           </div>
         ) : null}
-        <Field label="Photo evidence">
-          <Input
-            type="file"
-            accept="image/jpeg,image/png,image/webp,.jpg,.jpeg,.png,.webp"
-            onChange={async (event) => {
-              const file = event.target.files?.[0]
-              event.target.value = ''
-              if (!file) return
-              const result = await readPhotoFile(file)
-              if ('error' in result) {
-                setPhotoError(result.error)
-                return
-              }
-              setPhotoError('')
-              setPhotoUrl(result.url)
-              setPhotoName(result.name)
-            }}
-          />
-          {photoName ? <div className="mt-1 text-xs text-slate-500">{photoName}</div> : <div className="mt-1 text-xs text-slate-400">Optional · JPG, PNG or WebP up to 5 MB</div>}
+        <div className="border-t border-slate-100 pt-4">
+          <div className="mb-2 text-sm font-semibold">Return Evidence</div>
+          <div className="mb-3 flex flex-col gap-2 sm:flex-row">
+            <Button type="button" variant="secondary" className="w-full sm:w-auto" onClick={() => photoInputRef.current?.click()}>
+              <ImagePlus size={16} /> Add Photos
+            </Button>
+            <Button
+              type="button"
+              variant="secondary"
+              className="w-full sm:w-auto"
+              onClick={() => {
+                if (video) {
+                  setPhotoError('Only one video can be attached to a Sales Return.')
+                  return
+                }
+                videoInputRef.current?.click()
+              }}
+            >
+              <Video size={16} /> Add Video
+            </Button>
+            <input
+              ref={photoInputRef}
+              type="file"
+              accept="image/jpeg,image/png,image/webp,.jpg,.jpeg,.png,.webp"
+              multiple
+              className="hidden"
+              onChange={(event) => {
+                const files = [...(event.target.files ?? [])]
+                event.target.value = ''
+                if (!files.length) return
+                const next = [...photos]
+                const nextUrls = { ...previewUrls }
+                let error = ''
+                for (const file of files) {
+                  if (!isAllowedReturnPhotoFile(file)) {
+                    error = 'Use a JPG, PNG, or WebP image up to 5 MB.'
+                    continue
+                  }
+                  const meta = makeEvidenceMeta(file, mimeFromFile(file, 'image/jpeg'), actorName, returnDate)
+                  pendingBlobs.current.set(meta.fileId, file)
+                  nextUrls[meta.fileId] = URL.createObjectURL(file)
+                  next.push(meta)
+                }
+                setPhotos(next)
+                setPreviewUrls(nextUrls)
+                setPhotoError(error)
+              }}
+            />
+            <input
+              ref={videoInputRef}
+              type="file"
+              accept="video/mp4,video/webm,.mp4,.webm"
+              className="hidden"
+              onChange={(event) => {
+                const file = event.target.files?.[0]
+                event.target.value = ''
+                if (!file) return
+                if (video) {
+                  setPhotoError('Only one video can be attached to a Sales Return.')
+                  return
+                }
+                if (!isAllowedReturnVideoFile(file)) {
+                  setPhotoError('Use an MP4 or WebM video up to 50 MB.')
+                  return
+                }
+                const meta = makeEvidenceMeta(file, mimeFromFile(file, 'video/mp4'), actorName, returnDate)
+                pendingBlobs.current.set(meta.fileId, file)
+                setPreviewUrls((current) => ({ ...current, [meta.fileId]: URL.createObjectURL(file) }))
+                setVideo(meta)
+                setPhotoError('')
+              }}
+            />
+          </div>
+          {photos.length || video ? (
+            <ReturnEvidenceViewer
+              doc={draft}
+              files={{ photos, video }}
+              previewUrls={previewUrls}
+              onRemovePhoto={(fileId) => {
+                pendingBlobs.current.delete(fileId)
+                const url = previewUrls[fileId]
+                if (url) URL.revokeObjectURL(url)
+                setPreviewUrls((current) => {
+                  const next = { ...current }
+                  delete next[fileId]
+                  return next
+                })
+                setPhotos(photos.filter((file) => file.fileId !== fileId))
+              }}
+              onRemoveVideo={() => {
+                if (video) {
+                  pendingBlobs.current.delete(video.fileId)
+                  const url = previewUrls[video.fileId]
+                  if (url) URL.revokeObjectURL(url)
+                  setPreviewUrls((current) => {
+                    const next = { ...current }
+                    delete next[video.fileId]
+                    return next
+                  })
+                }
+                setVideo(undefined)
+              }}
+            />
+          ) : (
+            <div className="text-xs text-slate-400">Optional · JPG, PNG or WebP up to 5 MB · one MP4/WebM video up to 50 MB</div>
+          )}
           {photoError ? <div className="mt-1 text-xs text-rose-600">{photoError}</div> : null}
-        </Field>
+        </div>
       </Card>
 
       <div className="mb-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
@@ -611,10 +835,10 @@ export function SalesReturnDetailPage() {
           </div>
         ) : null}
       </Card>
-      {row.photoUrl ? (
+      {hydrateSalesReturnEvidence(row) ? (
         <Card className="mb-4 p-4">
-          <div className="mb-2 text-sm font-semibold">Photo evidence</div>
-          <img src={row.photoUrl} alt={row.photoName || 'Return evidence'} className="max-h-64 rounded-xl object-contain" />
+          <div className="mb-2 text-sm font-semibold">Return Evidence</div>
+          <ReturnEvidenceViewer doc={row} files={hydrateSalesReturnEvidence(row)!} locked />
         </Card>
       ) : null}
       <Card className="p-4">
