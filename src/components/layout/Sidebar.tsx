@@ -11,9 +11,11 @@ import {
   FileText,
   FlaskConical,
   History,
+  Layers,
   LayoutDashboard,
   MapPin,
   Package,
+  PackageCheck,
   PackageMinus,
   PackagePlus,
   Receipt,
@@ -54,8 +56,8 @@ export const navGroups: NavGroup[] = [
       { to: '/sales/quotations', label: 'Quotations', icon: FileText },
       { to: '/sales/delivery-orders', label: 'Delivery Orders', icon: Truck },
       { to: '/pos', label: 'POS', icon: ShoppingCart },
-      { to: '/sales/agents', label: 'Agent', icon: Contact },
-      { to: '/sales-returns', label: 'Sales Returns', icon: PackageMinus },
+      { to: '/sales/returns', label: 'Returns', icon: PackageMinus },
+      { to: '/sales/agents', label: 'Agents', icon: Contact },
       { to: '/customers', label: 'Customers', icon: Users },
     ],
   },
@@ -64,6 +66,7 @@ export const navGroups: NavGroup[] = [
     label: 'PURCHASES',
     items: [
       { to: '/purchases', label: 'Purchases', icon: ShoppingBag },
+      { to: '/receiving', label: 'Receiving', icon: PackageCheck },
       { to: '/purchase-returns', label: 'Purchase Returns', icon: PackagePlus },
       { to: '/suppliers', label: 'Suppliers', icon: Truck },
     ],
@@ -74,6 +77,7 @@ export const navGroups: NavGroup[] = [
     items: [
       { to: '/inventory', label: 'Inventory', icon: Warehouse },
       { to: '/inventory/warehouse-map', label: 'Warehouse Map', icon: MapPin },
+      { to: '/inventory/opening-balance', label: 'Opening Balance', icon: Layers },
       { to: '/stock-movements', label: 'Stock Movements', icon: ClipboardList },
       { to: '/stock-adjustment', label: 'Stock Adjustment', icon: BadgePercent },
       { to: '/stock-transfer', label: 'Stock Transfer', icon: ArrowLeftRight },
@@ -159,10 +163,13 @@ function pathActive(pathname: string, to: string) {
 function navItemVisible(state: ReturnType<typeof useStore>, item: NavItem) {
   if (item.to === '/settings/users') return canAccessUsersAndRoles(state, actorUser(state))
   if (item.to === '/inventory/warehouse-map') return hasPermission(state, 'warehouse_map.view')
+  if (item.to === '/inventory/opening-balance') return hasPermission(state, 'opening_balance.view')
   if (item.to === '/sales/agents') return hasPermission(state, 'agent.view') || hasPermission(state, 'agent.manage') || Boolean(currentLinkedAgent(state))
   if (item.to === '/tasks') return hasPermission(state, 'task.view')
   if (item.to === '/tasks/manage') return hasPermission(state, 'task.create') || hasPermission(state, 'task.edit') || hasPermission(state, 'task.assign')
   if (item.to === '/tasks/categories') return hasPermission(state, 'task.category.manage')
+  if (item.to === '/receiving') return hasPermission(state, 'receiving.view')
+  if (item.to === '/sales/returns') return hasPermission(state, 'sales_return.view')
   return true
 }
 

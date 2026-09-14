@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import { Plus, Trash2 } from 'lucide-react'
 import { Button, Card, Field, FilterRow, Input, KpiCard, PageHeader, Select, StatusBadge } from '@/components/ui'
 import { companyWarehouses, isCompanyWarehouseId } from '@/features/agent/agentModel'
@@ -27,7 +27,7 @@ export function PurchasesPage() {
   )
   return (
     <div>
-      <PageHeader title="Purchases" subtitle="Receive stock and track supplier invoices." actions={<Button onClick={() => navigate('/purchases/new')}><Plus size={16} /> New purchase</Button>} />
+      <PageHeader title="Purchases" subtitle="Supplier invoices and purchase accounting. Physical arrivals are recorded in Receiving." actions={<Button onClick={() => navigate('/purchases/new')}><Plus size={16} /> New purchase</Button>} />
       <div className="mb-5 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
         <KpiCard label="Total purchases" value={formatMoney(state.purchases.reduce((s, p) => s + p.total, 0), { compact: true })} />
         <KpiCard label="Received" value={String(state.purchases.filter((p) => p.status === 'received' || p.status === 'paid' || p.status === 'partial').length)} />
@@ -82,13 +82,29 @@ export function NewPurchasePage() {
   const state = useStore()
   const api = useApi()
   const navigate = useNavigate()
-  const [supplierId, setSupplierId] = useState(state.suppliers[0]?.id ?? '')
-  const [warehouseId, setWarehouseId] = useState(state.settings.defaultWarehouseId)
+  const [searchParams] = useSearchParams()
+  const linkedReceivingId = searchParams.get('receivingId') || ''
+  const linkedReceiving = (state.receivings ?? []).find((row) => row.id === linkedReceivingId)
+  const [supplierId, setSupplierId] = useState(linkedReceiving?.supplierId || state.suppliers[0]?.id || '')
+  const [warehouseId, setWarehouseId] = useState(linkedReceiving?.warehouseId || state.settings.defaultWarehouseId)
   const [date, setDate] = useState('2026-09-10')
   const [invoiceNumber, setInvoiceNumber] = useState('')
-  const [lines, setLines] = useState<DraftLine[]>([
-    { productId: 'p-cp', qty: 10, price: 22, discount: 0, batchNo: '', expiry: '' },
-  ])
+  const [lines, setLines] = useState<DraftLine[]>(() => {
+    if (linkedReceiving) {
+      return linkedReceiving.items.map((line) => {
+        const product = state.products.find((item) => item.id === line.productId)
+        return {
+          productId: line.productId,
+          qty: line.qty,
+          price: product?.purchaseCost ?? product?.costPrice ?? 0,
+          discount: 0,
+          batchNo: line.batchNo ?? '',
+          expiry: line.expiry ?? '',
+        }
+      })
+    }
+    return [{ productId: 'p-cp', qty: 10, price: 22, discount: 0, batchNo: '', expiry: '' }]
+  })
   const [discount, setDiscount] = useState(0)
   const [tax, setTax] = useState(0)
   const [shipping, setShipping] = useState(0)
@@ -113,13 +129,22 @@ export function NewPurchasePage() {
       shipping,
       receive,
       paidAmount: 0,
+      receivingId: linkedReceiving?.id,
     })
-    if (created) navigate('/purchases')
+    if (created) navigate(linkedReceiving ? `/receiving/${linkedReceiving.id}` : '/purchases')
   }
 
   return (
     <div>
-      <PageHeader title="New Purchase" subtitle="Add lines, then save a draft or receive into stock." />
+      <PageHeader
+        title="New Purchase"
+        subtitle={linkedReceiving ? `Accounting for ${linkedReceiving.receivingNo}. Stock already increased at receiving.` : 'Add lines, then save a draft or receive into stock.'}
+      />
+      {linkedReceiving ? (
+        <Card className="mb-4 border-emerald-100 bg-emerald-50 p-4 text-sm text-emerald-800">
+          Linked to receiving {linkedReceiving.receivingNo}. Saving this purchase will not increase stock again.
+        </Card>
+      ) : null}
       <Card className="mb-4 grid gap-4 p-5 sm:grid-cols-2 lg:grid-cols-4">
         <Field label="Supplier">
           <Select value={supplierId} onChange={(e) => setSupplierId(e.target.value)}>
@@ -176,7 +201,7 @@ export function NewPurchasePage() {
         </div>
         <div className="mt-6 flex justify-end gap-2">
           <Button variant="secondary" onClick={() => submit(false)}>Save draft</Button>
-          <Button onClick={() => submit(true)}>Receive purchase</Button>
+          <Button onClick={() => submit(true)}>{linkedReceiving ? 'Save purchase' : 'Receive purchase'}</Button>
         </div>
       </Card>
     </div>

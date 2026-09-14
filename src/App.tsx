@@ -9,7 +9,8 @@ import { WarehouseMapPage } from '@/features/warehouse/WarehouseMapPage'
 import { StockAdjustmentPage, StockCountPage, StockMovementsPage, StockTransferPage } from '@/features/inventory/StockPages'
 import { NewPurchasePage, PurchasesPage } from '@/features/purchases/PurchasesPage'
 import { CustomersPage, SuppliersPage } from '@/features/parties/PartiesPages'
-import { PurchaseReturnsPage, SalesReturnsPage } from '@/features/returns/ReturnsPages'
+import { PurchaseReturnsPage } from '@/features/returns/ReturnsPages'
+import { LegacySalesReturnsRedirect, SalesReturnDetailPage, SalesReturnEditorPage, SalesReturnsListPage } from '@/features/returns/SalesReturnPages'
 import { ExpensesPage, PayablesPage, PaymentsPage, ReceivablesPage } from '@/features/finance/FinancePages'
 import { InventoryReportPage, ProfitReportPage, PurchaseReportPage, SalesReportPage } from '@/features/reports/ReportsPages'
 import { BusinessSettingsPage, InventorySettingsPage, SalesSettingsPage, UsersSettingsPage } from '@/features/settings/SettingsPages'
@@ -29,6 +30,8 @@ import { InvoiceDetailPage, InvoicePrintPage } from '@/features/documents/Invoic
 import { DeliveryOrdersPage, DeliveryEditorPage, DeliveryDetailPage, DeliveryPrintPage } from '@/features/documents/DeliveryPages'
 import { AgentDetailPage, AgentsPage } from '@/features/agent/AgentPages'
 import { MyTasksPage, TaskCategoriesPage, TaskDetailPage, TaskEditorPage, TaskManagePage } from '@/features/tasks/TaskPages'
+import { NewReceivingPage, ReceivingDetailPage, ReceivingListPage } from '@/features/receiving/ReceivingPages'
+import { OpeningBalancePage } from '@/features/openingBalance/OpeningBalancePages'
 
 export default function App() {
   return (
@@ -52,14 +55,22 @@ export default function App() {
           <Route path="/pos" element={<PosPage />} />
           <Route path="/sales/agents" element={<AgentsPage />} />
           <Route path="/sales/agents/:id" element={<AgentDetailPage />} />
-          <Route path="/sales-returns" element={<SalesReturnsPage />} />
+          <Route path="/sales/returns" element={<SalesReturnsListPage />} />
+          <Route path="/sales/returns/new" element={<SalesReturnEditorPage />} />
+          <Route path="/sales/returns/:id" element={<SalesReturnDetailPage />} />
+          <Route path="/sales-returns" element={<LegacySalesReturnsRedirect />} />
           <Route path="/customers" element={<CustomersPage />} />
           <Route path="/purchases" element={<PurchasesPage />} />
           <Route path="/purchases/new" element={<NewPurchasePage />} />
+          <Route path="/receiving" element={<ReceivingListPage />} />
+          <Route path="/receiving/new" element={<NewReceivingPage />} />
+          <Route path="/receiving/:id" element={<ReceivingDetailPage />} />
           <Route path="/purchase-returns" element={<PurchaseReturnsPage />} />
           <Route path="/suppliers" element={<SuppliersPage />} />
           <Route path="/inventory" element={<InventoryPage />} />
           <Route path="/inventory/warehouse-map" element={<WarehouseMapPage />} />
+          <Route path="/inventory/opening-balance/:id" element={<OpeningBalancePage />} />
+          <Route path="/inventory/opening-balance" element={<OpeningBalancePage />} />
           <Route path="/stock-movements" element={<StockMovementsPage />} />
           <Route path="/stock-adjustment" element={<StockAdjustmentPage />} />
           <Route path="/stock-transfer" element={<StockTransferPage />} />

@@ -34,6 +34,9 @@ export function movementLabel(type: string) {
     purchase: 'Purchase',
     sale: 'Sale',
     sales_return: 'Sales Return',
+    sales_return_good: 'Sales Return Good',
+    sales_return_repack: 'Sales Return Repack',
+    sales_return_waste: 'Sales Return Waste',
     purchase_return: 'Purchase Return',
     adjustment: 'Adjustment',
     transfer_in: 'Transfer In',
@@ -45,6 +48,8 @@ export function movementLabel(type: string) {
     production_wastage: 'Waste',
     production_balance_in: 'Production Balance',
     production_balance_out: 'Production Balance Used',
+    receiving: 'Receiving',
+    opening_balance: 'Opening Balance',
   }
   return map[type] ?? type
 }
