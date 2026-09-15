@@ -4,7 +4,7 @@ import type { AppState, Product } from '@/types'
 import { lineAmount } from './documentModel'
 import { formatMoney, round2 } from '@/utils/format'
 import { productIsSellable } from '@/features/products/masterData'
-import { configuredAgentPrice, currentLinkedAgent } from '@/features/agent/agentModel'
+import { belowAgentPriceMessage, configuredAgentPrice, currentLinkedAgent, defaultAgentSellingPrice } from '@/features/agent/agentModel'
 
 export type DraftLine = { productId: string; description: string; qty: number; unit: string; price: number; discount: number }
 
@@ -15,13 +15,12 @@ export function catalogProducts(state: AppState, extra?: Product[]) {
 
 export function emptyLine(state: AppState, extra?: Product[]): DraftLine {
   const product = catalogProducts(state, extra)[0] ?? state.products[0]
-  const agentPrice = currentLinkedAgent(state) ? configuredAgentPrice(product) : null
   return {
     productId: product?.id ?? '',
     description: product?.name ?? '',
     qty: 1,
     unit: product?.unit ?? 'pcs',
-    price: product ? (agentPrice !== null ? Math.max(product.sellingPrice, agentPrice) : product.sellingPrice) : 0,
+    price: product ? (currentLinkedAgent(state) ? defaultAgentSellingPrice(product) : product.sellingPrice) : 0,
     discount: 0,
   }
 }
@@ -52,8 +51,7 @@ export function LineEditor({
             merged.description = merged.description && merged.description !== line.description ? merged.description : product.name
             merged.unit = product.unit
             if (withPrices && next.price === undefined) {
-              const agentPrice = currentLinkedAgent(state) ? configuredAgentPrice(product) : null
-              merged.price = agentPrice !== null ? Math.max(product.sellingPrice, agentPrice) : product.sellingPrice
+              merged.price = currentLinkedAgent(state) ? defaultAgentSellingPrice(product) : product.sellingPrice
             }
           }
         }
@@ -103,7 +101,19 @@ export function LineEditor({
                 {withPrices && (
                   <>
                     <td>
-                      <input type="number" min={0} step="0.01" className="h-10 w-24 rounded-xl border border-slate-200 px-2 text-sm" value={line.price} onChange={(e) => patch(index, { price: Number(e.target.value) })} />
+                      {(() => {
+                        const product = state.products.find((item) => item.id === line.productId)
+                        const agentMin = currentLinkedAgent(state) ? configuredAgentPrice(product) : null
+                        const belowMin = agentMin !== null && round2(line.price) < agentMin
+                        return (
+                          <>
+                            <input type="number" min={0} step="0.01" className="h-10 w-24 rounded-xl border border-slate-200 px-2 text-sm" value={line.price} onChange={(e) => patch(index, { price: Number(e.target.value) })} />
+                            {belowMin && agentMin !== null && (
+                              <div className="mt-1 text-[11px] text-amber-700">{belowAgentPriceMessage(agentMin)}</div>
+                            )}
+                          </>
+                        )
+                      })()}
                     </td>
                     {showDiscount && (
                       <td>

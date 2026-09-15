@@ -23,10 +23,12 @@ import {
   agentSalesForAgent,
   agentStockRows,
   agentStockTotal,
+  belowAgentPriceMessage,
   calcAgentSaleEarnings,
   canUserRequestWithdrawalForAgent,
   companyWarehouses,
   configuredAgentPrice,
+  defaultAgentSellingPrice,
   isAllowedWithdrawalReceiptFile,
   linkedAgentForUser,
   currentLinkedAgent,
@@ -107,12 +109,7 @@ function AgentSaleModal({
   const defaultProductId = stockedId ?? products.find((product) => product.id === 'p-pack-mt')?.id ?? products[0]?.id ?? ''
   const methods = state.settings.enabledPaymentMethods
   const defaultProduct = products.find((item) => item.id === defaultProductId)
-  const defaultAgentPrice = configuredAgentPrice(defaultProduct)
-  const defaultSelling = defaultProduct
-    ? defaultAgentPrice !== null
-      ? Math.max(defaultProduct.sellingPrice, defaultAgentPrice)
-      : defaultProduct.sellingPrice
-    : 0
+  const defaultSelling = defaultAgentSellingPrice(defaultProduct)
   const [productId, setProductId] = useState(defaultProductId)
   const [qty, setQty] = useState(0)
   const [sellingPrice, setSellingPrice] = useState(defaultSelling)
@@ -147,9 +144,7 @@ function AgentSaleModal({
   const chooseProduct = (nextId: string) => {
     setProductId(nextId)
     const next = products.find((item) => item.id === nextId)
-    const nextAgentPrice = configuredAgentPrice(next)
-    const listPrice = next?.sellingPrice ?? 0
-    setSellingPrice(nextAgentPrice !== null ? Math.max(listPrice, nextAgentPrice) : listPrice)
+    setSellingPrice(defaultAgentSellingPrice(next))
   }
 
   const submit = (event: FormEvent) => {
@@ -171,7 +166,7 @@ function AgentSaleModal({
       return
     }
     if (round2(Number(sellingPrice)) < agentPrice) {
-      api.toast('Selling price cannot be lower than Agent Price.', undefined, 'warning')
+      api.toast(belowAgentPriceMessage(agentPrice), undefined, 'warning')
       return
     }
     if (!Number.isFinite(Number(delivery)) || Number(delivery) < 0) {
@@ -229,7 +224,7 @@ function AgentSaleModal({
               ))}
             </Select>
           </Field>
-          <Field label="Agent Price">
+          <Field label="Agent Price" hint={agentPrice === null ? undefined : 'Minimum allowed'}>
             <Input disabled value={agentPrice === null ? 'Not configured' : formatMoney(agentPrice)} />
           </Field>
           <Field label="Available stock">
@@ -238,10 +233,10 @@ function AgentSaleModal({
           <Field label="Quantity">
             <Input type="number" min={0} step="0.01" value={qty || ''} onChange={(event) => setQty(Number(event.target.value))} />
           </Field>
-          <Field label="Selling price">
+          <Field label="Selling Price">
             <Input type="number" min={0} step="0.01" value={sellingPrice} onChange={(event) => setSellingPrice(Number(event.target.value))} />
-            {belowAgentPrice && (
-              <div className="text-xs text-amber-700">Selling price cannot be lower than Agent Price.</div>
+            {belowAgentPrice && agentPrice !== null && (
+              <div className="text-xs text-amber-700">{belowAgentPriceMessage(agentPrice)}</div>
             )}
             {agentPrice === null && product && (
               <div className="text-xs text-amber-700">Agent Price must be configured.</div>
@@ -259,8 +254,8 @@ function AgentSaleModal({
               value={
                 agentPrice === null
                   ? 'Configure Agent Price to calculate earnings'
-                  : belowAgentPrice
-                    ? 'Selling price cannot be lower than Agent Price'
+                  : belowAgentPrice && agentPrice !== null
+                    ? belowAgentPriceMessage(agentPrice)
                     : preview
                       ? `${formatMoney(preview.totalEarnings)} · Markup ${formatMoney(preview.productMarkup)} · Delivery ${formatMoney(preview.deliveryEarnings)}`
                       : 'Configure Agent Price to calculate earnings'

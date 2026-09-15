@@ -11,7 +11,7 @@ import {
   unplacedPacks,
   WAREHOUSE_MAP_KEYS,
 } from '@/features/warehouse/warehouseModel'
-import { AGENT_PERMISSION_KEYS, agentBankDetailsComplete, agentLinkedWarehouseName, calcAgentSaleDocument, canUserRequestWithdrawalForAgent, companyWarehouses, configuredAgentPrice, currentLinkedAgent, hasSaleEarningLedger, hasWithdrawalCancelledLedger, hasWithdrawalPaidLedger, hasWithdrawalPendingLedger, isAgentWarehouseId, isCompanyWarehouseId, linkedAgentForUser, nextAgentWarehouseId, normalizeAgentSaleItems, parseAgentPriceWrite, parseWithdrawalAmount, parseWithdrawalPaymentDate, parseWithdrawalPaymentReference, parseWithdrawalReceipt, SALE_EARNING_KIND, saleIsAgentSale, snapshotAgentBankDetails, summarizeAgentEarnings, WITHDRAWAL_CANCELLED_KIND, WITHDRAWAL_PAID_KIND, WITHDRAWAL_PENDING_KIND } from '@/features/agent/agentModel'
+import { AGENT_PERMISSION_KEYS, agentBankDetailsComplete, agentLinkedWarehouseName, agentPriceAboveSellingMessage, agentPriceExceedsSellingPrice, belowAgentPriceMessage, calcAgentSaleDocument, canUserRequestWithdrawalForAgent, companyWarehouses, configuredAgentPrice, currentLinkedAgent, hasSaleEarningLedger, hasWithdrawalCancelledLedger, hasWithdrawalPaidLedger, hasWithdrawalPendingLedger, isAgentWarehouseId, isCompanyWarehouseId, linkedAgentForUser, nextAgentWarehouseId, normalizeAgentSaleItems, parseAgentPriceWrite, parseWithdrawalAmount, parseWithdrawalPaymentDate, parseWithdrawalPaymentReference, parseWithdrawalReceipt, SALE_EARNING_KIND, saleIsAgentSale, snapshotAgentBankDetails, summarizeAgentEarnings, WITHDRAWAL_CANCELLED_KIND, WITHDRAWAL_PAID_KIND, WITHDRAWAL_PENDING_KIND } from '@/features/agent/agentModel'
 import {
   OPENING_BALANCE_ORIGIN_DATE,
   OPENING_BALANCE_PERMISSION_KEYS,
@@ -404,7 +404,7 @@ function validateAgentDocumentLines(
       return 'price'
     }
     if (round2(line.price) < agentPrice) {
-      toast('Selling price cannot be lower than Agent Price.', product.name, 'warning')
+      toast(belowAgentPriceMessage(agentPrice), product.name, 'warning')
       return 'below'
     }
     if (!options?.skipStock) {
@@ -1042,7 +1042,7 @@ function postAgentSale(input: {
       return null
     }
     if (sellingPrice < agentPrice) {
-      toast('Selling price cannot be lower than Agent Price.', product.name, 'warning')
+      toast(belowAgentPriceMessage(agentPrice), product.name, 'warning')
       return null
     }
     const needed = (used.get(product.id) ?? 0) + qty
@@ -1788,6 +1788,78 @@ export const db = {
       ),
     })
     toast('Product updated')
+    return true
+  },
+
+  saveAgentPrices(rows: Array<{ productId: string; agentPrice?: unknown; sellingPrice?: unknown; wholesalePrice?: unknown }>) {
+    if (!hasPermission(state, 'agent.manage')) {
+      toast('Permission denied', 'You cannot change product prices.', 'danger')
+      return false
+    }
+    if (!rows.length) {
+      toast('No price changes to save.', undefined, 'info')
+      return false
+    }
+    const agentUpdates = new Map<string, number | undefined>()
+    const sellingUpdates = new Map<string, number>()
+    const wholesaleUpdates = new Map<string, number>()
+    for (const row of rows) {
+      const product = state.products.find((item) => item.id === row.productId)
+      if (!product) {
+        toast('Product not found', undefined, 'warning')
+        return false
+      }
+      if (Object.prototype.hasOwnProperty.call(row, 'agentPrice')) {
+        const parsed = parseAgentPriceWrite(row.agentPrice)
+        if (!parsed.ok) {
+          toast('Agent Price cannot be negative.', product.name, 'warning')
+          return false
+        }
+        agentUpdates.set(product.id, parsed.value)
+      }
+      if (Object.prototype.hasOwnProperty.call(row, 'sellingPrice')) {
+        const parsed = parseNonNegativeMoney(row.sellingPrice)
+        if (!parsed.ok) {
+          toast('Selling Price cannot be negative.', product.name, 'warning')
+          return false
+        }
+        sellingUpdates.set(product.id, parsed.value)
+      }
+      if (Object.prototype.hasOwnProperty.call(row, 'wholesalePrice')) {
+        const parsed = parseNonNegativeMoney(row.wholesalePrice)
+        if (!parsed.ok) {
+          toast('Wholesale Price cannot be negative.', product.name, 'warning')
+          return false
+        }
+        wholesaleUpdates.set(product.id, parsed.value)
+      }
+      if (!agentUpdates.has(product.id) && !sellingUpdates.has(product.id) && !wholesaleUpdates.has(product.id)) {
+        toast('No price changes to save.', product.name, 'info')
+        return false
+      }
+      const nextSelling = sellingUpdates.has(product.id) ? sellingUpdates.get(product.id)! : product.sellingPrice
+      const nextAgent = agentUpdates.has(product.id) ? agentUpdates.get(product.id) : product.agentPrice
+      if (agentPriceExceedsSellingPrice(nextAgent, nextSelling)) {
+        toast(agentPriceAboveSellingMessage(), product.name, 'warning')
+        return false
+      }
+    }
+    setData({
+      products: applyBomCosts(
+        state.products.map((product) => {
+          if (!agentUpdates.has(product.id) && !sellingUpdates.has(product.id) && !wholesaleUpdates.has(product.id)) return product
+          return {
+            ...product,
+            agentPrice: agentUpdates.has(product.id) ? agentUpdates.get(product.id) : product.agentPrice,
+            sellingPrice: sellingUpdates.has(product.id) ? sellingUpdates.get(product.id)! : product.sellingPrice,
+            wholesalePrice: wholesaleUpdates.has(product.id) ? wholesaleUpdates.get(product.id)! : product.wholesalePrice,
+          }
+        }),
+        state.boms,
+      ),
+    })
+    const count = new Set([...agentUpdates.keys(), ...sellingUpdates.keys(), ...wholesaleUpdates.keys()]).size
+    toast('Prices saved', `${count} product(s) updated.`)
     return true
   },
 

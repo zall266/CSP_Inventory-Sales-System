@@ -4,6 +4,7 @@ import { DashboardPage } from '@/features/dashboard/DashboardPage'
 import { PosPage } from '@/features/pos/PosPage'
 import { SalesPage } from '@/features/sales/SalesPage'
 import { CategoriesPage, ProductsPage, RawMaterialsPage } from '@/features/products/ProductsPage'
+import { PRODUCT_PRICING_PATH, ProductPricingPage } from '@/features/products/ProductPricingPage'
 import { InventoryPage } from '@/features/inventory/InventoryPage'
 import { WarehouseMapPage } from '@/features/warehouse/WarehouseMapPage'
 import { StockAdjustmentPage, StockCountPage, StockMovementsPage, StockTransferPage } from '@/features/inventory/StockPages'
@@ -54,6 +55,7 @@ export default function App() {
           <Route path="/sales/delivery-orders/:id" element={<DeliveryDetailPage />} />
           <Route path="/pos" element={<PosPage />} />
           <Route path="/sales/agents" element={<AgentsPage />} />
+          <Route path="/sales/agents/pricing" element={<Navigate to={PRODUCT_PRICING_PATH} replace />} />
           <Route path="/sales/agents/:id" element={<AgentDetailPage />} />
           <Route path="/sales/returns" element={<SalesReturnsListPage />} />
           <Route path="/sales/returns/new" element={<SalesReturnEditorPage />} />
@@ -76,6 +78,7 @@ export default function App() {
           <Route path="/stock-transfer" element={<StockTransferPage />} />
           <Route path="/stock-count" element={<StockCountPage />} />
           <Route path="/products" element={<ProductsPage />} />
+          <Route path={PRODUCT_PRICING_PATH} element={<ProductPricingPage />} />
           <Route path="/products/raw-materials" element={<RawMaterialsPage />} />
           <Route path="/categories" element={<CategoriesPage />} />
           <Route path="/manufacturing" element={<ManufacturingDashboardPage />} />

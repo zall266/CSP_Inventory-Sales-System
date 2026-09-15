@@ -134,7 +134,7 @@ const underPrice = db.createAgentSale({
   items: [{ productId: ST, qty: 1, sellingPrice: 9 }],
   customerId: 'c-abc-ent',
 })
-check('TEST 7 selling below Agent Price is blocked', !underPrice && lastToast()?.title === 'Selling price cannot be lower than Agent Price.')
+check('TEST 7 selling below Agent Price is blocked', !underPrice && lastToast()?.title === 'Price cannot be below Agent Price of RM 10.00.')
 
 const sale = db.createAgentSale({
   agentId: agent!.id,

@@ -51,7 +51,7 @@ export function formFromProduct(product: Product): ProductFormValue {
   }
 }
 
-export function toProductInput(form: ProductFormValue, material: boolean): ProductInput {
+export function toProductInput(form: ProductFormValue, material: boolean, current?: Pick<Product, 'wholesalePrice'>): ProductInput {
   const conversion = Number(form.purchaseConversionQty || 1)
   const purchaseCost = form.purchaseCost === '' ? Number(form.costPrice || 0) : Number(form.purchaseCost)
   const costPrice = form.costPrice === '' ? purchaseCost : Number(form.costPrice)
@@ -65,7 +65,7 @@ export function toProductInput(form: ProductFormValue, material: boolean): Produ
     purchaseConversionQty: conversion,
     ...(material ? { purchaseCost } : { costPrice }),
     sellingPrice: form.sellingPrice === '' ? 0 : Number(form.sellingPrice),
-    wholesalePrice: 0,
+    wholesalePrice: current?.wholesalePrice ?? 0,
     status: form.status,
     sellable: form.sellable,
     reorderLevel: 0,
@@ -122,7 +122,7 @@ export function ProductForm({
 
   const submit = (event: FormEvent) => {
     event.preventDefault()
-    const ok = onSubmit(toProductInput(form, material || hasBom))
+    const ok = onSubmit(toProductInput(form, material || hasBom, product))
     if (ok !== false) return
   }
 
