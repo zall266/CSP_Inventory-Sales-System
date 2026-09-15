@@ -160,7 +160,9 @@ export function ProductPricingPage() {
         }
       />
       <FilterRow>
-        <Input placeholder="Search product or SKU" value={query} onChange={(event) => setQuery(event.target.value)} />
+        <div className="flex flex-col justify-end">
+          <Input placeholder="Search product or SKU" value={query} onChange={(event) => setQuery(event.target.value)} />
+        </div>
         <Field label="Set Selling Price">
           <div className="flex gap-2">
             <Input
