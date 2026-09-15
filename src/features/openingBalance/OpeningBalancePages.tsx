@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { Plus, Trash2 } from 'lucide-react'
 import { Badge, Button, Card, EmptyState, Field, FilterRow, Input, Modal, PageHeader, Select, StatusBadge } from '@/components/ui'
@@ -42,10 +42,10 @@ export function OpeningBalancePage() {
   const state = useStore()
   if (id) {
     const row = (state.openingBalances ?? []).find((item) => item.id === id)
-    if (row?.status === 'draft') return <OpeningBalanceHomePage draft={row} />
+    if (row?.status === 'draft') return <OpeningBalanceHomePage key={row.id} draft={row} />
     return <OpeningBalanceDetailPage />
   }
-  return <OpeningBalanceHomePage />
+  return <OpeningBalanceHomePage key="new" />
 }
 
 function OpeningBalanceHomePage({ draft }: { draft?: OpeningBalance }) {
@@ -66,6 +66,14 @@ function OpeningBalanceHomePage({ draft }: { draft?: OpeningBalance }) {
   const [itemQuery, setItemQuery] = useState('')
   const [detailsIndex, setDetailsIndex] = useState<number | null>(null)
   const [busy, setBusy] = useState(false)
+
+  useEffect(() => {
+    if (!draft) return
+    setType(draft.type)
+    setWarehouseId(draft.items[0]?.warehouseId ?? state.settings.defaultWarehouseId)
+    setNotes(draft.notes ?? '')
+    setLines(inputLinesFromOpeningBalance(draft))
+  }, [draft?.id])
 
   const catalog = useMemo(
     () => products.filter((product) => matchesQuery(product, itemQuery)),
@@ -128,10 +136,6 @@ function OpeningBalanceHomePage({ draft }: { draft?: OpeningBalance }) {
     }
     setBusy(false)
     if (created) {
-      if (!draft) {
-        setLines([emptyOpeningLine(type, products[0], warehouseId)])
-        setNotes('')
-      }
       navigate(`/inventory/opening-balance/${created.id}`)
     }
   }
