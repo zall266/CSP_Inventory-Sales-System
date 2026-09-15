@@ -266,6 +266,7 @@ function WholesaleInvoiceModal({ customer, onClose }: { customer: Customer; onCl
     })
     if (sale) {
       onClose()
+      api.closeDrawer()
       navigate(`/sales/invoices/${sale.id}`)
     }
   }
