@@ -24,19 +24,23 @@ export function AgentPricingPage() {
   const [selected, setSelected] = useState<Record<string, boolean>>({})
   const [bulkPrice, setBulkPrice] = useState('')
 
+  const catalog = useMemo(
+    () =>
+      state.products
+        .filter((product) => productIsSellable(product) && product.status === 'active')
+        .sort((a, b) => a.name.localeCompare(b.name) || a.sku.localeCompare(b.sku)),
+    [state.products],
+  )
   const products = useMemo(() => {
     const q = query.trim().toLowerCase()
-    return state.products
-      .filter((product) => productIsSellable(product) && product.status === 'active')
-      .filter((product) => !q || `${product.name} ${product.sku}`.toLowerCase().includes(q))
-      .sort((a, b) => a.name.localeCompare(b.name) || a.sku.localeCompare(b.sku))
-  }, [state.products, query])
+    return catalog.filter((product) => !q || `${product.name} ${product.sku}`.toLowerCase().includes(q))
+  }, [catalog, query])
 
   if (!canManage) return <PermissionDenied subtitle="You do not have access to Agent Pricing." />
 
   const valueFor = (product: Product) => (Object.prototype.hasOwnProperty.call(drafts, product.id) ? drafts[product.id] : currentAgentPriceDraft(product))
 
-  const dirtyRows = products.filter((product) => valueFor(product) !== currentAgentPriceDraft(product))
+  const dirtyRows = catalog.filter((product) => valueFor(product) !== currentAgentPriceDraft(product))
   const selectedIds = products.filter((product) => selected[product.id]).map((product) => product.id)
   const allVisibleSelected = products.length > 0 && products.every((product) => selected[product.id])
 
