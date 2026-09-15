@@ -33,6 +33,16 @@ export function belowAgentPriceMessage(agentPrice: number) {
   return `Price cannot be below Agent Price of ${formatMoney(agentPrice)}.`
 }
 
+export function agentPriceAboveSellingMessage() {
+  return 'Agent Price cannot be higher than Selling Price.'
+}
+
+export function agentPriceExceedsSellingPrice(agentPrice: number | undefined | null, sellingPrice: number) {
+  const min = configuredAgentPrice({ agentPrice })
+  if (min === null) return false
+  return min > round2(Number(sellingPrice) || 0)
+}
+
 export function hasSaleEarningLedger(entries: AgentEarningLedger[], agentSaleId: string) {
   return entries.some((entry) => entry.kind === SALE_EARNING_KIND && entry.relatedAgentSaleId === agentSaleId)
 }

@@ -86,12 +86,29 @@ check('4. Chocolate both prices persisted', product(CH)?.sellingPrice === 19.99 
 check('5. New Agent Sale defaults to current Selling Price', defaultAgentSellingPrice(product(MT)) === 18.99)
 
 check(
-  'Agent Price higher than Selling Price is not auto-corrected',
-  db.saveAgentPrices([{ productId: CH, sellingPrice: 8, agentPrice: 11 }]) &&
-    product(CH)?.sellingPrice === 8 &&
+  '1. Agent Price < Selling Price → PASS',
+  db.saveAgentPrices([{ productId: CH, sellingPrice: 19.99, agentPrice: 11 }]) &&
+    product(CH)?.sellingPrice === 19.99 &&
     configuredAgentPrice(product(CH)) === 11,
 )
-check('Default stays the Selling Price even when below Agent Price', defaultAgentSellingPrice(product(CH)) === 8)
+check(
+  '2. Agent Price = Selling Price → PASS',
+  db.saveAgentPrices([{ productId: CH, sellingPrice: 19.99, agentPrice: 19.99 }]) &&
+    product(CH)?.sellingPrice === 19.99 &&
+    configuredAgentPrice(product(CH)) === 19.99,
+)
+check(
+  '3. Agent Price > Selling Price → BLOCK',
+  !db.saveAgentPrices([{ productId: CH, sellingPrice: 18.99, agentPrice: 20 }]) &&
+    lastToast()?.title === 'Agent Price cannot be higher than Selling Price.',
+)
+check('3. Invalid pair is not persisted', product(CH)?.sellingPrice === 19.99 && configuredAgentPrice(product(CH)) === 19.99)
+check(
+  '3. Lowering Selling Price below Agent Price is blocked',
+  !db.saveAgentPrices([{ productId: MT, sellingPrice: 9 }]) &&
+    product(MT)?.sellingPrice === 18.99 &&
+    configuredAgentPrice(product(MT)) === 10,
+)
 check(
   'Restore Chocolate prices for later checks',
   db.saveAgentPrices([{ productId: CH, sellingPrice: 19.99, agentPrice: 11 }]),

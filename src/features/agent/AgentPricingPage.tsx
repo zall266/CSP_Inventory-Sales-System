@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import { Button, Card, EmptyState, Field, FilterRow, Input, PageHeader } from '@/components/ui'
 import { ProductMark } from '@/components/ProductMark'
 import { PermissionDenied } from '@/features/documents/A4Sheet'
-import { parseAgentPriceWrite } from '@/features/agent/agentModel'
+import { agentPriceAboveSellingMessage, agentPriceExceedsSellingPrice, parseAgentPriceWrite } from '@/features/agent/agentModel'
 import { parseNonNegativeMoney, productIsSellable } from '@/features/products/masterData'
 import { hasPermission } from '@/features/settings/permissions'
 import { useApi, useStore } from '@/store/hooks'
@@ -223,6 +223,12 @@ export function AgentPricingPage() {
                         onChange={(event) => patchDraft(product.id, { agentPrice: event.target.value })}
                         placeholder="Not set"
                       />
+                      {agentPriceExceedsSellingPrice(
+                        agentValueFor(product) === '' ? undefined : Number(agentValueFor(product)),
+                        Number(sellingValueFor(product)),
+                      ) && (
+                        <div className="mt-1 text-[11px] text-amber-700">{agentPriceAboveSellingMessage()}</div>
+                      )}
                     </td>
                   </tr>
                 ))}

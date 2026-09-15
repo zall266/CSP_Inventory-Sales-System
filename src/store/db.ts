@@ -11,7 +11,7 @@ import {
   unplacedPacks,
   WAREHOUSE_MAP_KEYS,
 } from '@/features/warehouse/warehouseModel'
-import { AGENT_PERMISSION_KEYS, agentBankDetailsComplete, agentLinkedWarehouseName, belowAgentPriceMessage, calcAgentSaleDocument, canUserRequestWithdrawalForAgent, companyWarehouses, configuredAgentPrice, currentLinkedAgent, hasSaleEarningLedger, hasWithdrawalCancelledLedger, hasWithdrawalPaidLedger, hasWithdrawalPendingLedger, isAgentWarehouseId, isCompanyWarehouseId, linkedAgentForUser, nextAgentWarehouseId, normalizeAgentSaleItems, parseAgentPriceWrite, parseWithdrawalAmount, parseWithdrawalPaymentDate, parseWithdrawalPaymentReference, parseWithdrawalReceipt, SALE_EARNING_KIND, saleIsAgentSale, snapshotAgentBankDetails, summarizeAgentEarnings, WITHDRAWAL_CANCELLED_KIND, WITHDRAWAL_PAID_KIND, WITHDRAWAL_PENDING_KIND } from '@/features/agent/agentModel'
+import { AGENT_PERMISSION_KEYS, agentBankDetailsComplete, agentLinkedWarehouseName, agentPriceAboveSellingMessage, agentPriceExceedsSellingPrice, belowAgentPriceMessage, calcAgentSaleDocument, canUserRequestWithdrawalForAgent, companyWarehouses, configuredAgentPrice, currentLinkedAgent, hasSaleEarningLedger, hasWithdrawalCancelledLedger, hasWithdrawalPaidLedger, hasWithdrawalPendingLedger, isAgentWarehouseId, isCompanyWarehouseId, linkedAgentForUser, nextAgentWarehouseId, normalizeAgentSaleItems, parseAgentPriceWrite, parseWithdrawalAmount, parseWithdrawalPaymentDate, parseWithdrawalPaymentReference, parseWithdrawalReceipt, SALE_EARNING_KIND, saleIsAgentSale, snapshotAgentBankDetails, summarizeAgentEarnings, WITHDRAWAL_CANCELLED_KIND, WITHDRAWAL_PAID_KIND, WITHDRAWAL_PENDING_KIND } from '@/features/agent/agentModel'
 import {
   OPENING_BALANCE_ORIGIN_DATE,
   OPENING_BALANCE_PERMISSION_KEYS,
@@ -1826,6 +1826,12 @@ export const db = {
       }
       if (!agentUpdates.has(product.id) && !sellingUpdates.has(product.id)) {
         toast('No price changes to save.', product.name, 'info')
+        return false
+      }
+      const nextSelling = sellingUpdates.has(product.id) ? sellingUpdates.get(product.id)! : product.sellingPrice
+      const nextAgent = agentUpdates.has(product.id) ? agentUpdates.get(product.id) : product.agentPrice
+      if (agentPriceExceedsSellingPrice(nextAgent, nextSelling)) {
+        toast(agentPriceAboveSellingMessage(), product.name, 'warning')
         return false
       }
     }
