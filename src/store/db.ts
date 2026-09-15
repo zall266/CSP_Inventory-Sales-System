@@ -11,6 +11,13 @@ import {
   unplacedPacks,
   WAREHOUSE_MAP_KEYS,
 } from '@/features/warehouse/warehouseModel'
+import {
+  CUSTOMER_PRICING_PERMISSION_KEYS,
+  customerPricingAuditNo,
+  customerWholesalePriceRow,
+  resolveWholesaleUnitPrice,
+  sellableProductsForCustomerPricing,
+} from '@/features/customers/customerPricingModel'
 import { AGENT_PERMISSION_KEYS, agentBankDetailsComplete, agentLinkedWarehouseName, agentPriceAboveSellingMessage, agentPriceExceedsSellingPrice, belowAgentPriceMessage, calcAgentSaleDocument, canUserRequestWithdrawalForAgent, companyWarehouses, configuredAgentPrice, currentLinkedAgent, hasSaleEarningLedger, hasWithdrawalCancelledLedger, hasWithdrawalPaidLedger, hasWithdrawalPendingLedger, isAgentWarehouseId, isCompanyWarehouseId, linkedAgentForUser, nextAgentWarehouseId, normalizeAgentSaleItems, parseAgentPriceWrite, parseWithdrawalAmount, parseWithdrawalPaymentDate, parseWithdrawalPaymentReference, parseWithdrawalReceipt, SALE_EARNING_KIND, saleIsAgentSale, snapshotAgentBankDetails, summarizeAgentEarnings, WITHDRAWAL_CANCELLED_KIND, WITHDRAWAL_PAID_KIND, WITHDRAWAL_PENDING_KIND } from '@/features/agent/agentModel'
 import {
   OPENING_BALANCE_ORIGIN_DATE,
@@ -192,7 +199,7 @@ function hydrateData(data: AppData): AppData {
       const raw = data.settings?.roleMatrix?.[role.id] ?? {}
       const normalized = normalizePermissions(raw)
       const defaults = defaultPermissionsForLegacy(role.legacyRole)
-      for (const key of [...WAREHOUSE_MAP_KEYS, ...AGENT_PERMISSION_KEYS, ...TASK_PERMISSION_KEYS, ...RECEIVING_PERMISSION_KEYS, ...OPENING_BALANCE_PERMISSION_KEYS, ...SALES_RETURN_PERMISSION_KEYS]) {
+      for (const key of [...WAREHOUSE_MAP_KEYS, ...AGENT_PERMISSION_KEYS, ...TASK_PERMISSION_KEYS, ...RECEIVING_PERMISSION_KEYS, ...OPENING_BALANCE_PERMISSION_KEYS, ...SALES_RETURN_PERMISSION_KEYS, ...CUSTOMER_PRICING_PERMISSION_KEYS]) {
         if (raw[key] === undefined) normalized[key] = defaults[key]
       }
       return [role.id, normalized]
@@ -223,7 +230,9 @@ function hydrateData(data: AppData): AppData {
     sales: (data.sales ?? []).map((sale) => ({
       ...sale,
       shipping: sale.shipping ?? 0,
+      pricingMode: sale.pricingMode,
     })),
+    customerWholesalePrices: data.customerWholesalePrices ?? [],
     agents: data.agents ?? [],
     agentSales: data.agentSales ?? [],
     agentEarningLedgers: data.agentEarningLedgers ?? [],
@@ -1891,6 +1900,125 @@ export const db = {
     return customer
   },
 
+  saveCustomerWholesalePrice(input: { customerId: string; productId: string; price: unknown; active?: boolean }) {
+    if (!hasPermission(state, 'customer.pricing.manage')) {
+      toast('Permission denied', 'You cannot manage customer pricing.', 'danger')
+      return null
+    }
+    const customer = state.customers.find((item) => item.id === input.customerId)
+    if (!customer) {
+      toast('Customer not found', undefined, 'warning')
+      return null
+    }
+    const product = state.products.find((item) => item.id === input.productId)
+    if (!product) {
+      toast('Product not found', undefined, 'warning')
+      return null
+    }
+    const parsed = parseNonNegativeMoney(input.price)
+    if (!parsed.ok) {
+      toast('Custom Wholesale Price cannot be negative.', product.name, 'warning')
+      return null
+    }
+    const active = input.active !== false
+    const actor = currentUser(state)
+    const now = nowIso()
+    const existing = customerWholesalePriceRow(state.customerWholesalePrices, customer.id, product.id)
+    if (!existing && !sellableProductsForCustomerPricing(state.products).some((item) => item.id === product.id)) {
+      toast('This item is not sellable.', product.name, 'warning')
+      return null
+    }
+    if (existing) {
+      const next = {
+        ...existing,
+        price: parsed.value,
+        active,
+        updatedAt: now,
+        updatedBy: actor.id,
+      }
+      const action = !existing.active && active
+        ? ('customer_wholesale_price_created' as const)
+        : existing.active && !active
+          ? ('customer_wholesale_price_deactivated' as const)
+          : ('customer_wholesale_price_updated' as const)
+      setData({
+        customerWholesalePrices: (state.customerWholesalePrices ?? []).map((row) => (row.id === existing.id ? next : row)),
+        documentAuditLogs: pushDocAudit(
+          makeDocAudit({
+            action,
+            documentType: 'customer_wholesale_price',
+            documentId: next.id,
+            documentNo: customerPricingAuditNo(customer.name, product.sku),
+            field: action === 'customer_wholesale_price_deactivated' ? 'status' : 'price',
+            oldValue: existing.active ? String(existing.price) : '',
+            newValue: active ? String(parsed.value) : '',
+          }),
+        ),
+      })
+      toast(active ? 'Custom price saved' : 'Custom price removed', `${customer.name} · ${product.name}`)
+      return next
+    }
+    const created = {
+      id: uid('cwp'),
+      customerId: customer.id,
+      productId: product.id,
+      price: parsed.value,
+      active,
+      createdAt: now,
+      updatedAt: now,
+      createdBy: actor.id,
+      updatedBy: actor.id,
+    }
+    setData({
+      customerWholesalePrices: [created, ...(state.customerWholesalePrices ?? [])],
+      documentAuditLogs: pushDocAudit(
+        makeDocAudit({
+          action: active ? 'customer_wholesale_price_created' : 'customer_wholesale_price_deactivated',
+          documentType: 'customer_wholesale_price',
+          documentId: created.id,
+          documentNo: customerPricingAuditNo(customer.name, product.sku),
+          field: 'price',
+          newValue: active ? String(parsed.value) : '',
+        }),
+      ),
+    })
+    toast('Custom price saved', `${customer.name} · ${product.name}`)
+    return created
+  },
+
+  deactivateCustomerWholesalePrice(id: string) {
+    if (!hasPermission(state, 'customer.pricing.manage')) {
+      toast('Permission denied', 'You cannot manage customer pricing.', 'danger')
+      return false
+    }
+    const current = (state.customerWholesalePrices ?? []).find((row) => row.id === id)
+    if (!current) {
+      toast('Custom price not found', undefined, 'warning')
+      return false
+    }
+    if (!current.active) return true
+    const customer = state.customers.find((item) => item.id === current.customerId)
+    const product = state.products.find((item) => item.id === current.productId)
+    const actor = currentUser(state)
+    const next = { ...current, active: false, updatedAt: nowIso(), updatedBy: actor.id }
+    setData({
+      customerWholesalePrices: (state.customerWholesalePrices ?? []).map((row) => (row.id === id ? next : row)),
+      documentAuditLogs: pushDocAudit(
+        makeDocAudit({
+          action: 'customer_wholesale_price_deactivated',
+          documentType: 'customer_wholesale_price',
+          documentId: next.id,
+          documentNo: customerPricingAuditNo(customer?.name ?? current.customerId, product?.sku ?? current.productId),
+          field: 'status',
+          oldValue: String(current.price),
+          newValue: '',
+        }),
+      ),
+    })
+    toast('Custom price removed', `${customer?.name ?? 'Customer'} · ${product?.name ?? 'Product'}`)
+    return true
+  },
+
   createSupplier(input: { name: string; contact: string; phone: string; email: string }) {
     const supplier = { id: uid('sup'), status: 'active' as const, ...input }
     setData({ suppliers: [supplier, ...state.suppliers] })
@@ -2920,6 +3048,7 @@ export const db = {
       dueDate: input.dueDate,
       paymentTerms: input.paymentTerms ?? state.settings.paymentTerms,
       reference: input.reference,
+      pricingMode: input.pricingMode,
     }
 
     let inventory = state.inventory
@@ -2962,6 +3091,42 @@ export const db = {
     emit()
     toast('Sale completed', `${invoiceNo} · ${sale.status === 'paid' ? 'Paid' : 'Recorded'}`)
     return sale
+  },
+
+  createWholesaleSale(input: {
+    customerId: string
+    warehouseId?: string
+    items: Array<{ productId: string; qty: number; price?: number; discount?: number }>
+    paymentMethod?: PaymentMethod
+    paidAmount?: number
+    notes?: string
+  }) {
+    if (currentLinkedAgent(state)) {
+      toast('Use Agent POS', 'Agent stock sales must use the Agent sale flow.', 'warning')
+      return null
+    }
+    if (!hasPermission(state, 'sales.create') && !hasPermission(state, 'sales.invoice.create')) {
+      toast('Permission denied', 'You cannot create invoices.', 'danger')
+      return null
+    }
+    const warehouseId = input.warehouseId || state.settings.defaultWarehouseId
+    const items = input.items.map((item) => ({
+      productId: item.productId,
+      qty: item.qty,
+      discount: item.discount,
+      price: item.price !== undefined && item.price !== null
+        ? item.price
+        : resolveWholesaleUnitPrice(state, input.customerId, item.productId),
+    }))
+    return this.createSale({
+      customerId: input.customerId,
+      warehouseId,
+      items,
+      paymentMethod: input.paymentMethod,
+      paidAmount: input.paidAmount,
+      notes: input.notes,
+      pricingMode: 'wholesale',
+    })
   },
 
   voidSale(id: string) {

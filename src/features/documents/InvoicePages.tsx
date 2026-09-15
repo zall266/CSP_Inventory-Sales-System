@@ -3,6 +3,7 @@ import { Button, Card, PageHeader, StatusBadge } from '@/components/ui'
 import { useApi, useLookups, useStore } from '@/store/hooks'
 import { hasPermission } from '@/features/settings/permissions'
 import { saleIsAgentSale, salesVisibleToUser } from '@/features/agent/agentModel'
+import { isWholesaleSale } from '@/features/customers/customerPricingModel'
 import { formatDate, formatMoney } from '@/utils/format'
 import { PermissionDenied, PrintShell } from './A4Sheet'
 import { InvoiceA4 } from './DocumentBodies'
@@ -52,6 +53,7 @@ export function InvoiceDetailPage() {
       />
       <div className="mb-4 flex flex-wrap items-center gap-3">
         <StatusBadge status={status} />
+        {isWholesaleSale(sale) && <StatusBadge status="wholesale" />}
         {sale.quotationNo && sale.quotationId && <Link className="text-sm text-indigo-700" to={`/sales/quotations/${sale.quotationId}`}>{sale.quotationNo}</Link>}
         {relatedDos.map((row) => (
           <Link key={row.id} className="text-sm text-indigo-700" to={`/sales/delivery-orders/${row.id}`}>{row.doNo}</Link>

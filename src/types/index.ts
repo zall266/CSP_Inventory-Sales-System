@@ -216,6 +216,18 @@ export type Customer = {
   status: PartyStatus
 }
 
+export type CustomerWholesalePrice = {
+  id: string
+  customerId: string
+  productId: string
+  price: number
+  active: boolean
+  createdAt: string
+  updatedAt: string
+  createdBy: string
+  updatedBy: string
+}
+
 export type Supplier = {
   id: string
   name: string
@@ -260,6 +272,7 @@ export type Sale = {
   quotationNo?: string
   dueDate?: string
   paymentTerms?: string
+  pricingMode?: 'retail' | 'wholesale'
 }
 
 export type AgentSaleItem = {
@@ -504,11 +517,14 @@ export type DocumentAuditAction =
   | 'sales_return_created'
   | 'sales_return_confirmed'
   | 'sales_return_cancelled'
+  | 'customer_wholesale_price_created'
+  | 'customer_wholesale_price_updated'
+  | 'customer_wholesale_price_deactivated'
 
 export type DocumentAuditLog = {
   id: string
   action: DocumentAuditAction
-  documentType: 'quotation' | 'invoice' | 'delivery' | 'agent_sale' | 'agent_withdrawal' | 'staff_task' | 'staff_task_category' | 'opening_balance' | 'sales_return'
+  documentType: 'quotation' | 'invoice' | 'delivery' | 'agent_sale' | 'agent_withdrawal' | 'staff_task' | 'staff_task_category' | 'opening_balance' | 'sales_return' | 'customer_wholesale_price'
   documentId: string
   documentNo: string
   field: string
@@ -1096,6 +1112,8 @@ export type PermissionKey =
   | 'sales_return.manage'
   | 'return_source.manage'
   | 'return_reason.manage'
+  | 'customer.pricing.view'
+  | 'customer.pricing.manage'
 
 export type RolePermissions = Record<PermissionKey, boolean>
 export type RoleMatrix = Record<string, RolePermissions>
@@ -1180,6 +1198,7 @@ export type AppData = {
   inventory: InventoryRow[]
   batches: Batch[]
   customers: Customer[]
+  customerWholesalePrices: CustomerWholesalePrice[]
   suppliers: Supplier[]
   sales: Sale[]
   agents: Agent[]
@@ -1263,6 +1282,7 @@ export type SaleInput = {
   quotationNo?: string
   dueDate?: string
   paymentTerms?: string
+  pricingMode?: 'retail' | 'wholesale'
 }
 
 export type QuotationInput = {
