@@ -93,21 +93,23 @@ function OpeningBalanceHomePage({ draft }: { draft?: OpeningBalance }) {
   }
 
   const patchLine = (index: number, patch: Partial<DraftLine>) => {
-    setLines(lines.map((item, i) => (i === index ? { ...item, ...patch } : item)))
+    setLines((current) => current.map((item, i) => (i === index ? { ...item, ...patch } : item)))
   }
 
   const chooseProduct = (index: number, productId: string) => {
     const next = state.products.find((item) => item.id === productId)
     patchLine(index, {
       productId,
-      unit: type === 'production_balance' ? 'G' : next?.purchaseUnit || next?.unit || lines[index]?.unit,
+      unit: type === 'production_balance' ? 'G' : next?.purchaseUnit || next?.unit || '',
     })
   }
 
   const addLine = () => {
-    const used = new Set(lines.map((line) => line.productId))
-    const nextProduct = catalog.find((product) => !used.has(product.id)) ?? catalog[0] ?? products[0]
-    setLines([...lines, emptyOpeningLine(type, nextProduct, warehouseId)])
+    setLines((current) => {
+      const used = new Set(current.map((line) => line.productId))
+      const nextProduct = catalog.find((product) => !used.has(product.id)) ?? catalog[0] ?? products[0]
+      return [...current, emptyOpeningLine(type, nextProduct, warehouseId)]
+    })
   }
 
   const submit = (confirm: boolean) => {
@@ -163,7 +165,7 @@ function OpeningBalanceHomePage({ draft }: { draft?: OpeningBalance }) {
                 value={warehouseId}
                 onChange={(event) => {
                   setWarehouseId(event.target.value)
-                  setLines(lines.map((line) => ({ ...line, warehouseId: event.target.value })))
+                  setLines((current) => current.map((line) => ({ ...line, warehouseId: event.target.value })))
                 }}
               >
                 {companyWarehouses(state.warehouses).map((warehouse) => (
@@ -212,7 +214,7 @@ function OpeningBalanceHomePage({ draft }: { draft?: OpeningBalance }) {
                       onProduct={(productId) => chooseProduct(index, productId)}
                       onPatch={(patch) => patchLine(index, patch)}
                       onDetails={() => setDetailsIndex(index)}
-                      onRemove={() => setLines(lines.filter((_, i) => i !== index))}
+                      onRemove={() => setLines((current) => current.filter((_, i) => i !== index))}
                     />
                   ))}
                 </tbody>
@@ -270,7 +272,7 @@ function OpeningBalanceHomePage({ draft }: { draft?: OpeningBalance }) {
                     <button type="button" className="text-xs font-medium text-indigo-600" onClick={() => setDetailsIndex(index)}>
                       Details
                     </button>
-                    <button type="button" className="text-xs font-medium text-rose-600" onClick={() => setLines(lines.filter((_, i) => i !== index))}>
+                    <button type="button" className="text-xs font-medium text-rose-600" onClick={() => setLines((current) => current.filter((_, i) => i !== index))}>
                       Remove
                     </button>
                   </div>
