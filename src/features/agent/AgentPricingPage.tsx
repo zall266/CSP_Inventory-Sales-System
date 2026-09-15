@@ -4,14 +4,19 @@ import { Button, Card, EmptyState, Field, FilterRow, Input, PageHeader } from '@
 import { ProductMark } from '@/components/ProductMark'
 import { PermissionDenied } from '@/features/documents/A4Sheet'
 import { parseAgentPriceWrite } from '@/features/agent/agentModel'
+import { parseNonNegativeMoney, productIsSellable } from '@/features/products/masterData'
 import { hasPermission } from '@/features/settings/permissions'
-import { productIsSellable } from '@/features/products/masterData'
 import { useApi, useStore } from '@/store/hooks'
-import { formatMoney } from '@/utils/format'
 import type { Product } from '@/types'
+
+type PriceDraft = { sellingPrice?: string; agentPrice?: string }
 
 function currentAgentPriceDraft(product: Product) {
   return product.agentPrice === undefined || product.agentPrice === null ? '' : String(product.agentPrice)
+}
+
+function currentSellingPriceDraft(product: Product) {
+  return String(product.sellingPrice)
 }
 
 export function AgentPricingPage() {
@@ -20,9 +25,10 @@ export function AgentPricingPage() {
   const navigate = useNavigate()
   const canManage = hasPermission(state, 'agent.manage')
   const [query, setQuery] = useState('')
-  const [drafts, setDrafts] = useState<Record<string, string>>({})
+  const [drafts, setDrafts] = useState<Record<string, PriceDraft>>({})
   const [selected, setSelected] = useState<Record<string, boolean>>({})
-  const [bulkPrice, setBulkPrice] = useState('')
+  const [bulkAgentPrice, setBulkAgentPrice] = useState('')
+  const [bulkSellingPrice, setBulkSellingPrice] = useState('')
 
   const catalog = useMemo(
     () =>
@@ -38,14 +44,26 @@ export function AgentPricingPage() {
 
   if (!canManage) return <PermissionDenied subtitle="You do not have access to Agent Pricing." />
 
-  const valueFor = (product: Product) => (Object.prototype.hasOwnProperty.call(drafts, product.id) ? drafts[product.id] : currentAgentPriceDraft(product))
+  const sellingValueFor = (product: Product) =>
+    Object.prototype.hasOwnProperty.call(drafts[product.id] ?? {}, 'sellingPrice')
+      ? drafts[product.id].sellingPrice ?? ''
+      : currentSellingPriceDraft(product)
 
-  const dirtyRows = catalog.filter((product) => valueFor(product) !== currentAgentPriceDraft(product))
+  const agentValueFor = (product: Product) =>
+    Object.prototype.hasOwnProperty.call(drafts[product.id] ?? {}, 'agentPrice')
+      ? drafts[product.id].agentPrice ?? ''
+      : currentAgentPriceDraft(product)
+
+  const dirtyRows = catalog.filter(
+    (product) =>
+      sellingValueFor(product) !== currentSellingPriceDraft(product) ||
+      agentValueFor(product) !== currentAgentPriceDraft(product),
+  )
   const selectedIds = products.filter((product) => selected[product.id]).map((product) => product.id)
   const allVisibleSelected = products.length > 0 && products.every((product) => selected[product.id])
 
-  const setDraft = (productId: string, value: string) => {
-    setDrafts((current) => ({ ...current, [productId]: value }))
+  const patchDraft = (productId: string, patch: PriceDraft) => {
+    setDrafts((current) => ({ ...current, [productId]: { ...current[productId], ...patch } }))
   }
 
   const toggleAll = (checked: boolean) => {
@@ -56,28 +74,47 @@ export function AgentPricingPage() {
     })
   }
 
-  const applyBulk = () => {
+  const applyBulk = (kind: 'sellingPrice' | 'agentPrice', raw: string) => {
     if (!selectedIds.length) {
       api.toast('Select at least one product.', undefined, 'warning')
       return
     }
-    const parsed = parseAgentPriceWrite(bulkPrice)
-    if (!parsed.ok) {
-      api.toast('Agent Price cannot be negative.', undefined, 'warning')
+    if (kind === 'agentPrice') {
+      const parsed = parseAgentPriceWrite(raw)
+      if (!parsed.ok) {
+        api.toast('Agent Price cannot be negative.', undefined, 'warning')
+        return
+      }
+      const nextValue = parsed.value === undefined ? '' : String(parsed.value)
+      setDrafts((current) => {
+        const next = { ...current }
+        for (const id of selectedIds) next[id] = { ...next[id], agentPrice: nextValue }
+        return next
+      })
       return
     }
-    const nextValue = parsed.value === undefined ? '' : String(parsed.value)
+    const parsed = parseNonNegativeMoney(raw)
+    if (!parsed.ok) {
+      api.toast('Selling Price cannot be negative.', undefined, 'warning')
+      return
+    }
+    const nextValue = String(parsed.value)
     setDrafts((current) => {
       const next = { ...current }
-      for (const id of selectedIds) next[id] = nextValue
+      for (const id of selectedIds) next[id] = { ...next[id], sellingPrice: nextValue }
       return next
     })
   }
 
   const save = () => {
-    const rows = dirtyRows.map((product) => ({ productId: product.id, agentPrice: valueFor(product) }))
+    const rows = dirtyRows.map((product) => {
+      const row: { productId: string; sellingPrice?: string; agentPrice?: string } = { productId: product.id }
+      if (sellingValueFor(product) !== currentSellingPriceDraft(product)) row.sellingPrice = sellingValueFor(product)
+      if (agentValueFor(product) !== currentAgentPriceDraft(product)) row.agentPrice = agentValueFor(product)
+      return row
+    })
     if (!rows.length) {
-      api.toast('No Agent Price changes to save.', undefined, 'info')
+      api.toast('No price changes to save.', undefined, 'info')
       return
     }
     if (api.saveAgentPrices(rows)) {
@@ -90,7 +127,7 @@ export function AgentPricingPage() {
     <div>
       <PageHeader
         title="Agent Pricing"
-        subtitle="Set Agent Price for sellable products. CSP selling price stays the customer default."
+        subtitle="Set Selling Price and Agent Price for sellable products from one list."
         actions={
           <>
             <Button variant="secondary" onClick={() => navigate('/sales/agents')}>Back to Agents</Button>
@@ -100,19 +137,32 @@ export function AgentPricingPage() {
       />
       <FilterRow>
         <Input placeholder="Search product or SKU" value={query} onChange={(event) => setQuery(event.target.value)} />
-        <Field label="Set Agent Price">
-          <Input
-            type="number"
-            min={0}
-            step="0.01"
-            value={bulkPrice}
-            onChange={(event) => setBulkPrice(event.target.value)}
-            placeholder="RM"
-          />
+        <Field label="Set Selling Price">
+          <div className="flex gap-2">
+            <Input
+              type="number"
+              min={0}
+              step="0.01"
+              value={bulkSellingPrice}
+              onChange={(event) => setBulkSellingPrice(event.target.value)}
+              placeholder="RM"
+            />
+            <Button type="button" variant="secondary" onClick={() => applyBulk('sellingPrice', bulkSellingPrice)}>Apply</Button>
+          </div>
         </Field>
-        <div className="flex items-end">
-          <Button type="button" variant="secondary" onClick={applyBulk}>Apply</Button>
-        </div>
+        <Field label="Set Agent Price">
+          <div className="flex gap-2">
+            <Input
+              type="number"
+              min={0}
+              step="0.01"
+              value={bulkAgentPrice}
+              onChange={(event) => setBulkAgentPrice(event.target.value)}
+              placeholder="RM"
+            />
+            <Button type="button" variant="secondary" onClick={() => applyBulk('agentPrice', bulkAgentPrice)}>Apply</Button>
+          </div>
+        </Field>
         <div />
       </FilterRow>
       <Card>
@@ -131,7 +181,7 @@ export function AgentPricingPage() {
                   </th>
                   <th>Product</th>
                   <th>SKU</th>
-                  <th>CSP Price</th>
+                  <th>Selling Price</th>
                   <th>Agent Price</th>
                 </tr>
               </thead>
@@ -153,15 +203,24 @@ export function AgentPricingPage() {
                       </div>
                     </td>
                     <td>{product.sku}</td>
-                    <td className="tabular">{formatMoney(product.sellingPrice)}</td>
                     <td>
                       <Input
                         type="number"
                         min={0}
                         step="0.01"
                         className="h-9 w-28"
-                        value={valueFor(product)}
-                        onChange={(event) => setDraft(product.id, event.target.value)}
+                        value={sellingValueFor(product)}
+                        onChange={(event) => patchDraft(product.id, { sellingPrice: event.target.value })}
+                      />
+                    </td>
+                    <td>
+                      <Input
+                        type="number"
+                        min={0}
+                        step="0.01"
+                        className="h-9 w-28"
+                        value={agentValueFor(product)}
+                        onChange={(event) => patchDraft(product.id, { agentPrice: event.target.value })}
                         placeholder="Not set"
                       />
                     </td>
@@ -171,7 +230,7 @@ export function AgentPricingPage() {
             </table>
           </div>
         ) : (
-          <EmptyState title="No sellable products" hint="Active sellable products will appear here for Agent Price editing." />
+          <EmptyState title="No sellable products" hint="Active sellable products will appear here for Selling Price and Agent Price editing." />
         )}
       </Card>
     </div>

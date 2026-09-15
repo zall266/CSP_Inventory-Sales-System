@@ -59,7 +59,7 @@ const MT = 'p-pack-mt'
 const ST = 'p-pack-st'
 const CH = 'p-pack-ch'
 const matchaSeed = product(MT)
-check('1. Product CSP selling price is reused (Matcha RM 8.50 seed)', matchaSeed?.sellingPrice === 8.5)
+check('1. Existing Product Selling Price is displayed (Matcha RM 8.50 seed)', matchaSeed?.sellingPrice === 8.5)
 
 const agent = db.createAgent({
   name: 'Agent JB',
@@ -72,29 +72,30 @@ const agent = db.createAgent({
 check('Agent created for pricing tests', Boolean(agent), agent?.id)
 
 check(
-  '10. Owner/Admin can edit multiple Agent Prices from one list',
+  '2/3/4. Owner/Admin can save Selling Price and Agent Price from one list',
   db.saveAgentPrices([
-    { productId: MT, agentPrice: 10 },
-    { productId: ST, agentPrice: 10 },
-    { productId: CH, agentPrice: 11 },
-  ]),
+    { productId: MT, sellingPrice: 18.99, agentPrice: 10 },
+    { productId: ST, sellingPrice: 18.99, agentPrice: 10 },
+    { productId: CH, sellingPrice: 19.99, agentPrice: 11 },
+  ]) && lastToast()?.title === 'Prices saved',
 )
-check('2. Agent Price saved on Matcha', configuredAgentPrice(product(MT)) === 10)
-check('2. Agent Price saved on Strawberry', configuredAgentPrice(product(ST)) === 10)
-check('2. Agent Price saved on Chocolate', configuredAgentPrice(product(CH)) === 11)
-
-check('CSP selling price unchanged after Agent Price save', product(MT)?.sellingPrice === 8.5)
-check(
-  'CSP below Agent Price defaults to Agent Price so the sale is not immediately invalid',
-  defaultAgentSellingPrice(product(MT)) === 10,
-)
+check('2. Matcha Selling Price persisted', product(MT)?.sellingPrice === 18.99)
+check('3. Matcha Agent Price persisted', configuredAgentPrice(product(MT)) === 10)
+check('4. Strawberry both prices persisted', product(ST)?.sellingPrice === 18.99 && configuredAgentPrice(product(ST)) === 10)
+check('4. Chocolate both prices persisted', product(CH)?.sellingPrice === 19.99 && configuredAgentPrice(product(CH)) === 11)
+check('5. New Agent Sale defaults to current Selling Price', defaultAgentSellingPrice(product(MT)) === 18.99)
 
 check(
-  'Owner can set CSP selling price used as the Agent Sale default',
-  db.updateProduct(MT, { sellingPrice: 18.99 }),
+  'Agent Price higher than Selling Price is not auto-corrected',
+  db.saveAgentPrices([{ productId: CH, sellingPrice: 8, agentPrice: 11 }]) &&
+    product(CH)?.sellingPrice === 8 &&
+    configuredAgentPrice(product(CH)) === 11,
 )
-check('1. Product CSP price = RM 18.99', product(MT)?.sellingPrice === 18.99)
-check('3. New Agent Sale defaults to CSP RM 18.99', defaultAgentSellingPrice(product(MT)) === 18.99)
+check('Default stays the Selling Price even when below Agent Price', defaultAgentSellingPrice(product(CH)) === 8)
+check(
+  'Restore Chocolate prices for later checks',
+  db.saveAgentPrices([{ productId: CH, sellingPrice: 19.99, agentPrice: 11 }]),
+)
 
 const transferred = [
   db.transferStockToAgent({ agentId: agent!.id, fromWarehouseId: 'wh-main', productId: MT, qty: 20 }),
@@ -153,23 +154,28 @@ check('6. Validation names the Agent Price', lastToast()?.title === belowAgentPr
 check('6. Blocked sale does not consume stock', qty(MT, agent!.warehouseId) === 17)
 
 check(
-  '11. Agent cannot edit Agent Price via product update',
+  '14. Agent cannot edit Agent Price via product update',
   !db.updateProduct(MT, { agentPrice: 1 }) && lastToast()?.title === 'Permission denied' && lastToast()?.description === 'You cannot change Agent Price.',
 )
 check(
-  '11. Agent cannot edit Agent Price via pricing list',
+  '14. Agent cannot edit Agent Price via pricing list',
   !db.saveAgentPrices([{ productId: ST, agentPrice: 1 }]) && lastToast()?.title === 'Permission denied',
 )
-check('11. Agent Price unchanged after Agent attempt', configuredAgentPrice(product(MT)) === 10 && configuredAgentPrice(product(ST)) === 10)
+check(
+  '14. Agent cannot edit Selling Price via pricing list',
+  !db.saveAgentPrices([{ productId: MT, sellingPrice: 1 }]) && lastToast()?.title === 'Permission denied',
+)
+check('14. Product prices unchanged after Agent attempt', product(MT)?.sellingPrice === 18.99 && configuredAgentPrice(product(MT)) === 10 && configuredAgentPrice(product(ST)) === 10)
 
 db.switchUser('u-admin')
 check(
-  '9. Changing CSP later does not rewrite historical Agent Sales',
-  db.updateProduct(MT, { sellingPrice: 20 }),
+  '13. Changing Selling Price later does not rewrite historical Agent Sales',
+  db.saveAgentPrices([{ productId: MT, sellingPrice: 20 }]),
 )
-check('9. Existing Agent Sale remains RM 12.00', db.getSnapshot().agentSales.find((row) => row.saleId === historical?.id)?.items[0]?.sellingPrice === 12)
-check('9. Invoice line for historical sale remains RM 12.00', historical && db.getSnapshot().sales.find((row) => row.id === historical.id)?.items[0]?.price === 12)
-check('3. New sales now default to the updated CSP', defaultAgentSellingPrice(product(MT)) === 20)
+check('13. Existing Agent Sale remains RM 12.00', db.getSnapshot().agentSales.find((row) => row.saleId === historical?.id)?.items[0]?.sellingPrice === 12)
+check('13. Invoice line for historical sale remains RM 12.00', historical && db.getSnapshot().sales.find((row) => row.id === historical.id)?.items[0]?.price === 12)
+check('5. New sales now default to the updated Selling Price', defaultAgentSellingPrice(product(MT)) === 20)
+check('13. Agent Price unchanged when only Selling Price is saved', configuredAgentPrice(product(MT)) === 10)
 
 const restock = db.transferStockToAgent({ agentId: agent!.id, fromWarehouseId: 'wh-main', productId: ST, qty: 2 })
 check('12. Agent stock transfer still works after pricing changes', restock)
@@ -180,7 +186,7 @@ const laterSale = db.createAgentSale({
   items: [{ productId: MT, qty: 1, sellingPrice: 18.99 }],
   customerId: 'c-abc-ent',
 })
-check('New Agent Sale can still use the original CSP amount', Boolean(laterSale) && laterSale?.items[0]?.price === 18.99)
+check('New Agent Sale can still use a previously listed Selling Price', Boolean(laterSale) && laterSale?.items[0]?.price === 18.99)
 
 db.switchUser('u-admin')
 const earningBeforeWithdraw = saleEarningForAgentSale(
@@ -190,6 +196,8 @@ const earningBeforeWithdraw = saleEarningForAgentSale(
 const withdrawal = db.requestAgentWithdrawal({ agentId: agent!.id, amount: 5 })
 check('12. Existing Agent withdrawal still works', Boolean(withdrawal && withdrawal.status === 'requested'), withdrawal?.id)
 check('12. Withdrawal does not rewrite sale earnings', earningBeforeWithdraw?.amount === 5)
+check('15. Existing Agent stock remains after price edits', qty(MT, agent!.warehouseId) === 16)
+check('16. Existing Agent withdrawal remains requested', withdrawal?.status === 'requested')
 
 const failed = results.filter((row) => !row.ok)
 console.log(`\n${results.length - failed.length}/${results.length} passed`)

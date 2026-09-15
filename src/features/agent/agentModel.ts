@@ -24,11 +24,9 @@ export function parseAgentPriceWrite(value: unknown) {
   return { ok: true as const, value: round2(amount) }
 }
 
-export function defaultAgentSellingPrice(product: { sellingPrice?: number; agentPrice?: number | null } | undefined) {
+export function defaultAgentSellingPrice(product: { sellingPrice?: number } | undefined) {
   if (!product) return 0
-  const csp = Number(product.sellingPrice) || 0
-  const min = configuredAgentPrice(product)
-  return min !== null ? Math.max(csp, min) : csp
+  return Number(product.sellingPrice) || 0
 }
 
 export function belowAgentPriceMessage(agentPrice: number) {

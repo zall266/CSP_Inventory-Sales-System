@@ -224,7 +224,7 @@ function AgentSaleModal({
               ))}
             </Select>
           </Field>
-          <Field label="Agent Price">
+          <Field label="Agent Price" hint={agentPrice === null ? undefined : 'Minimum allowed'}>
             <Input disabled value={agentPrice === null ? 'Not configured' : formatMoney(agentPrice)} />
           </Field>
           <Field label="Available stock">
@@ -233,7 +233,7 @@ function AgentSaleModal({
           <Field label="Quantity">
             <Input type="number" min={0} step="0.01" value={qty || ''} onChange={(event) => setQty(Number(event.target.value))} />
           </Field>
-          <Field label="Selling price">
+          <Field label="Selling Price">
             <Input type="number" min={0} step="0.01" value={sellingPrice} onChange={(event) => setSellingPrice(Number(event.target.value))} />
             {belowAgentPrice && agentPrice !== null && (
               <div className="text-xs text-amber-700">{belowAgentPriceMessage(agentPrice)}</div>
