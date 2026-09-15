@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom'
 import { Minus, Plus, Trash2, Search } from 'lucide-react'
 import { Button, Card, Modal, Select, StatusBadge } from '@/components/ui'
 import { ProductMark, paymentLabel } from '@/components/ProductMark'
-import { agentPosItemAvailable, configuredAgentPrice, currentLinkedAgent, posSellingWarehouseId } from '@/features/agent/agentModel'
+import { agentPosItemAvailable, belowAgentPriceMessage, configuredAgentPrice, currentLinkedAgent, defaultAgentSellingPrice, posSellingWarehouseId } from '@/features/agent/agentModel'
 import { productIsSellable } from '@/features/products/masterData'
 import { useApi, useStore } from '@/store/hooks'
 import type { PaymentMethod, Product, Sale } from '@/types'
@@ -40,8 +40,7 @@ export function PosPage() {
   const addProduct = (product: Product) => {
     const available = api.getProductQty(product.id, warehouseId)
     if (linkedAgent && available <= 0) return
-    const agentPrice = configuredAgentPrice(product)
-    const unitPrice = linkedAgent && agentPrice !== null ? Math.max(product.sellingPrice, agentPrice) : product.sellingPrice
+    const unitPrice = linkedAgent ? defaultAgentSellingPrice(product) : product.sellingPrice
     setCart((current) => {
       const existing = current.find((line) => line.productId === product.id)
       if (existing) {
@@ -75,6 +74,14 @@ export function PosPage() {
   const deliveryCharge = linkedAgent ? round2(Math.max(0, delivery)) : 0
   const total = round2(Math.max(0, subtotal - discount + tax + deliveryCharge))
   const count = cart.reduce((sum, line) => sum + line.qty, 0)
+  const agentPriceViolation = Boolean(
+    linkedAgent &&
+      cart.some((line) => {
+        const product = state.products.find((item) => item.id === line.productId)
+        const min = configuredAgentPrice(product)
+        return min !== null && round2(line.price) < min
+      }),
+  )
 
   const complete = () => {
     const sale = linkedAgent
@@ -122,20 +129,27 @@ export function PosPage() {
         {cart.map((line) => {
           const product = state.products.find((p) => p.id === line.productId)
           if (!product) return null
+          const agentMin = linkedAgent ? configuredAgentPrice(product) : null
+          const belowMin = agentMin !== null && round2(line.price) < agentMin
           return (
             <div key={line.productId} className="flex items-center gap-3 rounded-xl border border-slate-100 p-3">
               <ProductMark product={product} size="sm" />
               <div className="min-w-0 flex-1">
                 <div className="truncate text-sm font-medium">{product.name}</div>
                 {linkedAgent ? (
-                  <input
-                    type="number"
-                    min={0}
-                    step="0.01"
-                    className="mt-1 h-8 w-24 rounded-lg border border-slate-200 px-2 text-xs"
-                    value={line.price}
-                    onChange={(e) => setPrice(line.productId, Number(e.target.value))}
-                  />
+                  <>
+                    <input
+                      type="number"
+                      min={0}
+                      step="0.01"
+                      className="mt-1 h-8 w-24 rounded-lg border border-slate-200 px-2 text-xs"
+                      value={line.price}
+                      onChange={(e) => setPrice(line.productId, Number(e.target.value))}
+                    />
+                    {belowMin && agentMin !== null && (
+                      <div className="mt-1 text-[11px] text-amber-700">{belowAgentPriceMessage(agentMin)}</div>
+                    )}
+                  </>
                 ) : (
                   <div className="text-xs text-slate-400">{formatQty(line.qty)} × {formatMoney(line.price)}</div>
                 )}
@@ -193,7 +207,7 @@ export function PosPage() {
           </button>
         ))}
       </div>
-      <Button className="mt-4 w-full" size="lg" disabled={!cart.length} onClick={complete}>
+      <Button className="mt-4 w-full" size="lg" disabled={!cart.length || agentPriceViolation} onClick={complete}>
         Complete sale
       </Button>
     </div>
@@ -233,11 +247,7 @@ export function PosPage() {
                 <div className="text-xs text-slate-400">{p.sku}</div>
                 <div className="mt-2 flex items-center justify-between">
                   <div className="text-sm font-semibold text-indigo-700">
-                    {formatMoney(
-                      linkedAgent
-                        ? Math.max(p.sellingPrice, configuredAgentPrice(p) ?? p.sellingPrice)
-                        : p.sellingPrice,
-                    )}
+                    {formatMoney(linkedAgent ? defaultAgentSellingPrice(p) : p.sellingPrice)}
                   </div>
                   <StatusBadge status={status} />
                 </div>

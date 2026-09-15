@@ -11,7 +11,7 @@ import {
   unplacedPacks,
   WAREHOUSE_MAP_KEYS,
 } from '@/features/warehouse/warehouseModel'
-import { AGENT_PERMISSION_KEYS, agentBankDetailsComplete, agentLinkedWarehouseName, calcAgentSaleDocument, canUserRequestWithdrawalForAgent, companyWarehouses, configuredAgentPrice, currentLinkedAgent, hasSaleEarningLedger, hasWithdrawalCancelledLedger, hasWithdrawalPaidLedger, hasWithdrawalPendingLedger, isAgentWarehouseId, isCompanyWarehouseId, linkedAgentForUser, nextAgentWarehouseId, normalizeAgentSaleItems, parseAgentPriceWrite, parseWithdrawalAmount, parseWithdrawalPaymentDate, parseWithdrawalPaymentReference, parseWithdrawalReceipt, SALE_EARNING_KIND, saleIsAgentSale, snapshotAgentBankDetails, summarizeAgentEarnings, WITHDRAWAL_CANCELLED_KIND, WITHDRAWAL_PAID_KIND, WITHDRAWAL_PENDING_KIND } from '@/features/agent/agentModel'
+import { AGENT_PERMISSION_KEYS, agentBankDetailsComplete, agentLinkedWarehouseName, belowAgentPriceMessage, calcAgentSaleDocument, canUserRequestWithdrawalForAgent, companyWarehouses, configuredAgentPrice, currentLinkedAgent, hasSaleEarningLedger, hasWithdrawalCancelledLedger, hasWithdrawalPaidLedger, hasWithdrawalPendingLedger, isAgentWarehouseId, isCompanyWarehouseId, linkedAgentForUser, nextAgentWarehouseId, normalizeAgentSaleItems, parseAgentPriceWrite, parseWithdrawalAmount, parseWithdrawalPaymentDate, parseWithdrawalPaymentReference, parseWithdrawalReceipt, SALE_EARNING_KIND, saleIsAgentSale, snapshotAgentBankDetails, summarizeAgentEarnings, WITHDRAWAL_CANCELLED_KIND, WITHDRAWAL_PAID_KIND, WITHDRAWAL_PENDING_KIND } from '@/features/agent/agentModel'
 import {
   OPENING_BALANCE_ORIGIN_DATE,
   OPENING_BALANCE_PERMISSION_KEYS,
@@ -404,7 +404,7 @@ function validateAgentDocumentLines(
       return 'price'
     }
     if (round2(line.price) < agentPrice) {
-      toast('Selling price cannot be lower than Agent Price.', product.name, 'warning')
+      toast(belowAgentPriceMessage(agentPrice), product.name, 'warning')
       return 'below'
     }
     if (!options?.skipStock) {
@@ -1042,7 +1042,7 @@ function postAgentSale(input: {
       return null
     }
     if (sellingPrice < agentPrice) {
-      toast('Selling price cannot be lower than Agent Price.', product.name, 'warning')
+      toast(belowAgentPriceMessage(agentPrice), product.name, 'warning')
       return null
     }
     const needed = (used.get(product.id) ?? 0) + qty
@@ -1788,6 +1788,39 @@ export const db = {
       ),
     })
     toast('Product updated')
+    return true
+  },
+
+  saveAgentPrices(rows: Array<{ productId: string; agentPrice: unknown }>) {
+    if (!hasPermission(state, 'agent.manage')) {
+      toast('Permission denied', 'You cannot change Agent Price.', 'danger')
+      return false
+    }
+    if (!rows.length) {
+      toast('No Agent Price changes to save.', undefined, 'info')
+      return false
+    }
+    const updates = new Map<string, number | undefined>()
+    for (const row of rows) {
+      const product = state.products.find((item) => item.id === row.productId)
+      if (!product) {
+        toast('Product not found', undefined, 'warning')
+        return false
+      }
+      const parsed = parseAgentPriceWrite(row.agentPrice)
+      if (!parsed.ok) {
+        toast('Agent Price cannot be negative.', product.name, 'warning')
+        return false
+      }
+      updates.set(product.id, parsed.value)
+    }
+    setData({
+      products: applyBomCosts(
+        state.products.map((product) => (updates.has(product.id) ? { ...product, agentPrice: updates.get(product.id) } : product)),
+        state.boms,
+      ),
+    })
+    toast('Agent prices saved', `${updates.size} product(s) updated.`)
     return true
   },
 

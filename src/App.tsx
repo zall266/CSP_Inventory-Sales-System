@@ -29,6 +29,7 @@ import { QuotationsPage, QuotationEditorPage, QuotationDetailPage, QuotationPrin
 import { InvoiceDetailPage, InvoicePrintPage } from '@/features/documents/InvoicePages'
 import { DeliveryOrdersPage, DeliveryEditorPage, DeliveryDetailPage, DeliveryPrintPage } from '@/features/documents/DeliveryPages'
 import { AgentDetailPage, AgentsPage } from '@/features/agent/AgentPages'
+import { AgentPricingPage } from '@/features/agent/AgentPricingPage'
 import { MyTasksPage, TaskCategoriesPage, TaskDetailPage, TaskEditorPage, TaskManagePage } from '@/features/tasks/TaskPages'
 import { NewReceivingPage, ReceivingDetailPage, ReceivingListPage } from '@/features/receiving/ReceivingPages'
 import { OpeningBalancePage } from '@/features/openingBalance/OpeningBalancePages'
@@ -54,6 +55,7 @@ export default function App() {
           <Route path="/sales/delivery-orders/:id" element={<DeliveryDetailPage />} />
           <Route path="/pos" element={<PosPage />} />
           <Route path="/sales/agents" element={<AgentsPage />} />
+          <Route path="/sales/agents/pricing" element={<AgentPricingPage />} />
           <Route path="/sales/agents/:id" element={<AgentDetailPage />} />
           <Route path="/sales/returns" element={<SalesReturnsListPage />} />
           <Route path="/sales/returns/new" element={<SalesReturnEditorPage />} />

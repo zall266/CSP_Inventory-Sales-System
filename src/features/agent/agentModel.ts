@@ -1,6 +1,6 @@
 import { productIsSellable } from '@/features/products/masterData'
 import type { Agent, AgentEarningKind, AgentEarningLedger, AgentWithdrawal, AppState, Product, Sale, Warehouse } from '@/types'
-import { round2 } from '@/utils/format'
+import { formatMoney, round2 } from '@/utils/format'
 
 export const SALE_EARNING_KIND: AgentEarningKind = 'sale_earning'
 export const WITHDRAWAL_PENDING_KIND: AgentEarningKind = 'withdrawal_pending'
@@ -22,6 +22,17 @@ export function parseAgentPriceWrite(value: unknown) {
   const amount = Number(value)
   if (!Number.isFinite(amount) || amount < 0) return { ok: false as const }
   return { ok: true as const, value: round2(amount) }
+}
+
+export function defaultAgentSellingPrice(product: { sellingPrice?: number; agentPrice?: number | null } | undefined) {
+  if (!product) return 0
+  const csp = Number(product.sellingPrice) || 0
+  const min = configuredAgentPrice(product)
+  return min !== null ? Math.max(csp, min) : csp
+}
+
+export function belowAgentPriceMessage(agentPrice: number) {
+  return `Price cannot be below Agent Price of ${formatMoney(agentPrice)}.`
 }
 
 export function hasSaleEarningLedger(entries: AgentEarningLedger[], agentSaleId: string) {
