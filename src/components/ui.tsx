@@ -216,6 +216,7 @@ export function StatusBadge({ status }: { status: string }) {
     issued: { label: 'Issued', tone: 'indigo' },
     delivered: { label: 'Delivered', tone: 'emerald' },
     overdue: { label: 'Overdue', tone: 'rose' },
+    wholesale: { label: 'Wholesale', tone: 'indigo' },
   }
   const item = map[status] ?? { label: status, tone: 'slate' as const }
   return <Badge tone={item.tone}>{item.label}</Badge>

@@ -11,6 +11,7 @@ import { formatUnit, productHasBom } from '@/features/products/masterData'
 import { isCompanyWarehouseId, saleIsAgentSale } from '@/features/agent/agentModel'
 import { hasPermission } from '@/features/settings/permissions'
 import { receivingSourceLabel } from '@/features/receiving/receivingModel'
+import { CustomerPricingPanel } from '@/features/customers/CustomerPricingPanel'
 
 export function GlobalDrawers() {
   const drawer = useStore().ui.drawer
@@ -533,30 +534,33 @@ function CustomerDrawer({ id, onClose }: { id: string; onClose: () => void }) {
   const sales = state.sales.filter((s) => s.customerId === id)
   const payments = state.payments.filter((p) => p.partyType === 'customer' && p.partyId === id)
   const returns = state.salesReturns.filter((r) => sales.some((s) => s.id === (r.originalSaleId ?? r.saleId)))
+  const canViewPricing = hasPermission(state, 'customer.pricing.view') || hasPermission(state, 'customer.pricing.manage')
+  const tabs = [
+    { id: 'overview', label: 'Overview' },
+    ...(canViewPricing ? [{ id: 'pricing', label: 'Custom Pricing' }] : []),
+    { id: 'sales', label: 'Sales' },
+    { id: 'payments', label: 'Payments' },
+    { id: 'returns', label: 'Returns' },
+  ]
   return (
-    <Drawer open onClose={onClose} width="max-w-2xl" title={customer.name} subtitle={customer.phone}>
+    <Drawer open onClose={onClose} width="max-w-3xl" title={customer.name} subtitle={customer.phone}>
       <div className="space-y-5 p-6">
         <div className="grid grid-cols-2 gap-3">
           <Mini label="Total sales" value={formatMoney(customerSalesTotal(state, id), { compact: true })} />
           <Mini label="Outstanding" value={formatMoney(customerOutstanding(state, id))} />
         </div>
-        <Tabs
-          value={tab}
-          onChange={setTab}
-          tabs={[
-            { id: 'overview', label: 'Overview' },
-            { id: 'sales', label: 'Sales' },
-            { id: 'payments', label: 'Payments' },
-            { id: 'returns', label: 'Returns' },
-          ]}
-        />
+        <Tabs value={tab} onChange={setTab} tabs={tabs} />
         {tab === 'overview' && (
           <div className="space-y-2 text-sm text-slate-600">
             <div>Email: {customer.email || '—'}</div>
             <div>Status: <StatusBadge status={customer.status} /></div>
             <div>Last sale: {sales[0] ? formatDate(sales.slice().sort((a, b) => b.date.localeCompare(a.date))[0].date) : '—'}</div>
+            {canViewPricing && (
+              <Button variant="secondary" onClick={() => setTab('pricing')}>Custom Pricing</Button>
+            )}
           </div>
         )}
+        {tab === 'pricing' && <CustomerPricingPanel customer={customer} />}
         {tab === 'sales' && (
           <DocList rows={sales.map((s) => ({ id: s.id, no: s.invoiceNo, date: s.date, total: s.total, status: s.status }))} />
         )}

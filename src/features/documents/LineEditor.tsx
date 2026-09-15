@@ -13,14 +13,21 @@ export function catalogProducts(state: AppState, extra?: Product[]) {
   return list
 }
 
-export function emptyLine(state: AppState, extra?: Product[]): DraftLine {
+export function emptyLine(state: AppState, extra?: Product[], priceForProduct?: (product: Product) => number): DraftLine {
   const product = catalogProducts(state, extra)[0] ?? state.products[0]
+  const resolved = product
+    ? priceForProduct
+      ? priceForProduct(product)
+      : currentLinkedAgent(state)
+        ? defaultAgentSellingPrice(product)
+        : product.sellingPrice
+    : 0
   return {
     productId: product?.id ?? '',
     description: product?.name ?? '',
     qty: 1,
     unit: product?.unit ?? 'pcs',
-    price: product ? (currentLinkedAgent(state) ? defaultAgentSellingPrice(product) : product.sellingPrice) : 0,
+    price: resolved,
     discount: 0,
   }
 }
@@ -31,15 +38,23 @@ export function LineEditor({
   onChange,
   withPrices = true,
   products,
+  priceForProduct,
 }: {
   state: AppState
   lines: DraftLine[]
   onChange: (lines: DraftLine[]) => void
   withPrices?: boolean
   products?: Product[]
+  priceForProduct?: (product: Product) => number
 }) {
   const options = catalogProducts(state, products)
   const showDiscount = withPrices && !currentLinkedAgent(state)
+  const unitPriceFor = (product: Product) =>
+    priceForProduct
+      ? priceForProduct(product)
+      : currentLinkedAgent(state)
+        ? defaultAgentSellingPrice(product)
+        : product.sellingPrice
   const patch = (index: number, next: Partial<DraftLine>) => {
     onChange(
       lines.map((line, i) => {
@@ -51,7 +66,7 @@ export function LineEditor({
             merged.description = merged.description && merged.description !== line.description ? merged.description : product.name
             merged.unit = product.unit
             if (withPrices && next.price === undefined) {
-              merged.price = currentLinkedAgent(state) ? defaultAgentSellingPrice(product) : product.sellingPrice
+              merged.price = unitPriceFor(product)
             }
           }
         }
@@ -131,7 +146,7 @@ export function LineEditor({
           </tbody>
         </table>
       </div>
-      <Button variant="secondary" onClick={() => onChange([...lines, emptyLine(state, options)])}>+ Add Item</Button>
+      <Button variant="secondary" onClick={() => onChange([...lines, emptyLine(state, options, priceForProduct)])}>+ Add Item</Button>
     </div>
   )
 }

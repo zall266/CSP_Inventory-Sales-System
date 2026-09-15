@@ -89,6 +89,8 @@ export const PERMISSION_KEYS: PermissionKey[] = [
   'sales_return.manage',
   'return_source.manage',
   'return_reason.manage',
+  'customer.pricing.view',
+  'customer.pricing.manage',
 ]
 
 export const PERMISSION_GROUPS: Array<{ id: string; label: string; keys: PermissionKey[] }> = [
@@ -124,6 +126,8 @@ export const PERMISSION_GROUPS: Array<{ id: string; label: string; keys: Permiss
       'sales_return.manage',
       'return_source.manage',
       'return_reason.manage',
+      'customer.pricing.view',
+      'customer.pricing.manage',
     ],
   },
   {
@@ -282,6 +286,8 @@ export const PERMISSION_LABELS: Record<PermissionKey, string> = {
   'sales_return.manage': 'Manage Sales Returns',
   'return_source.manage': 'Manage Return Sources',
   'return_reason.manage': 'Manage Return Reasons',
+  'customer.pricing.view': 'View Customer Pricing',
+  'customer.pricing.manage': 'Manage Customer Pricing',
 }
 
 export function emptyPermissions(): RolePermissions {
