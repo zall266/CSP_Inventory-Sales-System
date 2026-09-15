@@ -336,12 +336,12 @@ export function UsersSettingsPage() {
         <Card className="mb-6 overflow-x-auto p-5">
           <div className="mb-3 text-sm font-semibold">Permission matrix</div>
           <p className="mb-4 text-sm text-slate-500">Columns are active roles. Owner always has full access. Changes apply immediately to users assigned to that role.</p>
-          <table className="w-full min-w-[720px] text-sm">
+          <table className="w-full min-w-[720px] table-fixed text-sm">
             <thead>
               <tr>
                 <th className="py-2 text-left text-slate-400">Permission</th>
                 {matrixRoles.map((role) => (
-                  <th key={role.id} className="py-2 text-slate-400">{role.name}</th>
+                  <th key={role.id} className="w-24 py-2 text-center text-slate-400 whitespace-nowrap">{role.name}</th>
                 ))}
               </tr>
             </thead>
@@ -349,18 +349,18 @@ export function UsersSettingsPage() {
               {PERMISSION_GROUPS.map((group) => (
                 <Fragment key={group.id}>
                   <tr className="border-t border-slate-100 bg-slate-50/80">
-                    <td className="py-2 text-[11px] font-semibold uppercase tracking-wide text-slate-500" colSpan={matrixRoles.length + 1}>
+                    <td className="py-2 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-500" colSpan={matrixRoles.length + 1}>
                       {group.label}
                     </td>
                   </tr>
                   {group.keys.map((perm) => (
                     <tr key={perm} className="border-t border-slate-100">
-                      <td className="py-2">{PERMISSION_LABELS[perm]}</td>
+                      <td className="py-2 text-left">{PERMISSION_LABELS[perm]}</td>
                       {matrixRoles.map((role) => {
                         const locked = isOwnerRole(role) || !canPerms
                         const checked = isOwnerRole(role) ? true : Boolean(state.settings.roleMatrix[role.id]?.[perm])
                         return (
-                          <td key={role.id} className="py-2">
+                          <td key={role.id} className="w-24 py-2 text-center align-middle">
                             <input
                               type="checkbox"
                               disabled={locked}
