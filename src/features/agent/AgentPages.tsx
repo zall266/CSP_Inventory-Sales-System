@@ -920,14 +920,7 @@ export function AgentsPage() {
       <PageHeader
         title="Agent"
         subtitle="Agent master records and internal stock holders."
-        actions={
-          canManage ? (
-            <>
-              <Button variant="secondary" onClick={() => navigate('/sales/agents/pricing')}>Agent Pricing</Button>
-              <Button onClick={openCreate}><Plus size={16} /> Add Agent</Button>
-            </>
-          ) : undefined
-        }
+        actions={canManage ? <Button onClick={openCreate}><Plus size={16} /> Add Agent</Button> : undefined}
       />
       <FilterRow>
         <Input placeholder="Search agent or code" value={query} onChange={(e) => setQuery(e.target.value)} />

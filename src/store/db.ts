@@ -1791,9 +1791,9 @@ export const db = {
     return true
   },
 
-  saveAgentPrices(rows: Array<{ productId: string; agentPrice?: unknown; sellingPrice?: unknown }>) {
+  saveAgentPrices(rows: Array<{ productId: string; agentPrice?: unknown; sellingPrice?: unknown; wholesalePrice?: unknown }>) {
     if (!hasPermission(state, 'agent.manage')) {
-      toast('Permission denied', 'You cannot change Agent Price.', 'danger')
+      toast('Permission denied', 'You cannot change product prices.', 'danger')
       return false
     }
     if (!rows.length) {
@@ -1802,6 +1802,7 @@ export const db = {
     }
     const agentUpdates = new Map<string, number | undefined>()
     const sellingUpdates = new Map<string, number>()
+    const wholesaleUpdates = new Map<string, number>()
     for (const row of rows) {
       const product = state.products.find((item) => item.id === row.productId)
       if (!product) {
@@ -1824,7 +1825,15 @@ export const db = {
         }
         sellingUpdates.set(product.id, parsed.value)
       }
-      if (!agentUpdates.has(product.id) && !sellingUpdates.has(product.id)) {
+      if (Object.prototype.hasOwnProperty.call(row, 'wholesalePrice')) {
+        const parsed = parseNonNegativeMoney(row.wholesalePrice)
+        if (!parsed.ok) {
+          toast('Wholesale Price cannot be negative.', product.name, 'warning')
+          return false
+        }
+        wholesaleUpdates.set(product.id, parsed.value)
+      }
+      if (!agentUpdates.has(product.id) && !sellingUpdates.has(product.id) && !wholesaleUpdates.has(product.id)) {
         toast('No price changes to save.', product.name, 'info')
         return false
       }
@@ -1838,17 +1847,18 @@ export const db = {
     setData({
       products: applyBomCosts(
         state.products.map((product) => {
-          if (!agentUpdates.has(product.id) && !sellingUpdates.has(product.id)) return product
+          if (!agentUpdates.has(product.id) && !sellingUpdates.has(product.id) && !wholesaleUpdates.has(product.id)) return product
           return {
             ...product,
             agentPrice: agentUpdates.has(product.id) ? agentUpdates.get(product.id) : product.agentPrice,
             sellingPrice: sellingUpdates.has(product.id) ? sellingUpdates.get(product.id)! : product.sellingPrice,
+            wholesalePrice: wholesaleUpdates.has(product.id) ? wholesaleUpdates.get(product.id)! : product.wholesalePrice,
           }
         }),
         state.boms,
       ),
     })
-    const count = new Set([...agentUpdates.keys(), ...sellingUpdates.keys()]).size
+    const count = new Set([...agentUpdates.keys(), ...sellingUpdates.keys(), ...wholesaleUpdates.keys()]).size
     toast('Prices saved', `${count} product(s) updated.`)
     return true
   },

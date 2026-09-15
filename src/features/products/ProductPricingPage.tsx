@@ -9,7 +9,9 @@ import { hasPermission } from '@/features/settings/permissions'
 import { useApi, useStore } from '@/store/hooks'
 import type { Product } from '@/types'
 
-type PriceDraft = { sellingPrice?: string; agentPrice?: string }
+export const PRODUCT_PRICING_PATH = '/products/pricing'
+
+type PriceDraft = { sellingPrice?: string; agentPrice?: string; wholesalePrice?: string }
 
 function currentAgentPriceDraft(product: Product) {
   return product.agentPrice === undefined || product.agentPrice === null ? '' : String(product.agentPrice)
@@ -19,7 +21,15 @@ function currentSellingPriceDraft(product: Product) {
   return String(product.sellingPrice)
 }
 
-export function AgentPricingPage() {
+function currentWholesalePriceDraft(product: Product) {
+  return product.wholesalePrice === undefined || product.wholesalePrice === null ? '' : String(product.wholesalePrice)
+}
+
+export function productOnPricingList(product: Product) {
+  return productIsSellable(product) && product.status === 'active'
+}
+
+export function ProductPricingPage() {
   const state = useStore()
   const api = useApi()
   const navigate = useNavigate()
@@ -29,11 +39,12 @@ export function AgentPricingPage() {
   const [selected, setSelected] = useState<Record<string, boolean>>({})
   const [bulkAgentPrice, setBulkAgentPrice] = useState('')
   const [bulkSellingPrice, setBulkSellingPrice] = useState('')
+  const [bulkWholesalePrice, setBulkWholesalePrice] = useState('')
 
   const catalog = useMemo(
     () =>
       state.products
-        .filter((product) => productIsSellable(product) && product.status === 'active')
+        .filter(productOnPricingList)
         .sort((a, b) => a.name.localeCompare(b.name) || a.sku.localeCompare(b.sku)),
     [state.products],
   )
@@ -42,7 +53,7 @@ export function AgentPricingPage() {
     return catalog.filter((product) => !q || `${product.name} ${product.sku}`.toLowerCase().includes(q))
   }, [catalog, query])
 
-  if (!canManage) return <PermissionDenied subtitle="You do not have access to Agent Pricing." />
+  if (!canManage) return <PermissionDenied subtitle="You do not have access to Product Pricing." />
 
   const sellingValueFor = (product: Product) =>
     Object.prototype.hasOwnProperty.call(drafts[product.id] ?? {}, 'sellingPrice')
@@ -54,10 +65,16 @@ export function AgentPricingPage() {
       ? drafts[product.id].agentPrice ?? ''
       : currentAgentPriceDraft(product)
 
+  const wholesaleValueFor = (product: Product) =>
+    Object.prototype.hasOwnProperty.call(drafts[product.id] ?? {}, 'wholesalePrice')
+      ? drafts[product.id].wholesalePrice ?? ''
+      : currentWholesalePriceDraft(product)
+
   const dirtyRows = catalog.filter(
     (product) =>
       sellingValueFor(product) !== currentSellingPriceDraft(product) ||
-      agentValueFor(product) !== currentAgentPriceDraft(product),
+      agentValueFor(product) !== currentAgentPriceDraft(product) ||
+      wholesaleValueFor(product) !== currentWholesalePriceDraft(product),
   )
   const selectedIds = products.filter((product) => selected[product.id]).map((product) => product.id)
   const allVisibleSelected = products.length > 0 && products.every((product) => selected[product.id])
@@ -74,7 +91,7 @@ export function AgentPricingPage() {
     })
   }
 
-  const applyBulk = (kind: 'sellingPrice' | 'agentPrice', raw: string) => {
+  const applyBulk = (kind: 'sellingPrice' | 'agentPrice' | 'wholesalePrice', raw: string) => {
     if (!selectedIds.length) {
       api.toast('Select at least one product.', undefined, 'warning')
       return
@@ -95,22 +112,29 @@ export function AgentPricingPage() {
     }
     const parsed = parseNonNegativeMoney(raw)
     if (!parsed.ok) {
-      api.toast('Selling Price cannot be negative.', undefined, 'warning')
+      api.toast(
+        kind === 'wholesalePrice' ? 'Wholesale Price cannot be negative.' : 'Selling Price cannot be negative.',
+        undefined,
+        'warning',
+      )
       return
     }
     const nextValue = String(parsed.value)
     setDrafts((current) => {
       const next = { ...current }
-      for (const id of selectedIds) next[id] = { ...next[id], sellingPrice: nextValue }
+      for (const id of selectedIds) next[id] = { ...next[id], [kind]: nextValue }
       return next
     })
   }
 
   const save = () => {
     const rows = dirtyRows.map((product) => {
-      const row: { productId: string; sellingPrice?: string; agentPrice?: string } = { productId: product.id }
+      const row: { productId: string; sellingPrice?: string; agentPrice?: string; wholesalePrice?: string } = {
+        productId: product.id,
+      }
       if (sellingValueFor(product) !== currentSellingPriceDraft(product)) row.sellingPrice = sellingValueFor(product)
       if (agentValueFor(product) !== currentAgentPriceDraft(product)) row.agentPrice = agentValueFor(product)
+      if (wholesaleValueFor(product) !== currentWholesalePriceDraft(product)) row.wholesalePrice = wholesaleValueFor(product)
       return row
     })
     if (!rows.length) {
@@ -126,11 +150,11 @@ export function AgentPricingPage() {
   return (
     <div>
       <PageHeader
-        title="Agent Pricing"
-        subtitle="Set Selling Price and Agent Price for sellable products from one list."
+        title="Product Pricing"
+        subtitle="Manage Selling Price, Agent Price and Wholesale Price"
         actions={
           <>
-            <Button variant="secondary" onClick={() => navigate('/sales/agents')}>Back to Agents</Button>
+            <Button variant="secondary" onClick={() => navigate('/products')}>Back to Products</Button>
             <Button onClick={save} disabled={!dirtyRows.length}>Save Changes</Button>
           </>
         }
@@ -163,7 +187,19 @@ export function AgentPricingPage() {
             <Button type="button" variant="secondary" onClick={() => applyBulk('agentPrice', bulkAgentPrice)}>Apply</Button>
           </div>
         </Field>
-        <div />
+        <Field label="Set Wholesale Price">
+          <div className="flex gap-2">
+            <Input
+              type="number"
+              min={0}
+              step="0.01"
+              value={bulkWholesalePrice}
+              onChange={(event) => setBulkWholesalePrice(event.target.value)}
+              placeholder="RM"
+            />
+            <Button type="button" variant="secondary" onClick={() => applyBulk('wholesalePrice', bulkWholesalePrice)}>Apply</Button>
+          </div>
+        </Field>
       </FilterRow>
       <Card>
         {products.length ? (
@@ -183,6 +219,7 @@ export function AgentPricingPage() {
                   <th>SKU</th>
                   <th>Selling Price</th>
                   <th>Agent Price</th>
+                  <th>Wholesale Price</th>
                 </tr>
               </thead>
               <tbody>
@@ -230,13 +267,24 @@ export function AgentPricingPage() {
                         <div className="mt-1 text-[11px] text-amber-700">{agentPriceAboveSellingMessage()}</div>
                       )}
                     </td>
+                    <td>
+                      <Input
+                        type="number"
+                        min={0}
+                        step="0.01"
+                        className="h-9 w-28"
+                        value={wholesaleValueFor(product)}
+                        onChange={(event) => patchDraft(product.id, { wholesalePrice: event.target.value })}
+                        placeholder="Not set"
+                      />
+                    </td>
                   </tr>
                 ))}
               </tbody>
             </table>
           </div>
         ) : (
-          <EmptyState title="No sellable products" hint="Active sellable products will appear here for Selling Price and Agent Price editing." />
+          <EmptyState title="No sellable products" hint="Active sellable products will appear here for Selling Price, Agent Price and Wholesale Price editing." />
         )}
       </Card>
     </div>

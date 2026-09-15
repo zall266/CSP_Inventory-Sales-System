@@ -110,6 +110,7 @@ export const navGroups: NavGroup[] = [
     label: 'PRODUCTS',
     items: [
       { to: '/products', label: 'Products', icon: Package },
+      { to: '/products/pricing', label: 'Pricing', icon: BadgePercent },
       { to: '/products/raw-materials', label: 'Raw Materials', icon: FlaskConical },
       { to: '/categories', label: 'Categories', icon: Tags },
     ],
@@ -165,6 +166,7 @@ function navItemVisible(state: ReturnType<typeof useStore>, item: NavItem) {
   if (item.to === '/inventory/warehouse-map') return hasPermission(state, 'warehouse_map.view')
   if (item.to === '/inventory/opening-balance') return hasPermission(state, 'opening_balance.view')
   if (item.to === '/sales/agents') return hasPermission(state, 'agent.view') || hasPermission(state, 'agent.manage') || Boolean(currentLinkedAgent(state))
+  if (item.to === '/products/pricing') return hasPermission(state, 'agent.manage')
   if (item.to === '/tasks') return hasPermission(state, 'task.view')
   if (item.to === '/tasks/manage') return hasPermission(state, 'task.create') || hasPermission(state, 'task.edit') || hasPermission(state, 'task.assign')
   if (item.to === '/tasks/categories') return hasPermission(state, 'task.category.manage')
