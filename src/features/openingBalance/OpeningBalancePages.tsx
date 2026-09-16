@@ -17,6 +17,8 @@ import {
   stockItemProducts,
   storageBoxOptions,
 } from '@/features/openingBalance/openingBalanceModel'
+import { OpeningBalanceImportModal } from '@/features/openingBalance/OpeningBalanceImportModal'
+import { downloadOpeningBalanceExport } from '@/features/openingBalance/openingBalanceImport'
 import { CARTON_STORAGE_TYPES } from '@/features/warehouse/warehouseModel'
 import { hasPermission } from '@/features/settings/permissions'
 import { useApi, useLookups, useStore } from '@/store/hooks'
@@ -66,6 +68,7 @@ function OpeningBalanceHomePage({ draft }: { draft?: OpeningBalance }) {
   const [itemQuery, setItemQuery] = useState('')
   const [detailsIndex, setDetailsIndex] = useState<number | null>(null)
   const [busy, setBusy] = useState(false)
+  const [importOpen, setImportOpen] = useState(false)
 
   useEffect(() => {
     if (!draft) return
@@ -148,7 +151,30 @@ function OpeningBalanceHomePage({ draft }: { draft?: OpeningBalance }) {
       <PageHeader
         title={draft ? `${draft.documentNo} · Draft` : 'Opening Balance'}
         subtitle="Record stock that existed before the system go-live."
+        actions={
+          <>
+            <Button variant="secondary" className="w-full sm:w-auto" onClick={() => downloadOpeningBalanceExport(state)}>
+              Export
+            </Button>
+            {canCreate ? (
+              <Button variant="secondary" className="w-full sm:w-auto" onClick={() => setImportOpen(true)}>
+                Import
+              </Button>
+            ) : null}
+          </>
+        }
       />
+      {importOpen ? (
+        <Modal open onClose={() => setImportOpen(false)} title="Import Opening Balance" width="max-w-4xl">
+          <OpeningBalanceImportModal
+            onClose={() => setImportOpen(false)}
+            onImported={(documents) => {
+              setImportOpen(false)
+              if (documents[0]) navigate(`/inventory/opening-balance/${documents[0].id}`)
+            }}
+          />
+        </Modal>
+      ) : null}
       {canCreate ? (
         <Card className="mb-5 p-4 sm:p-5">
           <div className="mb-4 flex flex-col gap-2 sm:flex-row">
