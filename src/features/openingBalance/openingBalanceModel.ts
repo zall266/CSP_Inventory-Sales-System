@@ -45,6 +45,19 @@ export function storageBoxOptions(state: Pick<AppState, 'productionBalances'>) {
   return [...new Set([...DEFAULT_STORAGE_BOXES, ...used])]
 }
 
+export function unusedOpeningBalanceProducts(
+  catalog: Product[],
+  lines: Array<{ productId?: string; warehouseId?: string }>,
+  options: { index: number; warehouseId: string },
+) {
+  const taken = new Set(
+    lines
+      .filter((line, index) => index !== options.index && Boolean(line.productId) && (line.warehouseId || '') === options.warehouseId)
+      .map((line) => line.productId as string),
+  )
+  return catalog.filter((product) => !taken.has(product.id))
+}
+
 export function emptyOpeningLine(
   type: OpeningBalanceType,
   product: Product | undefined,

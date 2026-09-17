@@ -16,6 +16,7 @@ import {
   productionBalanceProducts,
   stockItemProducts,
   storageBoxOptions,
+  unusedOpeningBalanceProducts,
 } from '@/features/openingBalance/openingBalanceModel'
 import { OpeningBalanceImportModal } from '@/features/openingBalance/OpeningBalanceImportModal'
 import { downloadOpeningBalanceExport } from '@/features/openingBalance/openingBalanceImport'
@@ -117,8 +118,9 @@ function OpeningBalanceHomePage({ draft }: { draft?: OpeningBalance }) {
 
   const addLine = () => {
     setLines((current) => {
-      const used = new Set(current.map((line) => line.productId))
-      const nextProduct = catalog.find((product) => !used.has(product.id)) ?? catalog[0] ?? products[0]
+      const available = unusedOpeningBalanceProducts(products, current, { index: current.length, warehouseId })
+      const nextProduct = available.find((product) => matchesQuery(product, itemQuery)) ?? available[0]
+      if (!nextProduct) return current
       return [...current, emptyOpeningLine(type, nextProduct, warehouseId)]
     })
   }
@@ -239,7 +241,7 @@ function OpeningBalanceHomePage({ draft }: { draft?: OpeningBalance }) {
                       index={index}
                       type={type}
                       state={state}
-                      catalog={catalog}
+                      catalog={unusedOpeningBalanceProducts(catalog, lines, { index, warehouseId: line.warehouseId })}
                       products={products}
                       onProduct={(productId) => chooseProduct(index, productId)}
                       onPatch={(patch) => patchLine(index, patch)}
@@ -260,7 +262,7 @@ function OpeningBalanceHomePage({ draft }: { draft?: OpeningBalance }) {
                   <Field label={type === 'finished_goods' ? 'Product' : 'Item'}>
                     <ProductSelect
                       value={line.productId}
-                      catalog={catalog}
+                      catalog={unusedOpeningBalanceProducts(catalog, lines, { index, warehouseId: line.warehouseId })}
                       current={product}
                       onChange={(productId) => chooseProduct(index, productId)}
                     />
