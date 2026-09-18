@@ -205,7 +205,7 @@ export function ProductionSessionDetailPage() {
           </div>
           {session.materialClosing.lines.map((line) => (
             <div key={line.productId} className="mb-2 text-sm text-slate-600">
-              {product(line.productId)?.name}: planned {formatQty(line.plannedQty)} · remaining {formatQty(line.remainingQty)} · actual {formatQty(line.actualUsedQty)} · variance {line.varianceQty > 0 ? '+' : ''}{formatQty(line.varianceQty)} ({line.variancePercent > 0 ? '+' : ''}{formatQty(line.variancePercent)}%)
+              {product(line.productId)?.name}: planned {formatQty(line.plannedQty)} · available {formatQty(line.availableQty)} · remaining {formatQty(line.remainingQty)} · actual {formatQty(line.actualUsedQty)} · variance {line.varianceQty > 0 ? '+' : ''}{formatQty(line.varianceQty)} ({line.variancePercent > 0 ? '+' : ''}{formatQty(line.variancePercent)}%)
             </div>
           ))}
         </Card>

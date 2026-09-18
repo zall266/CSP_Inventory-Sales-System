@@ -30,8 +30,31 @@ export function conversionNote(product: Pick<Product, 'unit' | 'purchaseUnit' | 
   return `1 ${formatUnit(product.purchaseUnit)} = ${conversion} ${formatUnit(product.unit)}`
 }
 
-export function materialAvailableQty(state: Pick<AppState, 'inventory'>, productId: string, warehouseId: string) {
-  return state.inventory.find((row) => row.productId === productId && row.warehouseId === warehouseId)?.qty ?? 0
+/** Raw-material picking lines allocated to this session. Excludes fresh-bulk and production-balance lines. */
+export function sessionRawPickingLines(session: Pick<ProductionSession, 'picking'>, productId: string) {
+  return (session.picking ?? []).filter(
+    (line) => line.id === `raw-${productId}` || line.id.startsWith(`raw-${productId}-`),
+  )
+}
+
+/**
+ * Quantity allocated/issued to this production session from the picking snapshot.
+ * Returns null when the session has no raw picking line for the material.
+ * Additional unofficial takes are not recorded by the current picking checklist.
+ */
+export function sessionAllocatedQty(
+  session: Pick<ProductionSession, 'picking'>,
+  product: Pick<Product, 'unit' | 'purchaseUnit' | 'purchaseConversionQty'> | undefined,
+  productId: string,
+) {
+  const lines = sessionRawPickingLines(session, productId)
+  if (!lines.length) return null
+  return round2(
+    lines.reduce((sum, line) => {
+      const qty = product ? qtyToBaseUnit(line.qtyToPick, line.unit, product) ?? line.qtyToPick : line.qtyToPick
+      return sum + qty
+    }, 0),
+  )
 }
 
 export function plannedClosingMaterials(state: AppState, session: ProductionSession): ClosingDraftMaterial[] {
@@ -41,10 +64,11 @@ export function plannedClosingMaterials(state: AppState, session: ProductionSess
     .map((row) => {
       const product = state.products.find((item) => item.id === row.productId)
       const plannedQty = product ? qtyToBaseUnit(row.qty, row.unit, product) ?? row.qty : row.qty
+      const allocated = sessionAllocatedQty(session, product, row.productId)
       return {
         productId: row.productId,
         plannedQty: round2(plannedQty),
-        availableQty: round2(materialAvailableQty(state, row.productId, session.warehouseId)),
+        availableQty: round2(allocated == null ? plannedQty : allocated),
         unit: product?.unit || row.unit,
       }
     })
@@ -85,9 +109,12 @@ export function closingLineFromInput(
   const remaining = physicalRemainingBaseQty(product, input.fullUnits, input.looseQty)
   if (!remaining.ok) return remaining
   if (remaining.remaining > availableQty) {
-    return { ok: false, reason: 'Remaining cannot exceed available.' }
+    return { ok: false, reason: 'Remaining cannot exceed the quantity allocated to this session.' }
   }
   const actualUsedQty = round2(availableQty - remaining.remaining)
+  if (actualUsedQty < 0) {
+    return { ok: false, reason: 'Actual used cannot be negative.' }
+  }
   const varianceQty = round2(actualUsedQty - plannedQty)
   const variancePercent = plannedQty === 0 ? (actualUsedQty === 0 ? 0 : 100) : round2((varianceQty / Math.abs(plannedQty)) * 100)
   return {

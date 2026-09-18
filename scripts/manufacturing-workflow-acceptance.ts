@@ -37,6 +37,7 @@ const {
   conversionNote,
   physicalRemainingBaseQty,
   plannedClosingMaterials,
+  sessionAllocatedQty,
 } = await import('@/features/manufacturing/materialClosing')
 const { round2 } = await import('@/utils/format')
 
@@ -142,13 +143,25 @@ check(
 check('Invalid conversion is rejected', physicalRemainingBaseQty({ unit: 'KG', purchaseUnit: 'BAG', purchaseConversionQty: 0 }, 1, 0).ok === false)
 check('Negative remaining is rejected', physicalRemainingBaseQty({ unit: 'KG', purchaseUnit: 'KG', purchaseConversionQty: 1 }, 0, -1).ok === false)
 
-const over = closingLineFromInput(
-  { id: 'p-x', unit: 'KG', purchaseUnit: 'KG', purchaseConversionQty: 1 },
-  4.5,
-  1000,
-  { fullUnits: 0, looseQty: 1001 },
+const kgProduct = { id: 'p-x', unit: 'KG', purchaseUnit: 'KG', purchaseConversionQty: 1 }
+const normal = closingLineFromInput(kgProduct, 1000, 1000, { fullUnits: 0, looseQty: 995 })
+check(
+  '1,000 KG available and 995 KG remaining uses 5 KG',
+  normal.ok && normal.line.actualUsedQty === 5 && normal.line.remainingQty === 995 && normal.line.availableQty === 1000,
 )
-check('Remaining greater than available is rejected', !over.ok)
+const unrelated = closingLineFromInput(kgProduct, 1000, 1000, { fullUnits: 0, looseQty: 995 })
+check(
+  'Unrelated 100 KG stock OUT does not change actual used',
+  unrelated.ok && unrelated.line.actualUsedQty === 5,
+)
+const extraIssue = closingLineFromInput(kgProduct, 10, 10, { fullUnits: 0, looseQty: 0 })
+check(
+  'Additional unofficial issue is not recorded; remaining 0 uses allocated 10 KG not 12 KG',
+  extraIssue.ok && extraIssue.line.actualUsedQty === 10,
+)
+const over = closingLineFromInput(kgProduct, 4.5, 1000, { fullUnits: 0, looseQty: 1001 })
+check('Remaining greater than session available is rejected', !over.ok && 'reason' in over && over.reason.includes('allocated to this session'))
+check('Actual used cannot become negative', !over.ok)
 
 startToday()
 const sharedState = db.getSnapshot()
@@ -161,6 +174,12 @@ check('Shared Sugar is one consolidated closing line', sugar.length === 1 && sug
 check('Matcha and Strawberry share those session-level material lines', sharedSession.items.some((item) => item.productId === 'p-pack-mt') && sharedSession.items.some((item) => item.productId === 'p-pack-st'))
 check('Complete page requires acknowledgement and remaining input', completeSrc.includes('I have checked the physical material balance') && completeSrc.includes('Material Closing Check'))
 check('Variance is visible before complete', completeSrc.includes('Actual Used') && completeSrc.includes('Variance'))
+check(
+  'Complete page Available is picking allocation, not warehouse stock',
+  completeSrc.includes('Available:')
+    && completeSrc.includes('picking list')
+    && !completeSrc.includes('System Available'),
+)
 
 const started = db.getSnapshot().productionSessions.find((item) => item.id === 'ps-0910')!
 const blockedNoAck = db.completeSession(started.id, packResults(started))
@@ -170,17 +189,50 @@ const tooMuch = plannedRemainingInputs('ps-0910').map((row, index) => (index ===
 const blockedOver = db.completeSession(started.id, packResults(started), { acknowledged: true, inputs: tooMuch })
 check('Complete rejects remaining above available', blockedOver === false && db.getSnapshot().productionSessions.find((item) => item.id === 'ps-0910')?.status === 'in_progress')
 
+const milkDraft = drafts.find((row) => row.productId === 'p-milkpw')!
+const milkProduct = sharedState.products.find((item) => item.id === 'p-milkpw')
+const allocatedMilk = sessionAllocatedQty(started, milkProduct, 'p-milkpw')
+const warehouseBeforeAdj = inventoryOf('p-milkpw')
+check(
+  'Session available is picking allocation, not warehouse on-hand',
+  allocatedMilk != null && milkDraft.availableQty === allocatedMilk && allocatedMilk !== warehouseBeforeAdj && warehouseBeforeAdj > allocatedMilk,
+)
+const adjusted = db.adjustStock({
+  warehouseId: 'wh-main',
+  productId: 'p-milkpw',
+  type: 'decrease',
+  qty: 5,
+  reason: 'Unrelated sale',
+})
+const milkAfterAdj = plannedClosingMaterials(
+  db.getSnapshot(),
+  db.getSnapshot().productionSessions.find((item) => item.id === 'ps-0910')!,
+).find((row) => row.productId === 'p-milkpw')!
+check('Unrelated stock movement applied', adjusted === true && inventoryOf('p-milkpw') === round2(warehouseBeforeAdj - 5))
+check('Unrelated stock OUT does not change session available', milkAfterAdj.availableQty === milkDraft.availableQty)
+const overWarehouse = closingLineFromInput(milkProduct!, milkDraft.plannedQty, milkDraft.availableQty, {
+  fullUnits: 0,
+  looseQty: round2(milkDraft.availableQty + 1),
+})
+check(
+  'Remaining above session allocation is rejected even when warehouse is larger',
+  !overWarehouse.ok && warehouseBeforeAdj > milkDraft.availableQty,
+)
+
 const milkBefore = inventoryOf('p-milkpw')
 const sugarBefore = inventoryOf('p-sugar')
 const pouchBefore = inventoryOf('p-pouch')
 const fgBefore = inventoryOf('p-pack-mt')
 const inputs = plannedRemainingInputs('ps-0910')
-const milkDraft = drafts.find((row) => row.productId === 'p-milkpw')!
+const milkRemaining = round2(Math.max(0, milkDraft.availableQty - milkDraft.plannedQty + 0.2))
 const milkInput = inputs.map((row) =>
-  row.productId === 'p-milkpw' ? { ...row, looseQty: round2(milkDraft.availableQty - milkDraft.plannedQty - 0.2) } : row,
+  row.productId === 'p-milkpw' ? { ...row, looseQty: milkRemaining } : row,
 )
 const built = buildSessionMaterialClosing(db.getSnapshot(), db.getSnapshot().productionSessions.find((item) => item.id === 'ps-0910')!, milkInput)
-check('Staff remaining input calculates actual used and variance', built.ok && built.ok && built.lines.some((row) => row.productId === 'p-milkpw' && row.actualUsedQty === round2(milkDraft.plannedQty + 0.2)))
+check(
+  'Staff remaining input calculates actual used and variance',
+  built.ok && built.lines.some((row) => row.productId === 'p-milkpw' && row.actualUsedQty === round2(milkDraft.availableQty - milkRemaining) && row.varianceQty !== 0),
+)
 
 const completed = db.completeSession(started.id, packResults(started), { acknowledged: true, inputs: milkInput })
 const after = db.getSnapshot()
@@ -202,7 +254,7 @@ check('Old 8 Sep completed session remains readable without materialClosing', af
 startToday()
 const highInputs = plannedRemainingInputs('ps-0910').map((row) => {
   const draft = plannedClosingMaterials(db.getSnapshot(), db.getSnapshot().productionSessions.find((item) => item.id === 'ps-0910')!).find((item) => item.productId === row.productId)!
-  return { ...row, looseQty: round2(Math.max(0, draft.availableQty - draft.plannedQty * 1.2)) }
+  return { ...row, looseQty: round2(draft.availableQty) }
 })
 db.completeSession('ps-0910', packResults(db.getSnapshot().productionSessions.find((item) => item.id === 'ps-0910')!), {
   acknowledged: true,

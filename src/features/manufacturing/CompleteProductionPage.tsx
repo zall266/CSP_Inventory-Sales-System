@@ -239,7 +239,7 @@ export function CompleteProductionPage() {
 
       <Card className="mt-5 p-5">
         <div className="text-base font-semibold">Material Closing Check</div>
-        <p className="mt-1 text-sm text-slate-600">Check the physical material remaining after today's production. The system calculates actual used.</p>
+        <p className="mt-1 text-sm text-slate-600">Check the physical material remaining after today's production. The system calculates actual used from the quantity allocated on this session's picking list, not current warehouse stock.</p>
         <div className="mt-4 space-y-4">
           {drafts.map((draft) => {
             const p = product(draft.productId)
@@ -254,7 +254,7 @@ export function CompleteProductionPage() {
                 <div className="text-sm font-semibold text-slate-900">{p?.name}</div>
                 <div className="mt-2 grid gap-3 sm:grid-cols-2">
                   <div className="text-sm text-slate-600">Planned Usage: <span className="font-medium tabular text-slate-900">{formatQty(draft.plannedQty)} {formatUnit(draft.unit)}</span></div>
-                  <div className="text-sm text-slate-600">System Available: <span className="font-medium tabular text-slate-900">{formatQty(draft.availableQty)} {formatUnit(draft.unit)}</span></div>
+                  <div className="text-sm text-slate-600">Available: <span className="font-medium tabular text-slate-900">{formatQty(draft.availableQty)} {formatUnit(draft.unit)}</span></div>
                   {split ? (
                     <>
                       <Field label={`Full ${formatUnit(p?.purchaseUnit)}`}>

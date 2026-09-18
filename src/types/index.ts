@@ -928,6 +928,7 @@ export type ProductionSessionItem = {
 export type MaterialClosingLine = {
   productId: string
   plannedQty: number
+  /** Quantity allocated to this production session (picking), not warehouse on-hand. */
   availableQty: number
   remainingQty: number
   actualUsedQty: number
