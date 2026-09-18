@@ -7,6 +7,10 @@ export function cn(...inputs: ClassValue[]) {
 
 export const PROTOTYPE_TODAY = new Date('2026-09-10T12:00:00+08:00')
 
+export function systemDateKey(date: Date = PROTOTYPE_TODAY) {
+  return new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Kuala_Lumpur' }).format(date)
+}
+
 export function round2(n: number) {
   return Math.round(n * 100) / 100
 }

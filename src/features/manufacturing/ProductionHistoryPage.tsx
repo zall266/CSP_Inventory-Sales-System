@@ -196,6 +196,20 @@ export function ProductionSessionDetailPage() {
           ))}
         </Card>
       )}
+      {session.materialClosing ? (
+        <Card className="mb-5 p-5">
+          <div className="mb-2 text-sm font-semibold">Material Closing Check</div>
+          <div className="mb-3 text-sm text-slate-500">
+            Checked by {session.materialClosing.checkedBy} · {session.materialClosing.checkedAt ? formatDateTime(session.materialClosing.checkedAt) : '—'}
+            {session.materialClosing.significantVariance ? ' · Significant variance flagged' : ''}
+          </div>
+          {session.materialClosing.lines.map((line) => (
+            <div key={line.productId} className="mb-2 text-sm text-slate-600">
+              {product(line.productId)?.name}: planned {formatQty(line.plannedQty)} · remaining {formatQty(line.remainingQty)} · actual {formatQty(line.actualUsedQty)} · variance {line.varianceQty > 0 ? '+' : ''}{formatQty(line.varianceQty)} ({line.variancePercent > 0 ? '+' : ''}{formatQty(line.variancePercent)}%)
+            </div>
+          ))}
+        </Card>
+      ) : null}
       {state.stockMovements.filter((row) => row.reference === session.reference || row.reference.startsWith(`${session.reference} `)).length > 0 && (
         <Card className="mb-5 p-5">
           <div className="mb-2 text-sm font-semibold">Inventory movements</div>

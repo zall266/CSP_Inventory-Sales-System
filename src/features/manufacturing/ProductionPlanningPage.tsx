@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import { Button, Card, Field, Input, PageHeader, Select, StatusBadge } from '@/components/ui'
 import { useApi, useLookups, useStore } from '@/store/hooks'
 import { formatDate } from '@/utils/format'
-import { sessionTotals } from './sessionPlan'
+import { sessionTotals, systemProductionDate } from './sessionPlan'
 
 const PACK_PRODUCTS = ['p-pack-mt', 'p-pack-cl', 'p-pack-st', 'p-pack-mlt', 'p-pack-ch']
 
@@ -42,7 +42,9 @@ export function ProductionPlanningPage() {
             size="sm"
             onClick={() => {
               const created = api.createDailySession({ productionDate: date, items: lines })
-              if (created) navigate('/manufacturing/today/' + created.id)
+              if (created) {
+                navigate(created.productionDate === systemProductionDate() ? '/manufacturing/today' : `/manufacturing/history/${created.id}`)
+              }
             }}
           >
             Create session
@@ -65,7 +67,7 @@ export function ProductionPlanningPage() {
               {state.productionSessions.map((session) => {
                 const totals = sessionTotals(session)
                 return (
-                  <tr key={session.id} onClick={() => navigate(session.productionDate === '2026-09-10' ? '/manufacturing/today' : `/manufacturing/today/${session.id}`)}>
+                  <tr key={session.id} onClick={() => navigate(session.productionDate === systemProductionDate() ? '/manufacturing/today' : `/manufacturing/history/${session.id}`)}>
                     <td>{formatDate(session.productionDate + 'T00:00:00+08:00')}</td>
                     <td className="font-medium text-indigo-700">{session.reference}</td>
                     <td>{totals.products}</td>

@@ -1,6 +1,23 @@
 import type { AppState, Bom, PickingLine, ProductionBalance, ProductionSession, ProductionSessionStatus, UserRole } from '@/types'
-import { round2 } from '@/utils/format'
+import { round2, systemDateKey } from '@/utils/format'
 import { scaledRequiredQty } from './helpers'
+
+export function systemProductionDate() {
+  return systemDateKey()
+}
+
+export function isSessionOperationalToday(session: Pick<ProductionSession, 'productionDate'>, date = systemProductionDate()) {
+  return session.productionDate === date
+}
+
+export function todaySessions(sessions: ProductionSession[], date = systemProductionDate()) {
+  return sessions.filter((item) => item.productionDate === date)
+}
+
+export function todayOperationalSession(sessions: ProductionSession[], date = systemProductionDate()) {
+  const rows = todaySessions(sessions, date)
+  return rows.find((item) => item.status !== 'completed') ?? rows[0]
+}
 
 export function roleLabel(role: UserRole) {
   if (role === 'manager') return 'Supervisor'

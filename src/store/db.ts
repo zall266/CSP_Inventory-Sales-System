@@ -56,7 +56,8 @@ import {
 import { clearAttachmentBlobs, deleteAttachmentBlob } from '@/store/attachmentBlobs'
 import { applyBomCosts, hydrateProducts, normalizeUnit, parseNonNegativeMoney, productHasBom, productIsSellable, productIsUsed, purchaseQtyToBaseQty, resolveProductSku, skuIsUnique, validatePurchaseConversion } from '@/features/products/masterData'
 import { bomLinesForQty, consumptionCost, hasShortage, materialAvailability } from '@/features/manufacturing/helpers'
-import { buildSessionPlan, canEditSession, currentUser, mergePicking } from '@/features/manufacturing/sessionPlan'
+import { buildSessionPlan, canEditSession, currentUser, isSessionOperationalToday, mergePicking } from '@/features/manufacturing/sessionPlan'
+import { buildSessionMaterialClosing, isSignificantVariance } from '@/features/manufacturing/materialClosing'
 import {
   defaultPermissionsForLegacy,
   displayRoleName,
@@ -4722,6 +4723,10 @@ export const db = {
       toast('Only a planned session can be accepted', undefined, 'warning')
       return
     }
+    if (!isSessionOperationalToday(session)) {
+      toast("Not today's production", 'Accept, start, and complete only run for the current system date.', 'warning')
+      return
+    }
     if (!canEditSession(user.role, session.status)) {
       toast('Permission denied', undefined, 'danger')
       return
@@ -4739,6 +4744,10 @@ export const db = {
     const user = currentUser(state)
     if (!session || (session.status !== 'accepted' && session.status !== 'planned')) {
       toast('Accept production before starting', undefined, 'warning')
+      return false
+    }
+    if (!isSessionOperationalToday(session)) {
+      toast("Not today's production", 'Accept, start, and complete only run for the current system date.', 'warning')
       return false
     }
     if (session.status === 'planned') {
@@ -4779,6 +4788,10 @@ export const db = {
     const session = state.productionSessions.find((item) => item.id === id)
     const user = currentUser(state)
     if (!session) return
+    if (!isSessionOperationalToday(session)) {
+      toast("Not today's production", 'Target changes are only for today\'s operational session.', 'warning')
+      return
+    }
     if (session.status === 'completed') {
       toast('Completed sessions cannot change target here', 'Admin can edit completed records separately.', 'warning')
       return
@@ -4845,6 +4858,10 @@ export const db = {
       toast('Picking is only for in-progress sessions', undefined, 'info')
       return
     }
+    if (!isSessionOperationalToday(session)) {
+      toast("Not today's production", 'Picking is only for today\'s operational session.', 'warning')
+      return
+    }
     setData({
       productionSessions: state.productionSessions.map((item) =>
         item.id === id
@@ -4873,11 +4890,19 @@ export const db = {
       displayQty: number
       cartonQty: number
     }>,
+    closing?: {
+      acknowledged: boolean
+      inputs: Array<{ productId: string; fullUnits: number; looseQty: number }>
+    },
   ) {
     const session = state.productionSessions.find((item) => item.id === id)
     const user = currentUser(state)
     if (!session || session.status !== 'in_progress') {
       toast('Start production first', undefined, 'warning')
+      return false
+    }
+    if (!isSessionOperationalToday(session)) {
+      toast("Not today's production", 'Complete Production only runs for the current system date.', 'warning')
       return false
     }
     if (!canEditSession(user.role, session.status)) {
@@ -4886,6 +4911,15 @@ export const db = {
     }
     if (session.posted) {
       toast('Already posted', undefined, 'info')
+      return false
+    }
+    if (!closing?.acknowledged) {
+      toast('Acknowledge the physical check', 'Tick the material balance acknowledgement before completing.', 'warning')
+      return false
+    }
+    const closingBuilt = buildSessionMaterialClosing(state, session, closing.inputs ?? [])
+    if (!closingBuilt.ok) {
+      toast('Finish Material Closing Check', closingBuilt.reason, 'warning')
       return false
     }
     for (const item of session.items) {
@@ -4972,7 +5006,9 @@ export const db = {
     }
 
     for (const raw of plan.consolidatedRaw) {
-      if (raw.qty <= 0) continue
+      const closingLine = closingBuilt.lines.find((row) => row.productId === raw.productId)
+      const outQty = closingLine ? closingLine.actualUsedQty : raw.qty
+      if (outQty <= 0) continue
       apply({
         date,
         reference: session.reference,
@@ -4980,8 +5016,10 @@ export const db = {
         warehouseId: session.warehouseId,
         type: 'production_out',
         stockIn: 0,
-        stockOut: raw.qty,
-        notes: 'Consolidated material consumption',
+        stockOut: outQty,
+        notes: closingLine
+          ? `Material closing actual used ${outQty}`
+          : 'Consolidated material consumption',
       })
     }
 
@@ -5044,6 +5082,14 @@ export const db = {
       }
     }
 
+    const significant = closingBuilt.lines.filter((row) => isSignificantVariance(row))
+    const materialClosing = {
+      checkedAt: date,
+      checkedBy: user.name,
+      acknowledged: true,
+      significantVariance: significant.length > 0,
+      lines: closingBuilt.lines,
+    }
     setData({
       inventory,
       stockMovements: movements,
@@ -5059,11 +5105,25 @@ export const db = {
               completedBy: user.name,
               completedAt: date,
               picking: plan.picking.map((line) => ({ ...line, picked: true })),
+              materialClosing,
             }
           : item,
       ),
     })
     notify('production', 'Production completed', `${session.reference} posted.`, '/manufacturing/history')
+    if (significant.length) {
+      const names = significant
+        .map((row) => {
+          const name = productById(row.productId)?.name ?? 'Material'
+          return `${name} ${row.variancePercent > 0 ? '+' : ''}${row.variancePercent}%`
+        })
+        .join(', ')
+      try {
+        notify('production', 'Significant material variance', `${session.reference}: ${names}`, `/manufacturing/history/${session.id}`)
+      } catch {
+        /* notification must not block completion */
+      }
+    }
     emit()
     toast('Production completed', session.reference)
     return true
