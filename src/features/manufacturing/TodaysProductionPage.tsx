@@ -6,6 +6,8 @@ import { useApi, useLookups, useStore } from '@/store/hooks'
 import { formatDate, formatDateTime, formatQty } from '@/utils/format'
 import type { ProductionSession } from '@/types'
 import { buildSessionPlan, canEditSession, currentUser, isSessionOperationalToday, systemProductionDate, todayOperationalSession } from './sessionPlan'
+import { allocationLabel, sessionAllocatedQty } from './materialClosing'
+import { formatUnit } from '@/features/products/masterData'
 import { hasPermission } from '@/features/settings/permissions'
 
 const SAMPLE_SHEET =
@@ -211,6 +213,24 @@ function SessionWorkspace({ session }: { session: ProductionSession }) {
           )}
         </Card>
       </div>
+
+      {(session.materialAllocations?.length ?? 0) > 0 && (
+        <Card className="mb-5 p-5">
+          <div className="mb-2 text-sm font-semibold">Allocated materials</div>
+          <p className="mb-3 text-xs text-slate-500">Session ledger — not warehouse on-hand.</p>
+          {[...new Set(session.materialAllocations!.map((row) => row.productId))].map((productId) => {
+            const rows = session.materialAllocations!.filter((row) => row.productId === productId)
+            const total = sessionAllocatedQty(session, product(productId), productId) ?? 0
+            return (
+              <div key={productId} className="mb-2 text-sm text-slate-600">
+                <span className="font-medium text-slate-900">{product(productId)?.name}</span>
+                {' · '}{formatQty(total)} {formatUnit(product(productId)?.unit)}
+                <div className="text-xs text-slate-500">{rows.map((row) => allocationLabel(row)).join(' + ')}</div>
+              </div>
+            )
+          })}
+        </Card>
+      )}
 
       {session.excessReturns.length > 0 && (
         <Card className="mb-5 p-5">

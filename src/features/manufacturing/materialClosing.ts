@@ -1,7 +1,7 @@
-import type { AppState, MaterialClosingLine, Product, ProductionSession } from '@/types'
+import type { AppState, MaterialClosingLine, Product, ProductionMaterialAllocation, ProductionSession } from '@/types'
 import { formatUnit, qtyToBaseUnit, unitsEqual, validatePurchaseConversion } from '@/features/products/masterData'
-import { round2 } from '@/utils/format'
-import { buildSessionPlan } from './sessionPlan'
+import { formatQty, round2 } from '@/utils/format'
+import { buildSessionPlan, isRawStorePickingLine, suggestPurchasePick } from './sessionPlan'
 
 export const SIGNIFICANT_VARIANCE_PCT = 10
 
@@ -32,21 +32,44 @@ export function conversionNote(product: Pick<Product, 'unit' | 'purchaseUnit' | 
 
 /** Raw-material picking lines allocated to this session. Excludes fresh-bulk and production-balance lines. */
 export function sessionRawPickingLines(session: Pick<ProductionSession, 'picking'>, productId: string) {
-  return (session.picking ?? []).filter(
-    (line) => line.id === `raw-${productId}` || line.id.startsWith(`raw-${productId}-`),
-  )
+  return (session.picking ?? []).filter((line) => line.productId === productId && isRawStorePickingLine(line))
+}
+
+export function usesAllocationLedger(session: Pick<ProductionSession, 'materialAllocations'>) {
+  return Array.isArray(session.materialAllocations)
+}
+
+export function allocationsForProduct(
+  session: Pick<ProductionSession, 'materialAllocations'>,
+  productId: string,
+): ProductionMaterialAllocation[] {
+  return (session.materialAllocations ?? []).filter((row) => row.productId === productId)
+}
+
+export function allocationLabel(row: Pick<ProductionMaterialAllocation, 'source' | 'purchaseQty' | 'purchaseUnit' | 'baseQty' | 'baseUnit' | 'containerType'>) {
+  if (row.source === 'loose') {
+    const container = row.containerType ? ` · ${row.containerType}` : ''
+    return `${formatQty(row.baseQty)} ${formatUnit(row.baseUnit)}${container}`
+  }
+  if (row.purchaseQty != null && row.purchaseUnit) {
+    return `${formatQty(row.purchaseQty)} ${formatUnit(row.purchaseUnit)} (${formatQty(row.baseQty)} ${formatUnit(row.baseUnit)})`
+  }
+  return `${formatQty(row.baseQty)} ${formatUnit(row.baseUnit)}`
 }
 
 /**
- * Quantity allocated/issued to this production session from the picking snapshot.
- * Returns null when the session has no raw picking line for the material.
- * Additional unofficial takes are not recorded by the current picking checklist.
+ * Quantity allocated to this production session.
+ * New sessions (materialAllocations is an array) sum the session ledger.
+ * Legacy sessions without a ledger fall back to stored raw-* picking qtyToPick.
  */
 export function sessionAllocatedQty(
-  session: Pick<ProductionSession, 'picking'>,
+  session: Pick<ProductionSession, 'picking' | 'materialAllocations'>,
   product: Pick<Product, 'unit' | 'purchaseUnit' | 'purchaseConversionQty'> | undefined,
   productId: string,
 ) {
+  if (usesAllocationLedger(session)) {
+    return round2(allocationsForProduct(session, productId).reduce((sum, row) => sum + row.baseQty, 0))
+  }
   const lines = sessionRawPickingLines(session, productId)
   if (!lines.length) return null
   return round2(
@@ -55,6 +78,18 @@ export function sessionAllocatedQty(
       return sum + qty
     }, 0),
   )
+}
+
+export function additionalRequiredPick(
+  session: Pick<ProductionSession, 'picking' | 'materialAllocations'>,
+  product: Pick<Product, 'id' | 'unit' | 'purchaseUnit' | 'purchaseConversionQty'> | undefined,
+  productId: string,
+  plannedBaseQty: number,
+) {
+  const allocated = sessionAllocatedQty(session, product, productId) ?? 0
+  const shortfall = round2(Math.max(0, plannedBaseQty - allocated))
+  const suggestion = suggestPurchasePick(product, shortfall)
+  return { ...suggestion, allocated, shortfall }
 }
 
 export function plannedClosingMaterials(state: AppState, session: ProductionSession): ClosingDraftMaterial[] {
@@ -109,7 +144,7 @@ export function closingLineFromInput(
   const remaining = physicalRemainingBaseQty(product, input.fullUnits, input.looseQty)
   if (!remaining.ok) return remaining
   if (remaining.remaining > availableQty) {
-    return { ok: false, reason: 'Remaining cannot exceed the quantity allocated to this session.' }
+    return { ok: false, reason: 'Physical remaining cannot exceed material allocated to this production session.' }
   }
   const actualUsedQty = round2(availableQty - remaining.remaining)
   if (actualUsedQty < 0) {

@@ -928,7 +928,7 @@ export type ProductionSessionItem = {
 export type MaterialClosingLine = {
   productId: string
   plannedQty: number
-  /** Quantity allocated to this production session (picking), not warehouse on-hand. */
+  /** Total material allocated to this production session, not warehouse on-hand. */
   availableQty: number
   remainingQty: number
   actualUsedQty: number
@@ -944,6 +944,50 @@ export type MaterialClosing = {
   acknowledged: boolean
   significantVariance: boolean
   lines: MaterialClosingLine[]
+}
+
+export type ProductionMaterialAllocationSource = 'picking' | 'additional' | 'loose'
+
+export type ProductionMaterialAuditAction =
+  | 'PICKING_ALLOCATED'
+  | 'MATERIAL_ADDED'
+  | 'LOOSE_MATERIAL_ALLOCATED'
+  | 'MATERIAL_ALLOCATION_UPDATED'
+  | 'MATERIAL_CLOSING_RECORDED'
+  | 'MATERIAL_CLOSING_UPDATED'
+  | 'PRODUCTION_COMPLETED'
+
+export type ProductionMaterialAllocation = {
+  id: string
+  sessionId: string
+  productId: string
+  source: ProductionMaterialAllocationSource
+  purchaseQty?: number
+  purchaseUnit?: string
+  baseQty: number
+  baseUnit: string
+  containerType?: string
+  notes?: string
+  reference?: string
+  createdBy: string
+  createdAt: string
+}
+
+export type ProductionMaterialAudit = {
+  id: string
+  sessionId: string
+  productId: string
+  action: ProductionMaterialAuditAction
+  source?: ProductionMaterialAllocationSource
+  purchaseQty?: number
+  purchaseUnit?: string
+  baseQty?: number
+  baseUnit?: string
+  containerType?: string
+  notes?: string
+  reason?: string
+  createdBy: string
+  createdAt: string
 }
 
 export type ProductionSession = {
@@ -972,6 +1016,8 @@ export type ProductionSession = {
   completedEdits: CompletedEditLog[]
   posted: boolean
   materialClosing?: MaterialClosing
+  materialAllocations?: ProductionMaterialAllocation[]
+  materialAudits?: ProductionMaterialAudit[]
 }
 
 export type RoleStatus = 'active' | 'inactive'
