@@ -1,4 +1,5 @@
 import { formatUnit, productHasBom, qtyToBaseUnit, validatePurchaseConversion } from '@/features/products/masterData'
+import { isActiveBalanceStorageBox } from '@/features/warehouse/warehouseModel'
 import type { AppState, OpeningBalance, OpeningBalanceInput, OpeningBalanceLine, OpeningBalanceType, Product } from '@/types'
 
 export const OPENING_BALANCE_PERMISSION_KEYS = ['opening_balance.view', 'opening_balance.create'] as const
@@ -11,8 +12,6 @@ export const OPENING_BALANCE_TYPES: Array<{ id: OpeningBalanceType; label: strin
 
 /** Older than seeded production dates so FIFO consumes opening balance first. */
 export const OPENING_BALANCE_ORIGIN_DATE = '2000-01-01T00:00:00+08:00'
-
-export const DEFAULT_STORAGE_BOXES = ['Box 1', 'Box 2', 'Box 3', 'BOX-02']
 
 export function openingBalanceTypeLabel(type: OpeningBalanceType | undefined) {
   return OPENING_BALANCE_TYPES.find((item) => item.id === type)?.label ?? 'Stock Item'
@@ -40,11 +39,6 @@ export function productionBalanceProducts(state: Pick<AppState, 'products' | 'bo
   return state.products.filter((product) => isFinishedGoodsProduct(state, product))
 }
 
-export function storageBoxOptions(state: Pick<AppState, 'productionBalances'>) {
-  const used = (state.productionBalances ?? []).map((row) => row.container).filter(Boolean)
-  return [...new Set([...DEFAULT_STORAGE_BOXES, ...used])]
-}
-
 export function unusedOpeningBalanceProducts(
   catalog: Product[],
   lines: Array<{ productId?: string; warehouseId?: string }>,
@@ -62,6 +56,7 @@ export function emptyOpeningLine(
   type: OpeningBalanceType,
   product: Product | undefined,
   warehouseId: string,
+  container = '',
 ): OpeningBalanceInput['items'][number] {
   return {
     productId: product?.id ?? '',
@@ -73,7 +68,7 @@ export function emptyOpeningLine(
     notes: '',
     locationKind: type === 'finished_goods' ? 'inventory' : undefined,
     locationId: '',
-    container: type === 'production_balance' ? 'Box 1' : '',
+    container: type === 'production_balance' ? container : '',
   }
 }
 
@@ -106,7 +101,7 @@ export function conversionPreview(product: Product | undefined, qty: number, uni
 }
 
 export function buildOpeningBalanceLines(
-  state: Pick<AppState, 'products' | 'boms' | 'warehouses' | 'storageLocations'>,
+  state: Pick<AppState, 'products' | 'boms' | 'warehouses' | 'storageLocations' | 'storageSlots'>,
   type: OpeningBalanceType,
   items: OpeningBalanceInput['items'],
 ): { ok: true; lines: OpeningBalanceLine[] } | { ok: false; reason: string } {
@@ -136,6 +131,9 @@ export function buildOpeningBalanceLines(
       if (!(grams > 0)) return { ok: false, reason: 'Production balance quantity must be in grams and greater than 0.' }
       const container = item.container?.trim()
       if (!container) return { ok: false, reason: 'Storage Box is required.' }
+      if (!isActiveBalanceStorageBox(state, warehouse.id, container)) {
+        return { ok: false, reason: `Select a valid Storage Box for ${product.name}.` }
+      }
       const key = `${product.id}:${container}`
       if (seen.has(key)) return { ok: false, reason: `Duplicate ${product.name} in ${container}.` }
       seen.add(key)

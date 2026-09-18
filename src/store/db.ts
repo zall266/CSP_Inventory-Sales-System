@@ -10,6 +10,7 @@ import {
   seedWarehouseOccupancy,
   unplacedPacks,
   WAREHOUSE_MAP_KEYS,
+  isActiveBalanceStorageBox,
 } from '@/features/warehouse/warehouseModel'
 import {
   CUSTOMER_PRICING_PERMISSION_KEYS,
@@ -4895,6 +4896,10 @@ export const db = {
       }
       if (result.productionBalanceQty > 0 && (!result.balanceLocation || !result.balanceContainer)) {
         toast('Storage and box required', 'Production balance must have a location and container.', 'warning')
+        return false
+      }
+      if (result.productionBalanceQty > 0 && !isActiveBalanceStorageBox(state, session.warehouseId, result.balanceContainer)) {
+        toast('Select a valid Storage Box', 'Production balance must use an active Warehouse Map storage box.', 'warning')
         return false
       }
       if (result.actualQty < item.targetQty && !result.shortProductionReason) {

@@ -5,6 +5,7 @@ import { useApi, useLookups, useStore } from '@/store/hooks'
 import { formatQty, round2 } from '@/utils/format'
 import type { ShortProductionReason } from '@/types'
 import { canEditSession, currentUser, sessionTotals } from './sessionPlan'
+import { storageBoxSelectOptions } from '@/features/warehouse/warehouseModel'
 
 const SHORT_REASONS: ShortProductionReason[] = [
   'Material Shortage',
@@ -127,9 +128,9 @@ export function CompleteProductionPage() {
                 <Field label="Box / container">
                   <Select value={row.balanceContainer} onChange={(e) => setRow({ balanceContainer: e.target.value })}>
                     <option value="">Select box</option>
-                    <option value="Box 1">Box 1</option>
-                    <option value="Box 2">Box 2</option>
-                    <option value="Box 3">Box 3</option>
+                    {storageBoxSelectOptions(state, session.warehouseId, row.balanceContainer).map((box) => (
+                      <option key={box} value={box}>{box}</option>
+                    ))}
                   </Select>
                 </Field>
                 <Field label="Packaging waste (g)">

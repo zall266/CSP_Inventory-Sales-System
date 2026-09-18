@@ -17,10 +17,10 @@ import {
   isAllowedReturnVideoFile,
   isLegacyEvidenceFileId,
   remainingReturnableQty,
-  returnStorageBoxOptions,
   returnableProducts,
   salesReturnTotals,
 } from '@/features/returns/salesReturnModel'
+import { storageBoxSelectOptions } from '@/features/warehouse/warehouseModel'
 import { getAttachmentObjectUrl, putAttachmentBlob, SALES_RETURN_EVIDENCE_KIND } from '@/store/attachmentBlobs'
 import { useApi, useLookups, useStore } from '@/store/hooks'
 import { formatDate, formatQty, PROTOTYPE_TODAY, uid } from '@/utils/format'
@@ -278,7 +278,6 @@ export function SalesReturnEditorPage({ draft }: { draft?: SalesReturn }) {
   const navigate = useNavigate()
   const [params] = useSearchParams()
   const products = returnableProducts(state)
-  const boxes = returnStorageBoxOptions(state)
   const sources = (state.returnSources ?? []).filter((row) => row.active || row.id === draft?.sourceId)
   const reasons = (state.returnReasons ?? []).filter((row) => row.active || row.id === draft?.reasonId)
   const invoiceQuery = params.get('invoice') ?? ''
@@ -314,6 +313,9 @@ export function SalesReturnEditorPage({ draft }: { draft?: SalesReturn }) {
     state.sales.find((sale) => sale.id === saleId) ??
     state.sales.find((sale) => sale.invoiceNo.toLowerCase() === invoiceSearch.trim().toLowerCase()) ??
     state.sales.find((sale) => invoiceSearch.trim() && sale.invoiceNo.toLowerCase().includes(invoiceSearch.trim().toLowerCase()))
+  const warehouseId =
+    draft?.warehouseId ||
+    (matchedSale && !saleIsAgentSale(state, matchedSale) ? matchedSale.warehouseId : state.settings.defaultWarehouseId)
 
   const applySale = (id: string, loadItems = false) => {
     const sale = state.sales.find((row) => row.id === id)
@@ -703,7 +705,7 @@ export function SalesReturnEditorPage({ draft }: { draft?: SalesReturn }) {
                       }
                     >
                       <option value="">Select box</option>
-                      {boxes.map((box) => (
+                      {storageBoxSelectOptions(state, warehouseId, line.repackStorageBoxId).map((box) => (
                         <option key={box} value={box}>
                           {box}
                         </option>

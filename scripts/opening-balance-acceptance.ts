@@ -219,7 +219,7 @@ const chocolateGramsBefore =
 const pbDoc = db.createOpeningBalance({
   type: 'production_balance',
   items: [
-    { productId: 'p-pack-ch', qty: 2500, unit: 'G', warehouseId: 'wh-main', container: 'BOX-02' },
+    { productId: 'p-pack-ch', qty: 2500, unit: 'G', warehouseId: 'wh-main', container: 'Box 3' },
     { productId: 'p-pack-mt', qty: 1800, unit: 'G', warehouseId: 'wh-main', container: 'Box 2' },
   ],
 })
@@ -229,7 +229,7 @@ check('Production Balance quantity is in grams', pbDoc?.items.every((line) => li
 check(
   'Production Balance posting creates storage rows',
   db.getSnapshot().productionBalances.length === pbBeforeCount + 2 &&
-    db.getSnapshot().productionBalances.some((row) => row.productId === 'p-pack-ch' && row.quantity === 2500 && row.container === 'BOX-02'),
+    db.getSnapshot().productionBalances.some((row) => row.productId === 'p-pack-ch' && row.quantity === 2500 && row.container === 'Box 3'),
 )
 check(
   'Production Balance does not add finished-goods pack stock',
@@ -238,7 +238,7 @@ check(
 check(
   'Storage Box is preserved on the balance record',
   db.getSnapshot().productionBalances.some(
-    (row) => row.productionReference === pbDoc?.documentNo && row.container === 'BOX-02' && row.productionDate === OPENING_BALANCE_ORIGIN_DATE,
+    (row) => row.productionReference === pbDoc?.documentNo && row.container === 'Box 3' && row.productionDate === OPENING_BALANCE_ORIGIN_DATE,
   ),
 )
 check(
@@ -276,7 +276,7 @@ check(
 const fifoCh = allocateBalanceFifo(db.getSnapshot().productionBalances, 'p-pack-ch', 100)
 check(
   'Chocolate opening balance is oldest available FIFO stock',
-  fifoCh.used[0]?.container === 'BOX-02' && fifoCh.used[0]?.qty === 100 && chocolateGramsBefore === 0,
+  fifoCh.used[0]?.container === 'Box 3' && fifoCh.used[0]?.qty === 100 && chocolateGramsBefore === 0,
 )
 
 const zeroQty = db.createOpeningBalance({

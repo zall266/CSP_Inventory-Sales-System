@@ -16,6 +16,7 @@ import {
   occupancyProductionLabel,
   BALANCE_USAGE_REASONS,
   balanceProductionDate,
+  balanceStorageBoxName,
   formatProductionDate,
 } from '@/features/warehouse/warehouseModel'
 import { companyMapWarehouseId } from '@/features/agent/agentModel'
@@ -761,11 +762,11 @@ function BalanceStrip({ location, slots, canUse }: { location: StorageLocation; 
       <div className="flex flex-wrap gap-2">
         {slots.sort((a, b) => a.slotNo - b.slotNo).map((slot) => {
           const rows = state.productionBalances.filter(
-            (row) => row.status === 'available' && row.quantity > 0 && row.warehouseId === location.warehouseId && row.container === `Box ${slot.slotNo}`,
+            (row) => row.status === 'available' && row.quantity > 0 && row.warehouseId === location.warehouseId && row.container === balanceStorageBoxName(slot),
           )
           return (
             <div key={slot.id} className="min-w-[160px] rounded-xl border border-dashed border-slate-300 bg-slate-50 px-3 py-2">
-              <div className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">Box {slot.slotNo}</div>
+              <div className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">{balanceStorageBoxName(slot)}</div>
               {rows.length ? rows.map((row) => {
                 const product = state.products.find((item) => item.id === row.productId)
                 const produced = formatProductionDate(balanceProductionDate(state, row.productionDate, row.productionReference))
