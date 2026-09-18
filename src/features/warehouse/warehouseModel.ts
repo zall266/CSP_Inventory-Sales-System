@@ -187,6 +187,96 @@ export function migrateFinishedGoodsStorage<T extends {
   return { ...data, storageLocations: nextLocations, storageSlots: nextSlots, slotOccupancies, displayStocks }
 }
 
+export function balanceStorageBoxName(slot: Pick<StorageSlot, 'slotNo'>) {
+  return `Box ${slot.slotNo}`
+}
+
+export type BalanceStorageBox = {
+  slotId: string
+  locationId: string
+  warehouseId: string
+  name: string
+  slotNo: number
+  active: boolean
+}
+
+export function getBalanceStorageBoxes(
+  state: Pick<AppState, 'storageLocations' | 'storageSlots'>,
+  options?: { warehouseId?: string; includeInactive?: boolean },
+): BalanceStorageBox[] {
+  const locations = (state.storageLocations ?? []).filter((location) => {
+    if (location.type !== 'BALANCE_AREA') return false
+    if (options?.warehouseId && location.warehouseId !== options.warehouseId) return false
+    if (!options?.includeInactive && !location.active) return false
+    return true
+  })
+  const locationById = new Map(locations.map((location) => [location.id, location]))
+  const boxes = (state.storageSlots ?? [])
+    .filter((slot) => {
+      const location = locationById.get(slot.locationId)
+      if (!location) return false
+      if (!options?.includeInactive && !slot.active) return false
+      return true
+    })
+    .map((slot) => {
+      const location = locationById.get(slot.locationId)!
+      return {
+        slotId: slot.id,
+        locationId: slot.locationId,
+        warehouseId: location.warehouseId,
+        name: balanceStorageBoxName(slot),
+        slotNo: slot.slotNo,
+        active: Boolean(location.active && slot.active),
+      }
+    })
+    .sort((a, b) => a.warehouseId.localeCompare(b.warehouseId) || a.slotNo - b.slotNo || a.slotId.localeCompare(b.slotId))
+
+  const seen = new Set<string>()
+  return boxes.filter((box) => {
+    const key = `${box.warehouseId}:${box.name}`
+    if (seen.has(key)) return false
+    seen.add(key)
+    return true
+  })
+}
+
+export function balanceStorageBoxNames(
+  state: Pick<AppState, 'storageLocations' | 'storageSlots'>,
+  warehouseId?: string,
+) {
+  return getBalanceStorageBoxes(state, { warehouseId })
+    .filter((box) => box.active)
+    .map((box) => box.name)
+}
+
+export function storageBoxSelectOptions(
+  state: Pick<AppState, 'storageLocations' | 'storageSlots'>,
+  warehouseId?: string,
+  current?: string,
+) {
+  const names = balanceStorageBoxNames(state, warehouseId)
+  const currentName = current?.trim()
+  if (currentName && !names.includes(currentName)) return [...names, currentName]
+  return names
+}
+
+export function isActiveBalanceStorageBox(
+  state: Pick<AppState, 'storageLocations' | 'storageSlots'>,
+  warehouseId: string | undefined,
+  name: string | undefined,
+) {
+  const box = name?.trim()
+  if (!box) return false
+  return balanceStorageBoxNames(state, warehouseId).includes(box)
+}
+
+export function defaultBalanceStorageBox(
+  state: Pick<AppState, 'storageLocations' | 'storageSlots'>,
+  warehouseId?: string,
+) {
+  return balanceStorageBoxNames(state, warehouseId)[0] ?? ''
+}
+
 export function slotLabel(state: AppState, slotId: string) {
   if (slotId === DISPLAY_STOCK_DESTINATION) return 'Display stock'
   const slot = state.storageSlots.find((row) => row.id === slotId)
@@ -196,7 +286,7 @@ export function slotLabel(state: AppState, slotId: string) {
     const face = slot.face === 'FRONT' ? 'Front' : slot.face === 'BACK' ? 'Back' : ''
     return `${location.name} · L${slot.level} · ${face} ${slot.slotNo}`.replace(/\s+/g, ' ').trim()
   }
-  if (location.type === 'BALANCE_AREA') return `Box ${slot.slotNo}`
+  if (location.type === 'BALANCE_AREA') return balanceStorageBoxName(slot)
   if (location.type === 'DISPLAY') return slot.slotNo > 1 ? `${location.name} · ${slot.slotNo}` : location.name
   return `${location.name} · Slot ${slot.slotNo}`
 }

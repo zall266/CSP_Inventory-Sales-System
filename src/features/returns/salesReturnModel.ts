@@ -1,6 +1,6 @@
 import { isAllowedReceivingPhotoFile, parseReceivingPhoto } from '@/features/receiving/receivingModel'
-import { DEFAULT_STORAGE_BOXES, storageBoxOptions } from '@/features/openingBalance/openingBalanceModel'
 import { companyWarehouses, isAgentWarehouseId, saleIsAgentSale } from '@/features/agent/agentModel'
+import { isActiveBalanceStorageBox } from '@/features/warehouse/warehouseModel'
 import { SALES_RETURN_EVIDENCE_KIND, deleteAttachmentBlob, getAttachmentBlob } from '@/store/attachmentBlobs'
 import type {
   AppState,
@@ -327,10 +327,6 @@ export function salesReturnEvidenceExpired(doc: SalesReturn) {
   return files.length > 0 && files.every((file) => file.expired)
 }
 
-export function returnStorageBoxOptions(state: Pick<AppState, 'productionBalances'>) {
-  return [...new Set([...storageBoxOptions(state), ...DEFAULT_STORAGE_BOXES, 'BOX-03', 'Box 3'])]
-}
-
 export function returnableProducts(state: Pick<AppState, 'products'>) {
   return state.products.filter((product) => product.status === 'active')
 }
@@ -472,15 +468,15 @@ export function hydrateSalesReturns(rows: SalesReturn[] | undefined) {
 }
 
 export function buildSalesReturnLines(
-  state: Pick<AppState, 'products' | 'sales' | 'salesReturns' | 'productionBalances'>,
+  state: Pick<AppState, 'products' | 'sales' | 'salesReturns' | 'productionBalances' | 'storageLocations' | 'storageSlots'>,
   items: SalesReturnInput['items'],
   originalSaleId?: string,
   excludeReturnId?: string,
+  warehouseId?: string,
 ): { ok: true; lines: SalesReturnLine[] } | { ok: false; reason: string } {
   if (!items.length) return { ok: false, reason: 'Add at least one return item.' }
   const seen = new Set<string>()
   const lines: SalesReturnLine[] = []
-  const boxes = returnStorageBoxOptions(state)
 
   for (const [index, item] of items.entries()) {
     const product = state.products.find((row) => row.id === item.productId)
@@ -505,7 +501,9 @@ export function buildSalesReturnLines(
       if (!(recovered > 0)) return { ok: false, reason: `Enter actual recoverable grams for ${product.name}.` }
       box = (item.repackStorageBoxId ?? '').trim()
       if (!box) return { ok: false, reason: `Select a Storage Box for ${product.name}.` }
-      if (!boxes.includes(box) && !box) return { ok: false, reason: `Select a Storage Box for ${product.name}.` }
+      if (!isActiveBalanceStorageBox(state, warehouseId, box)) {
+        return { ok: false, reason: `Select a valid Storage Box for ${product.name}.` }
+      }
     }
 
     if (originalSaleId) {
@@ -554,7 +552,7 @@ export function resolveReturnWarehouse(
 }
 
 export function validateSalesReturnInput(
-  state: Pick<AppState, 'products' | 'sales' | 'salesReturns' | 'productionBalances' | 'returnSources' | 'returnReasons' | 'customers' | 'warehouses' | 'settings'>,
+  state: Pick<AppState, 'products' | 'sales' | 'salesReturns' | 'productionBalances' | 'returnSources' | 'returnReasons' | 'customers' | 'warehouses' | 'settings' | 'storageLocations' | 'storageSlots'>,
   input: SalesReturnInput,
   existing?: SalesReturn,
 ): { ok: true; lines: SalesReturnLine[]; warehouseId: string; source: ReturnSource; reason: ReturnReason; saleId?: string; documentNo?: string; customerId?: string; customerName?: string } | { ok: false; reason: string } {
@@ -584,7 +582,7 @@ export function validateSalesReturnInput(
   const warehouse = resolveReturnWarehouse(state, input.warehouseId, originalSaleId)
   if (!warehouse.ok) return warehouse
 
-  const built = buildSalesReturnLines(state, input.items, originalSaleId, existing?.id)
+  const built = buildSalesReturnLines(state, input.items, originalSaleId, existing?.id, warehouse.warehouseId)
   if (!built.ok) return built
 
   let customerId = input.customerId?.trim() || undefined

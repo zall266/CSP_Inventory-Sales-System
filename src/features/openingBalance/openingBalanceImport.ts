@@ -6,7 +6,7 @@ import {
   lineUnitOptions,
   openingBalanceTypeLabel,
 } from '@/features/openingBalance/openingBalanceModel'
-import { CARTON_STORAGE_TYPES } from '@/features/warehouse/warehouseModel'
+import { CARTON_STORAGE_TYPES, isActiveBalanceStorageBox } from '@/features/warehouse/warehouseModel'
 import { formatUnit, normalizeUnit } from '@/features/products/masterData'
 import { formatDate } from '@/utils/format'
 import type { AppState, OpeningBalance, OpeningBalanceInput, OpeningBalanceType, Product, Warehouse } from '@/types'
@@ -216,7 +216,7 @@ export function openingBalanceImportTemplateMatrix(): SpreadsheetMatrix {
 }
 
 export function previewOpeningBalanceImport(
-  state: Pick<AppState, 'products' | 'boms' | 'warehouses' | 'storageLocations' | 'settings'>,
+  state: Pick<AppState, 'products' | 'boms' | 'warehouses' | 'storageLocations' | 'storageSlots' | 'settings'>,
   fileName: string,
   matrix: SpreadsheetMatrix,
 ): OpeningBalanceImportPreview {
@@ -325,6 +325,9 @@ export function previewOpeningBalanceImport(
       }
       unit = 'G'
       if (!container) errors.push('Storage Box is required.')
+      else if (warehouseResult.ok && !isActiveBalanceStorageBox(state, warehouseResult.warehouse.id, container)) {
+        errors.push('Storage Box is not an active Warehouse Map balance box.')
+      }
     } else if (productResult.ok) {
       unit = unitText
         ? formatUnit(unitText)
@@ -393,7 +396,7 @@ export function previewOpeningBalanceImport(
 }
 
 export function previewOpeningBalanceFile(
-  state: Pick<AppState, 'products' | 'boms' | 'warehouses' | 'storageLocations' | 'settings'>,
+  state: Pick<AppState, 'products' | 'boms' | 'warehouses' | 'storageLocations' | 'storageSlots' | 'settings'>,
   fileName: string,
   source: { text?: string; bytes?: ArrayBuffer | Uint8Array },
 ) {
