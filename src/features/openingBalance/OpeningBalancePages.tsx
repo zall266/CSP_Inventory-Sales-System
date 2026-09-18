@@ -502,25 +502,27 @@ function OpeningBalanceRow({
   const preview = product && type !== 'production_balance' ? conversionPreview(product, Number(line.qty) || 0, line.unit || product.unit) : null
   return (
     <tr className="cursor-default">
-      <td>
+      <td className="!align-top">
         <ProductSelect value={line.productId} catalog={catalog} current={product} onChange={onProduct} />
       </td>
-      <td className="text-slate-500">{product?.sku ?? '—'}</td>
-      <td>
-        <Input
-          className="h-9 w-24"
-          type="number"
-          min={0}
-          step="any"
-          value={line.qty}
-          onChange={(event) => onPatch({ qty: Number(event.target.value) })}
-        />
-        {preview ? (
-          <div className="mt-1 text-[11px] text-slate-500">{formatQty(preview.baseQty)} {preview.unit}</div>
-        ) : null}
+      <td className="!align-top text-slate-500">{product?.sku ?? '—'}</td>
+      <td className="!align-top">
+        <div className="flex flex-col items-start">
+          <Input
+            className="h-9 w-24"
+            type="number"
+            min={0}
+            step="any"
+            value={line.qty}
+            onChange={(event) => onPatch({ qty: Number(event.target.value) })}
+          />
+          {preview ? (
+            <div className="mt-1 text-[11px] text-slate-500">{formatQty(preview.baseQty)} {preview.unit}</div>
+          ) : null}
+        </div>
       </td>
       {type !== 'production_balance' ? (
-        <td>
+        <td className="!align-top">
           <Select value={line.unit} onChange={(event) => onPatch({ unit: event.target.value })}>
             {lineUnitOptions(product).map((unit) => (
               <option key={unit} value={unit}>{unit}</option>
@@ -529,7 +531,7 @@ function OpeningBalanceRow({
         </td>
       ) : null}
       {type === 'production_balance' ? (
-        <td>
+        <td className="!align-top">
           <StorageBoxSelect
             value={line.container ?? ''}
             warehouseId={line.warehouseId}
@@ -538,16 +540,16 @@ function OpeningBalanceRow({
           />
         </td>
       ) : (
-        <td>
+        <td className="!align-top">
           <Input className="h-9 w-28" value={line.batchNo ?? ''} onChange={(event) => onPatch({ batchNo: event.target.value })} />
         </td>
       )}
       {type !== 'production_balance' ? (
-        <td>
+        <td className="!align-top">
           <Input className="h-9 w-36" type="date" value={line.expiry ?? ''} onChange={(event) => onPatch({ expiry: event.target.value })} />
         </td>
       ) : null}
-      <td>
+      <td className="!align-top">
         <div className="flex flex-wrap justify-end gap-2">
           <button type="button" className="text-xs font-medium text-indigo-600" onClick={onDetails}>
             Details
