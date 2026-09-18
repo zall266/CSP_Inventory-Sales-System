@@ -99,9 +99,6 @@ function SessionWorkspace({ session }: { session: ProductionSession }) {
             {session.status === 'completed' && adminEdit && (
               <Link to={`/manufacturing/history/${session.id}/edit`}><Button>Edit completed production</Button></Link>
             )}
-            {session.status === 'completed' && !adminEdit && (
-              <Link to={`/manufacturing/history/${session.id}`}><Button variant="secondary">View details</Button></Link>
-            )}
           </div>
         }
       />
