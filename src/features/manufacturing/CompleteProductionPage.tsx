@@ -1,11 +1,19 @@
 import { useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
-import { Button, Card, ConfirmDialog, Field, Input, PageHeader, Select, Textarea } from '@/components/ui'
+import { Button, Card, Checkbox, ConfirmDialog, Field, Input, PageHeader, Select, Textarea } from '@/components/ui'
 import { useApi, useLookups, useStore } from '@/store/hooks'
 import { formatQty, round2 } from '@/utils/format'
+import { formatUnit } from '@/features/products/masterData'
 import type { ShortProductionReason } from '@/types'
-import { canEditSession, currentUser, sessionTotals } from './sessionPlan'
+import { canEditSession, currentUser, isSessionOperationalToday, sessionTotals, systemProductionDate } from './sessionPlan'
 import { storageBoxSelectOptions } from '@/features/warehouse/warehouseModel'
+import {
+  buildSessionMaterialClosing,
+  conversionNote,
+  plannedClosingMaterials,
+  usesPurchaseUnitSplit,
+  varianceLabel,
+} from './materialClosing'
 
 const SHORT_REASONS: ShortProductionReason[] = [
   'Material Shortage',
@@ -23,9 +31,9 @@ export function CompleteProductionPage() {
   const navigate = useNavigate()
   const { product } = useLookups()
   const user = currentUser(state)
+  const today = systemProductionDate()
   const session = state.productionSessions.find((item) => item.id === (id ?? ''))
-    ?? state.productionSessions.find((item) => item.status === 'in_progress')
-    ?? state.productionSessions.find((item) => item.productionDate === '2026-09-10')
+    ?? state.productionSessions.find((item) => item.status === 'in_progress' && item.productionDate === today)
 
   const [results, setResults] = useState(() =>
     (session?.items ?? []).map((item) => {
@@ -45,10 +53,23 @@ export function CompleteProductionPage() {
       }
     }),
   )
+  const drafts = session ? plannedClosingMaterials(state, session) : []
+  const [closingInputs, setClosingInputs] = useState<Record<string, { fullUnits: string; looseQty: string }>>(() =>
+    Object.fromEntries(drafts.map((row) => [row.productId, { fullUnits: '', looseQty: '' }])),
+  )
+  const [acknowledged, setAcknowledged] = useState(false)
   const [confirm, setConfirm] = useState(false)
 
   if (!session) {
     return <PageHeader title="Complete production" subtitle="No session found." />
+  }
+  if (!isSessionOperationalToday(session, today)) {
+    return (
+      <div>
+        <PageHeader title="Complete production" subtitle={`${session.reference} is not today's production.`} />
+        <Link to="/manufacturing/history"><Button>Production History</Button></Link>
+      </div>
+    )
   }
   if (session.status !== 'in_progress') {
     return (
@@ -71,16 +92,44 @@ export function CompleteProductionPage() {
   const totals = sessionTotals(session)
   const distributionInvalid = results.some((row) => round2(row.displayQty + row.cartonQty) !== round2(row.actualQty))
 
+  const parsedInputs = drafts.map((row) => {
+    const input = closingInputs[row.productId] ?? { fullUnits: '', looseQty: '' }
+    const p = product(row.productId)
+    const split = usesPurchaseUnitSplit(p)
+    return {
+      productId: row.productId,
+      fullUnits: split ? Number(input.fullUnits) : 0,
+      looseQty: Number(input.looseQty),
+      filled: split ? input.fullUnits !== '' && input.looseQty !== '' : input.looseQty !== '',
+    }
+  })
+  const closingReady = parsedInputs.every((row) => row.filled) && parsedInputs.length === drafts.length
+  const closingPreview = closingReady
+    ? buildSessionMaterialClosing(state, session, parsedInputs.map((row) => ({ productId: row.productId, fullUnits: row.fullUnits, looseQty: row.looseQty })))
+    : { ok: false as const, reason: 'Enter remaining quantity for every material.' }
+
   const openReview = () => {
     if (distributionInvalid) {
       api.toast('Distribution must equal actual', 'Display + Carton must equal Actual Produced for every product.', 'warning')
+      return
+    }
+    if (!acknowledged) {
+      api.toast('Acknowledge the physical check', 'Tick the material balance acknowledgement before completing.', 'warning')
+      return
+    }
+    if (!closingPreview.ok) {
+      api.toast('Finish Material Closing Check', closingPreview.reason, 'warning')
       return
     }
     setConfirm(true)
   }
 
   const submit = () => {
-    const ok = api.completeSession(session.id, results)
+    if (!closingPreview.ok) return
+    const ok = api.completeSession(session.id, results, {
+      acknowledged: true,
+      inputs: parsedInputs.map((row) => ({ productId: row.productId, fullUnits: row.fullUnits, looseQty: row.looseQty })),
+    })
     if (ok) {
       setConfirm(false)
       navigate(`/manufacturing/history/${session.id}`)
@@ -91,7 +140,7 @@ export function CompleteProductionPage() {
     <div>
       <PageHeader
         title="Complete production"
-        subtitle={`${session.reference} · enter actual packs, leftover processed bulk, and waste for every product in one screen.`}
+        subtitle={`${session.reference} · enter actual packs, leftover processed bulk, waste, then check physical material remaining.`}
         actions={<Link to="/manufacturing/today"><Button variant="secondary">Back</Button></Link>}
       />
       <p className="mb-4 text-sm text-slate-600">
@@ -187,9 +236,91 @@ export function CompleteProductionPage() {
           )
         })}
       </div>
+
+      <Card className="mt-5 p-5">
+        <div className="text-base font-semibold">Material Closing Check</div>
+        <p className="mt-1 text-sm text-slate-600">Check the physical material remaining after today's production. The system calculates actual used from the quantity allocated on this session's picking list, not current warehouse stock.</p>
+        <div className="mt-4 space-y-4">
+          {drafts.map((draft) => {
+            const p = product(draft.productId)
+            const split = usesPurchaseUnitSplit(p)
+            const input = closingInputs[draft.productId] ?? { fullUnits: '', looseQty: '' }
+            const setInput = (patch: Partial<typeof input>) =>
+              setClosingInputs((current) => ({ ...current, [draft.productId]: { ...input, ...patch } }))
+            const line = closingPreview.ok ? closingPreview.lines.find((row) => row.productId === draft.productId) : undefined
+            const note = conversionNote(p)
+            return (
+              <div key={draft.productId} className="rounded-xl border border-slate-200 p-4">
+                <div className="text-sm font-semibold text-slate-900">{p?.name}</div>
+                <div className="mt-2 grid gap-3 sm:grid-cols-2">
+                  <div className="text-sm text-slate-600">Planned Usage: <span className="font-medium tabular text-slate-900">{formatQty(draft.plannedQty)} {formatUnit(draft.unit)}</span></div>
+                  <div className="text-sm text-slate-600">Available: <span className="font-medium tabular text-slate-900">{formatQty(draft.availableQty)} {formatUnit(draft.unit)}</span></div>
+                  {split ? (
+                    <>
+                      <Field label={`Full ${formatUnit(p?.purchaseUnit)}`}>
+                        <Input
+                          type="number"
+                          min={0}
+                          value={input.fullUnits}
+                          onChange={(e) => setInput({ fullUnits: e.target.value })}
+                        />
+                      </Field>
+                      <Field label={`Loose ${formatUnit(p?.unit)}`}>
+                        <Input
+                          type="number"
+                          min={0}
+                          value={input.looseQty}
+                          onChange={(e) => setInput({ looseQty: e.target.value })}
+                        />
+                      </Field>
+                    </>
+                  ) : (
+                    <Field label={`Remaining ${formatUnit(draft.unit)}`}>
+                      <Input
+                        type="number"
+                        min={0}
+                        value={input.looseQty}
+                        onChange={(e) => setInput({ looseQty: e.target.value })}
+                      />
+                    </Field>
+                  )}
+                </div>
+                {note ? <p className="mt-2 text-xs text-slate-500">ⓘ {note}</p> : null}
+                {line ? (
+                  <div className="mt-3 space-y-1 text-sm">
+                    <div>Physical Remaining: <span className="tabular font-medium">{formatQty(line.remainingQty)} {formatUnit(draft.unit)}</span></div>
+                    <div>Actual Used: <span className="tabular font-medium">{formatQty(line.actualUsedQty)} {formatUnit(draft.unit)}</span></div>
+                    <div>
+                      Variance: <span className="tabular font-medium">{line.varianceQty > 0 ? '+' : ''}{formatQty(line.varianceQty)} {formatUnit(draft.unit)}</span>
+                      <span className="ml-2 text-slate-500">{line.variancePercent > 0 ? '+' : ''}{formatQty(line.variancePercent)}%</span>
+                    </div>
+                    <div className={line.varianceQty === 0 ? 'text-emerald-700' : 'text-amber-700'}>
+                      {line.varianceQty === 0 ? '✓' : '⚠'} {varianceLabel(line)}
+                    </div>
+                  </div>
+                ) : parsedInputs.find((row) => row.productId === draft.productId)?.filled ? (
+                  <p className="mt-2 text-sm text-rose-600">{closingPreview.ok ? '' : closingPreview.reason}</p>
+                ) : (
+                  <p className="mt-2 text-xs text-slate-400">Enter remaining quantity to see actual used and variance.</p>
+                )}
+              </div>
+            )
+          })}
+        </div>
+        <div className="mt-4">
+          <Checkbox
+            checked={acknowledged}
+            onChange={setAcknowledged}
+            label="I have checked the physical material balance"
+          />
+        </div>
+      </Card>
+
       <div className="mt-5 flex justify-end gap-2">
         <Link to="/manufacturing/today"><Button variant="secondary">Cancel</Button></Link>
-        <Button variant="success" onClick={openReview}>Review and complete</Button>
+        <Button variant="success" onClick={openReview} disabled={!acknowledged || !closingPreview.ok || distributionInvalid}>
+          Review and complete
+        </Button>
       </div>
       <ConfirmDialog
         open={confirm}

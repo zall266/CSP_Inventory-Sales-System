@@ -3,15 +3,16 @@ import { Button, Card, KpiCard, PageHeader, StatusBadge } from '@/components/ui'
 import { isCompanyWarehouseId } from '@/features/agent/agentModel'
 import { useLookups, useStore } from '@/store/hooks'
 import { formatQty } from '@/utils/format'
-import { currentUser, sessionTotals } from './sessionPlan'
+import { currentUser, sessionTotals, systemProductionDate } from './sessionPlan'
 
 export function ManufacturingDashboardPage() {
   const state = useStore()
   const { product } = useLookups()
   const user = currentUser(state)
-  const today = state.productionSessions.find((item) => item.productionDate === '2026-09-10')
+  const todayKey = systemProductionDate()
+  const today = state.productionSessions.find((item) => item.productionDate === todayKey)
   const active = state.productionSessions.filter((item) => item.status === 'in_progress' || item.status === 'accepted')
-  const completedToday = state.productionSessions.filter((item) => item.status === 'completed' && item.completedAt?.slice(0, 10) === '2026-09-10')
+  const completedToday = state.productionSessions.filter((item) => item.status === 'completed' && item.completedAt?.slice(0, 10) === todayKey)
   const plannedPacks = today ? sessionTotals(today).planned : 0
   const actualPacks = completedToday.reduce((sum, item) => sum + sessionTotals(item).actual, 0)
   const balanceG = state.productionBalances.filter((row) => row.status === 'available').reduce((sum, row) => sum + row.quantity, 0)

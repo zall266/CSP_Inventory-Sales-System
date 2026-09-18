@@ -925,6 +925,27 @@ export type ProductionSessionItem = {
   cartonQty: number
 }
 
+export type MaterialClosingLine = {
+  productId: string
+  plannedQty: number
+  /** Quantity allocated to this production session (picking), not warehouse on-hand. */
+  availableQty: number
+  remainingQty: number
+  actualUsedQty: number
+  varianceQty: number
+  variancePercent: number
+  fullUnits?: number
+  looseQty?: number
+}
+
+export type MaterialClosing = {
+  checkedAt: string
+  checkedBy: string
+  acknowledged: boolean
+  significantVariance: boolean
+  lines: MaterialClosingLine[]
+}
+
 export type ProductionSession = {
   id: string
   productionDate: string
@@ -950,6 +971,7 @@ export type ProductionSession = {
   targetChanges: TargetChangeLog[]
   completedEdits: CompletedEditLog[]
   posted: boolean
+  materialClosing?: MaterialClosing
 }
 
 export type RoleStatus = 'active' | 'inactive'

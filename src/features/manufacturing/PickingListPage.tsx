@@ -2,15 +2,15 @@ import { Link } from 'react-router-dom'
 import { Button, Card, PageHeader, StatusBadge } from '@/components/ui'
 import { useApi, useLookups, useStore } from '@/store/hooks'
 import { formatQty } from '@/utils/format'
-import { currentUser } from './sessionPlan'
+import { currentUser, systemProductionDate, todayOperationalSession } from './sessionPlan'
 
 export function PickingListPage() {
   const state = useStore()
   const api = useApi()
   const { product } = useLookups()
   const user = currentUser(state)
-  const session = state.productionSessions.find((item) => item.status === 'in_progress')
-    ?? state.productionSessions.find((item) => item.productionDate === '2026-09-10')
+  const session = todayOperationalSession(state.productionSessions)
+    ?? (state.productionSessions.find((item) => item.status === 'in_progress' && item.productionDate === systemProductionDate()))
 
   if (!session) {
     return (
