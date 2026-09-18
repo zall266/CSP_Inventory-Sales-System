@@ -82,7 +82,7 @@ function integrityItems() {
       repackQty: 5,
       wasteQty: 2,
       repackRecoveredGrams: 470,
-      repackStorageBoxId: 'BOX-03',
+      repackStorageBoxId: 'Box 3',
     },
     { productId: 'p-pack-st', returnedQty: 5, unit: 'PACK', goodQty: 5, repackQty: 0, wasteQty: 0 },
     {
@@ -307,8 +307,8 @@ const matchaBox = (db.getSnapshot().productionBalances ?? []).find(
 const chocolateBox = (db.getSnapshot().productionBalances ?? []).find(
   (row) => row.productionReference === confirmed!.returnNo && row.productId === 'p-pack-ch',
 )
-check('Repack requires Storage Box BOX-03 for Matcha', matchaBox?.container === 'BOX-03' && matchaBox.quantity === 470)
-check('Multiple Repack Storage Boxes are preserved', chocolateBox?.container === 'Box 1' && matchaBox?.container === 'BOX-03')
+check('Repack requires Storage Box BOX-03 for Matcha', matchaBox?.container === 'Box 3' && matchaBox.quantity === 470)
+check('Multiple Repack Storage Boxes are preserved', chocolateBox?.container === 'Box 1' && matchaBox?.container === 'Box 3')
 
 const fifo = allocateBalanceFifo(db.getSnapshot().productionBalances ?? [], 'p-pack-mt', matchaPbAfter)
 check(

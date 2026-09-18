@@ -15,9 +15,11 @@ import {
   openingBalanceTypeLabel,
   productionBalanceProducts,
   stockItemProducts,
-  storageBoxOptions,
+  unusedOpeningBalanceProducts,
 } from '@/features/openingBalance/openingBalanceModel'
-import { CARTON_STORAGE_TYPES } from '@/features/warehouse/warehouseModel'
+import { OpeningBalanceImportModal } from '@/features/openingBalance/OpeningBalanceImportModal'
+import { downloadOpeningBalanceExport } from '@/features/openingBalance/openingBalanceImport'
+import { CARTON_STORAGE_TYPES, defaultBalanceStorageBox, storageBoxSelectOptions } from '@/features/warehouse/warehouseModel'
 import { hasPermission } from '@/features/settings/permissions'
 import { useApi, useLookups, useStore } from '@/store/hooks'
 import { formatDate, formatQty } from '@/utils/format'
@@ -60,12 +62,13 @@ function OpeningBalanceHomePage({ draft }: { draft?: OpeningBalance }) {
   const [notes, setNotes] = useState(draft?.notes ?? '')
   const products = itemPool(state, type)
   const [lines, setLines] = useState<DraftLine[]>(
-    draft ? inputLinesFromOpeningBalance(draft) : [emptyOpeningLine(type, products[0], warehouseId)],
+    draft ? inputLinesFromOpeningBalance(draft) : [emptyOpeningLine(type, products[0], warehouseId, defaultBalanceStorageBox(state, warehouseId))],
   )
   const [query, setQuery] = useState('')
   const [itemQuery, setItemQuery] = useState('')
   const [detailsIndex, setDetailsIndex] = useState<number | null>(null)
   const [busy, setBusy] = useState(false)
+  const [importOpen, setImportOpen] = useState(false)
 
   useEffect(() => {
     if (!draft) return
@@ -97,7 +100,7 @@ function OpeningBalanceHomePage({ draft }: { draft?: OpeningBalance }) {
     setType(next)
     setItemQuery('')
     setDetailsIndex(null)
-    setLines([emptyOpeningLine(next, pool[0], warehouseId)])
+    setLines([emptyOpeningLine(next, pool[0], warehouseId, defaultBalanceStorageBox(state, warehouseId))])
   }
 
   const patchLine = (index: number, patch: Partial<DraftLine>) => {
@@ -114,9 +117,10 @@ function OpeningBalanceHomePage({ draft }: { draft?: OpeningBalance }) {
 
   const addLine = () => {
     setLines((current) => {
-      const used = new Set(current.map((line) => line.productId))
-      const nextProduct = catalog.find((product) => !used.has(product.id)) ?? catalog[0] ?? products[0]
-      return [...current, emptyOpeningLine(type, nextProduct, warehouseId)]
+      const available = unusedOpeningBalanceProducts(products, current, { index: current.length, warehouseId })
+      const nextProduct = available.find((product) => matchesQuery(product, itemQuery)) ?? available[0]
+      if (!nextProduct) return current
+      return [...current, emptyOpeningLine(type, nextProduct, warehouseId, defaultBalanceStorageBox(state, warehouseId))]
     })
   }
 
@@ -148,7 +152,30 @@ function OpeningBalanceHomePage({ draft }: { draft?: OpeningBalance }) {
       <PageHeader
         title={draft ? `${draft.documentNo} · Draft` : 'Opening Balance'}
         subtitle="Record stock that existed before the system go-live."
+        actions={
+          <>
+            <Button variant="secondary" className="w-full sm:w-auto" onClick={() => downloadOpeningBalanceExport(state)}>
+              Export
+            </Button>
+            {canCreate ? (
+              <Button variant="secondary" className="w-full sm:w-auto" onClick={() => setImportOpen(true)}>
+                Import
+              </Button>
+            ) : null}
+          </>
+        }
       />
+      {importOpen ? (
+        <Modal open onClose={() => setImportOpen(false)} title="Import Opening Balance" width="max-w-4xl">
+          <OpeningBalanceImportModal
+            onClose={() => setImportOpen(false)}
+            onImported={(documents) => {
+              setImportOpen(false)
+              if (documents[0]) navigate(`/inventory/opening-balance/${documents[0].id}`)
+            }}
+          />
+        </Modal>
+      ) : null}
       {canCreate ? (
         <Card className="mb-5 p-4 sm:p-5">
           <div className="mb-4 flex flex-col gap-2 sm:flex-row">
@@ -168,8 +195,20 @@ function OpeningBalanceHomePage({ draft }: { draft?: OpeningBalance }) {
               <Select
                 value={warehouseId}
                 onChange={(event) => {
-                  setWarehouseId(event.target.value)
-                  setLines((current) => current.map((line) => ({ ...line, warehouseId: event.target.value })))
+                  const nextWarehouse = event.target.value
+                  setWarehouseId(nextWarehouse)
+                  setLines((current) =>
+                    current.map((line) => ({
+                      ...line,
+                      warehouseId: nextWarehouse,
+                      container:
+                        type === 'production_balance'
+                          ? storageBoxSelectOptions(state, nextWarehouse).includes(line.container ?? '')
+                            ? line.container
+                            : defaultBalanceStorageBox(state, nextWarehouse)
+                          : line.container,
+                    })),
+                  )
                 }}
               >
                 {companyWarehouses(state.warehouses).map((warehouse) => (
@@ -210,10 +249,9 @@ function OpeningBalanceHomePage({ draft }: { draft?: OpeningBalance }) {
                     <OpeningBalanceRow
                       key={index}
                       line={line}
-                      index={index}
                       type={type}
                       state={state}
-                      catalog={catalog}
+                      catalog={unusedOpeningBalanceProducts(catalog, lines, { index, warehouseId: line.warehouseId })}
                       products={products}
                       onProduct={(productId) => chooseProduct(index, productId)}
                       onPatch={(patch) => patchLine(index, patch)}
@@ -234,7 +272,7 @@ function OpeningBalanceHomePage({ draft }: { draft?: OpeningBalance }) {
                   <Field label={type === 'finished_goods' ? 'Product' : 'Item'}>
                     <ProductSelect
                       value={line.productId}
-                      catalog={catalog}
+                      catalog={unusedOpeningBalanceProducts(catalog, lines, { index, warehouseId: line.warehouseId })}
                       current={product}
                       onChange={(productId) => chooseProduct(index, productId)}
                     />
@@ -252,10 +290,10 @@ function OpeningBalanceHomePage({ draft }: { draft?: OpeningBalance }) {
                     </Field>
                     {type === 'production_balance' ? (
                       <Field label="Storage Box">
-                        <StorageBoxInput
-                          index={index}
+                        <StorageBoxSelect
                           value={line.container ?? ''}
-                          options={storageBoxOptions(state)}
+                          warehouseId={line.warehouseId}
+                          state={state}
                           onChange={(container) => patchLine(index, { container })}
                         />
                       </Field>
@@ -323,7 +361,6 @@ function OpeningBalanceHomePage({ draft }: { draft?: OpeningBalance }) {
           line={detailsLine}
           product={detailsProduct}
           state={state}
-          index={detailsIndex}
           onPatch={(patch) => patchLine(detailsIndex, patch)}
           onClose={() => setDetailsIndex(null)}
         />
@@ -416,37 +453,32 @@ function ProductSelect({
   )
 }
 
-function StorageBoxInput({
-  index,
+function StorageBoxSelect({
   value,
-  options,
+  warehouseId,
+  state,
   onChange,
 }: {
-  index: number
   value: string
-  options: string[]
+  warehouseId: string
+  state: ReturnType<typeof useStore>
   onChange: (value: string) => void
 }) {
+  const options = storageBoxSelectOptions(state, warehouseId, value)
   return (
-    <>
-      <Input
-        list={`ob-storage-boxes-${index}`}
-        value={value}
-        onChange={(event) => onChange(event.target.value)}
-        placeholder="BOX-02"
-      />
-      <datalist id={`ob-storage-boxes-${index}`}>
-        {options.map((box) => (
-          <option key={box} value={box} />
-        ))}
-      </datalist>
-    </>
+    <Select value={value} onChange={(event) => onChange(event.target.value)}>
+      {options.includes(value) ? null : <option value="">Select box</option>}
+      {options.map((box) => (
+        <option key={box} value={box}>
+          {box}
+        </option>
+      ))}
+    </Select>
   )
 }
 
 function OpeningBalanceRow({
   line,
-  index,
   type,
   state,
   catalog,
@@ -457,7 +489,6 @@ function OpeningBalanceRow({
   onRemove,
 }: {
   line: DraftLine
-  index: number
   type: OpeningBalanceType
   state: ReturnType<typeof useStore>
   catalog: Product[]
@@ -499,10 +530,10 @@ function OpeningBalanceRow({
       ) : null}
       {type === 'production_balance' ? (
         <td>
-          <StorageBoxInput
-            index={index}
+          <StorageBoxSelect
             value={line.container ?? ''}
-            options={storageBoxOptions(state)}
+            warehouseId={line.warehouseId}
+            state={state}
             onChange={(container) => onPatch({ container })}
           />
         </td>
@@ -535,7 +566,6 @@ function LineDetailsModal({
   line,
   product,
   state,
-  index,
   onPatch,
   onClose,
 }: {
@@ -543,7 +573,6 @@ function LineDetailsModal({
   line: DraftLine
   product: Product | undefined
   state: ReturnType<typeof useStore>
-  index: number
   onPatch: (patch: Partial<DraftLine>) => void
   onClose: () => void
 }) {
@@ -604,10 +633,10 @@ function LineDetailsModal({
         ) : null}
         {type === 'production_balance' ? (
           <Field label="Storage box">
-            <StorageBoxInput
-              index={index}
+            <StorageBoxSelect
               value={line.container ?? ''}
-              options={storageBoxOptions(state)}
+              warehouseId={line.warehouseId}
+              state={state}
               onChange={(container) => onPatch({ container })}
             />
           </Field>

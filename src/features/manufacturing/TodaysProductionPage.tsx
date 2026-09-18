@@ -1,11 +1,11 @@
 import { useMemo, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
-import { Button, Card, Field, Input, Modal, PageHeader, StatusBadge } from '@/components/ui'
+import { Badge, Button, Card, Field, Input, Modal, PageHeader, StatusBadge } from '@/components/ui'
 import { ProductMark } from '@/components/ProductMark'
 import { useApi, useLookups, useStore } from '@/store/hooks'
 import { formatDate, formatDateTime, formatQty } from '@/utils/format'
 import type { ProductionSession } from '@/types'
-import { buildSessionPlan, canEditSession, currentUser } from './sessionPlan'
+import { buildSessionPlan, canEditSession, currentUser, isSessionOperationalToday, systemProductionDate, todayOperationalSession } from './sessionPlan'
 import { hasPermission } from '@/features/settings/permissions'
 
 const SAMPLE_SHEET =
@@ -19,21 +19,37 @@ const SAMPLE_SHEET =
   <text x="48" y="220" font-family="sans-serif" font-size="14" fill="#64748b">Posted on process-room mirror</text>
 </svg>`)
 
-function todaySession(sessions: ProductionSession[], date = '2026-09-10') {
-  return sessions.find((item) => item.productionDate === date && item.status !== 'completed')
-    ?? sessions.find((item) => item.productionDate === date)
+function todaySession(sessions: ProductionSession[], date = systemProductionDate()) {
+  return todayOperationalSession(sessions, date)
 }
 
 export function TodaysProductionPage() {
   const state = useStore()
   const { id } = useParams()
-  const session = id
-    ? state.productionSessions.find((item) => item.id === id)
-    : todaySession(state.productionSessions)
+  const today = systemProductionDate()
+  const linked = id ? state.productionSessions.find((item) => item.id === id) : undefined
+  if (linked && !isSessionOperationalToday(linked, today)) {
+    return (
+      <div>
+        <PageHeader
+          title="Today's Production"
+          subtitle={`${formatDate(today + 'T00:00:00+08:00')} · Today`}
+        />
+        <Card className="p-6 text-sm text-slate-600">
+          This plan is for {formatDate(linked.productionDate + 'T00:00:00+08:00')} ({linked.reference}).
+          Today's Production only runs the current system date. Open Production History to view this record.
+          <div className="mt-4">
+            <Link to={`/manufacturing/history/${linked.id}`}><Button variant="secondary">View in Production History</Button></Link>
+          </div>
+        </Card>
+      </div>
+    )
+  }
+  const session = linked ?? todaySession(state.productionSessions, today)
   if (!session) {
     return (
       <div>
-        <PageHeader title="Today's Production" subtitle="No daily session for 10 Sep 2026." />
+        <PageHeader title="Today's Production" subtitle={`No daily session for ${formatDate(today + 'T00:00:00+08:00')}.`} />
         <Card className="p-6 text-sm text-slate-500">Create a session from Production Planning.</Card>
       </div>
     )
@@ -83,15 +99,17 @@ function SessionWorkspace({ session }: { session: ProductionSession }) {
             {session.status === 'completed' && adminEdit && (
               <Link to={`/manufacturing/history/${session.id}/edit`}><Button>Edit completed production</Button></Link>
             )}
-            {session.status === 'completed' && !adminEdit && (
-              <Link to={`/manufacturing/history/${session.id}`}><Button variant="secondary">View details</Button></Link>
-            )}
           </div>
         }
       />
 
       <div className="mb-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-        <Meta label="Production date" value={formatDate(session.productionDate + 'T00:00:00+08:00')} />
+        <Meta label="Production date" value="">
+          <div className="flex flex-wrap items-center gap-2">
+            <span>{formatDate(session.productionDate + 'T00:00:00+08:00')}</span>
+            <Badge tone="indigo">Today</Badge>
+          </div>
+        </Meta>
         <Meta label="Reference" value={session.reference} />
         <Meta label="Status" value="" ><StatusBadge status={session.status} /></Meta>
         <Meta label="Created by" value={session.createdBy} />
