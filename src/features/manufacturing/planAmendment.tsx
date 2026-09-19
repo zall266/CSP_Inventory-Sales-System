@@ -221,41 +221,33 @@ export function AmendPlanModal({
     <>
       <Modal open={open} onClose={onClose} title="Amend production plan" width="max-w-lg">
         <div className="space-y-4">
-          <div className="sf-table-wrap">
-            <table>
-              <thead>
-                <tr>
-                  <th>Product</th>
-                  <th>Current</th>
-                  <th>Actual</th>
-                  <th>New target</th>
-                </tr>
-              </thead>
-              <tbody>
-                {session.items.map((item) => {
-                  const next = lines.find((row) => row.productId === item.productId)?.targetQty ?? item.targetQty
-                  return (
-                    <tr key={item.id} className="cursor-default">
-                      <td className="font-medium">{productName(item.productId)}</td>
-                      <td className="tabular">{item.targetQty} PACK</td>
-                      <td className="tabular">{item.actualQty ? `${item.actualQty} PACK` : '—'}</td>
-                      <td>
-                        <Input
-                          type="number"
-                          min={item.actualQty || 1}
-                          value={next}
-                          onChange={(e) => setLines(lines.map((row) => row.productId === item.productId ? { ...row, targetQty: Number(e.target.value) } : row))}
-                        />
-                        <div className="mt-1 text-[11px] text-slate-400">
-                          Remaining {remainingTargetQty({ targetQty: next, actualQty: item.actualQty })} PACK
-                        </div>
-                      </td>
-                    </tr>
-                  )
-                })}
-              </tbody>
-            </table>
-          </div>
+        <div className="space-y-3">
+          {session.items.map((item) => {
+            const next = lines.find((row) => row.productId === item.productId)?.targetQty ?? item.targetQty
+            return (
+              <div key={item.id} className="rounded-xl border border-slate-200 p-3">
+                <div className="font-medium text-slate-900">{productName(item.productId)}</div>
+                <div className="mt-1 grid grid-cols-2 gap-2 text-xs text-slate-500">
+                  <div>Current {item.targetQty} PACK</div>
+                  <div>Actual {item.actualQty ? `${item.actualQty} PACK` : '—'}</div>
+                </div>
+                <div className="mt-3">
+                  <Field label="New target">
+                    <Input
+                      type="number"
+                      min={item.actualQty || 1}
+                      value={next}
+                      onChange={(e) => setLines(lines.map((row) => row.productId === item.productId ? { ...row, targetQty: Number(e.target.value) } : row))}
+                    />
+                  </Field>
+                  <div className="mt-1 text-[11px] text-slate-400">
+                    Remaining {remainingTargetQty({ targetQty: next, actualQty: item.actualQty })} PACK
+                  </div>
+                </div>
+              </div>
+            )
+          })}
+        </div>
           <Field label="Reason">
             <Textarea
               value={reason}
