@@ -17,7 +17,16 @@ export function todaySessions(sessions: ProductionSession[], date = systemProduc
 
 export function todayOperationalSession(sessions: ProductionSession[], date = systemProductionDate()) {
   const rows = todaySessions(sessions, date)
-  return rows.find((item) => item.status !== 'completed') ?? rows[0]
+  return rows.find((item) => item.status !== 'completed' && item.status !== 'cancelled')
+    ?? rows.find((item) => item.status === 'completed')
+}
+
+export function canAmendPlanStatus(status: ProductionSessionStatus) {
+  return status === 'accepted' || status === 'in_progress'
+}
+
+export function remainingTargetQty(item: Pick<ProductionSession['items'][number], 'targetQty' | 'actualQty'>) {
+  return Math.max(0, item.targetQty - (item.actualQty || 0))
 }
 
 export function roleLabel(role: UserRole) {
@@ -31,6 +40,7 @@ export function currentUser(state: AppState) {
 }
 
 export function canEditSession(role: UserRole, status: ProductionSessionStatus) {
+  if (status === 'cancelled') return false
   if (status === 'completed') return role === 'admin' || role === 'owner'
   return role === 'staff' || role === 'warehouse' || role === 'manager' || role === 'admin' || role === 'owner'
 }
@@ -49,6 +59,7 @@ export function sessionStatusLabel(status: string) {
     accepted: 'Accepted',
     in_progress: 'In Progress',
     completed: 'Completed',
+    cancelled: 'Cancelled',
   }
   return map[status] ?? status
 }

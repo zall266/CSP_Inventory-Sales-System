@@ -3,14 +3,14 @@ import { Button, Card, KpiCard, PageHeader, StatusBadge } from '@/components/ui'
 import { isCompanyWarehouseId } from '@/features/agent/agentModel'
 import { useLookups, useStore } from '@/store/hooks'
 import { formatQty } from '@/utils/format'
-import { currentUser, sessionTotals, systemProductionDate } from './sessionPlan'
+import { currentUser, sessionTotals, systemProductionDate, todayOperationalSession } from './sessionPlan'
 
 export function ManufacturingDashboardPage() {
   const state = useStore()
   const { product } = useLookups()
   const user = currentUser(state)
   const todayKey = systemProductionDate()
-  const today = state.productionSessions.find((item) => item.productionDate === todayKey)
+  const today = todayOperationalSession(state.productionSessions, todayKey)
   const active = state.productionSessions.filter((item) => item.status === 'in_progress' || item.status === 'accepted')
   const completedToday = state.productionSessions.filter((item) => item.status === 'completed' && item.completedAt?.slice(0, 10) === todayKey)
   const plannedPacks = today ? sessionTotals(today).planned : 0

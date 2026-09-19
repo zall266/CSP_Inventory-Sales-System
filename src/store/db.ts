@@ -56,7 +56,7 @@ import {
 import { clearAttachmentBlobs, deleteAttachmentBlob } from '@/store/attachmentBlobs'
 import { applyBomCosts, hydrateProducts, normalizeUnit, parseNonNegativeMoney, productHasBom, productIsSellable, productIsUsed, purchaseQtyToBaseQty, qtyToBaseUnit, resolveProductSku, skuIsUnique, validatePurchaseConversion } from '@/features/products/masterData'
 import { bomLinesForQty, consumptionCost, hasShortage, materialAvailability } from '@/features/manufacturing/helpers'
-import { buildSessionPlan, canEditSession, currentUser, isRawStorePickingLine, isSessionOperationalToday, mergePicking } from '@/features/manufacturing/sessionPlan'
+import { buildSessionPlan, canAmendPlanStatus, canEditSession, currentUser, isRawStorePickingLine, isSessionOperationalToday, mergePicking } from '@/features/manufacturing/sessionPlan'
 import { buildSessionMaterialClosing, closingLineFromInput, isSignificantVariance } from '@/features/manufacturing/materialClosing'
 import {
   defaultPermissionsForLegacy,
@@ -65,6 +65,7 @@ import {
   hasPermission,
   isOwnerRole,
   isOwnerUser,
+  MANUFACTURING_PLAN_PERMISSION_KEYS,
   normalizePermissions,
   roleById,
   roleName,
@@ -204,7 +205,7 @@ function hydrateData(data: AppData): AppData {
       const raw = data.settings?.roleMatrix?.[role.id] ?? {}
       const normalized = normalizePermissions(raw)
       const defaults = defaultPermissionsForLegacy(role.legacyRole)
-      for (const key of [...WAREHOUSE_MAP_KEYS, ...AGENT_PERMISSION_KEYS, ...TASK_PERMISSION_KEYS, ...RECEIVING_PERMISSION_KEYS, ...OPENING_BALANCE_PERMISSION_KEYS, ...SALES_RETURN_PERMISSION_KEYS, ...CUSTOMER_PRICING_PERMISSION_KEYS]) {
+      for (const key of [...WAREHOUSE_MAP_KEYS, ...AGENT_PERMISSION_KEYS, ...TASK_PERMISSION_KEYS, ...RECEIVING_PERMISSION_KEYS, ...OPENING_BALANCE_PERMISSION_KEYS, ...SALES_RETURN_PERMISSION_KEYS, ...CUSTOMER_PRICING_PERMISSION_KEYS, ...MANUFACTURING_PLAN_PERMISSION_KEYS]) {
         if (raw[key] === undefined) normalized[key] = defaults[key]
       }
       return [role.id, normalized]
@@ -280,6 +281,7 @@ function hydrateData(data: AppData): AppData {
         displayQty: item.displayQty ?? 0,
         cartonQty: item.cartonQty ?? 0,
       })),
+      targetChanges: session.targetChanges ?? [],
     })),
     settings: {
       ...data.settings,
@@ -4758,7 +4760,7 @@ export const db = {
   acceptSession(id: string) {
     const session = state.productionSessions.find((item) => item.id === id)
     const user = currentUser(state)
-    if (!session || session.status !== 'planned') {
+    if (!session || session.status === 'cancelled' || session.status !== 'planned') {
       toast('Only a planned session can be accepted', undefined, 'warning')
       return
     }
@@ -4781,7 +4783,7 @@ export const db = {
   startSession(id: string, input: { recipePhoto: string; recipePhotoName: string }) {
     const session = state.productionSessions.find((item) => item.id === id)
     const user = currentUser(state)
-    if (!session || (session.status !== 'accepted' && session.status !== 'planned')) {
+    if (!session || session.status === 'cancelled' || (session.status !== 'accepted' && session.status !== 'planned')) {
       toast('Accept production before starting', undefined, 'warning')
       return false
     }
@@ -4825,48 +4827,163 @@ export const db = {
     return true
   },
 
-  changeSessionTarget(id: string, productId: string, newTarget: number, reason: string) {
+  updatePlannedSession(id: string, input: { productionDate: string; notes?: string; items: Array<{ productId: string; targetQty: number }> }) {
+    const session = state.productionSessions.find((item) => item.id === id)
+    if (!session) return false
+    if (!hasPermission(state, 'manufacturing.plan.edit')) {
+      toast('Permission denied', 'You cannot edit a production plan.', 'danger')
+      return false
+    }
+    if (session.status !== 'planned') {
+      toast('Normal edit is not allowed after the plan is accepted', 'Use Amend Plan for accepted or in-progress sessions.', 'warning')
+      return false
+    }
+    if (!input.items.length) {
+      toast('Add products to the daily plan', undefined, 'warning')
+      return false
+    }
+    if (input.items.some((row) => !Number.isFinite(row.targetQty) || row.targetQty <= 0)) {
+      toast('Target must be greater than zero', undefined, 'warning')
+      return false
+    }
+    const nextItems = input.items.map((row) => {
+      const existing = session.items.find((item) => item.productId === row.productId)
+      const bom = state.boms.find((item) => item.productId === row.productId && item.status === 'active')
+      if (existing) {
+        return {
+          ...existing,
+          bomId: bom?.id ?? existing.bomId,
+          originalTargetQty: row.targetQty,
+          targetQty: row.targetQty,
+        }
+      }
+      return {
+        id: uid('psi'),
+        sessionId: id,
+        productId: row.productId,
+        bomId: bom?.id ?? '',
+        originalTargetQty: row.targetQty,
+        targetQty: row.targetQty,
+        actualQty: 0,
+        shortProductionQty: 0,
+        shortProductionReason: '',
+        productionBalanceQty: 0,
+        balanceLocation: 'Main Warehouse',
+        balanceContainer: '',
+        wasteQty: 0,
+        wasteReason: '',
+        notes: '',
+        displayQty: 0,
+        cartonQty: 0,
+      }
+    })
+    setData({
+      productionSessions: state.productionSessions.map((item) =>
+        item.id === id
+          ? {
+              ...item,
+              productionDate: input.productionDate,
+              notes: input.notes ?? item.notes,
+              items: nextItems,
+            }
+          : item,
+      ),
+    })
+    toast('Production plan updated', session.reference)
+    return true
+  },
+
+  cancelPlannedSession(id: string) {
     const session = state.productionSessions.find((item) => item.id === id)
     const user = currentUser(state)
-    if (!session) return
+    if (!session) return false
+    if (!hasPermission(state, 'manufacturing.plan.edit')) {
+      toast('Permission denied', 'You cannot cancel a production plan.', 'danger')
+      return false
+    }
+    if (session.status !== 'planned') {
+      toast('Only planned sessions can be cancelled', 'Accepted or started sessions cannot be deleted.', 'warning')
+      return false
+    }
+    setData({
+      productionSessions: state.productionSessions.map((item) =>
+        item.id === id
+          ? {
+              ...item,
+              status: 'cancelled' as const,
+              cancelledBy: user.name,
+              cancelledAt: nowIso(),
+            }
+          : item,
+      ),
+    })
+    toast('Production plan cancelled', session.reference, 'warning')
+    return true
+  },
+
+  amendSessionPlan(id: string, items: Array<{ productId: string; targetQty: number }>, reason: string) {
+    const session = state.productionSessions.find((item) => item.id === id)
+    const user = currentUser(state)
+    if (!session) return false
+    if (!hasPermission(state, 'manufacturing.plan.amend')) {
+      toast('Permission denied', 'You cannot amend a production plan.', 'danger')
+      return false
+    }
+    if (session.status === 'planned') {
+      toast('Use Edit for planned sessions', 'Amend Plan is only for accepted or in-progress sessions.', 'warning')
+      return false
+    }
+    if (!canAmendPlanStatus(session.status)) {
+      toast('This plan cannot be amended', 'Completed and cancelled sessions are view only.', 'warning')
+      return false
+    }
     if (!isSessionOperationalToday(session)) {
       toast("Not today's production", 'Target changes are only for today\'s operational session.', 'warning')
-      return
-    }
-    if (session.status === 'completed') {
-      toast('Completed sessions cannot change target here', 'Admin can edit completed records separately.', 'warning')
-      return
-    }
-    if (!canEditSession(user.role, session.status)) {
-      toast('Permission denied', undefined, 'danger')
-      return
+      return false
     }
     if (!reason.trim()) {
-      toast('Enter a reason', 'Target changes must be explained.', 'warning')
-      return
+      toast('Enter a reason', 'Every amendment must be explained.', 'warning')
+      return false
     }
-    if (newTarget <= 0) {
-      toast('Target must be greater than zero', undefined, 'warning')
-      return
+    const changes: Array<{ productId: string; originalTarget: number; newTarget: number }> = []
+    for (const item of session.items) {
+      const next = items.find((row) => row.productId === item.productId)
+      if (!next) continue
+      const newTarget = Number(next.targetQty)
+      if (!Number.isFinite(newTarget) || newTarget <= 0) {
+        toast('Target must be greater than zero', undefined, 'warning')
+        return false
+      }
+      if (newTarget < (item.actualQty || 0)) {
+        toast('New target cannot be lower than actual production completed.', undefined, 'warning')
+        return false
+      }
+      if (newTarget !== item.targetQty) {
+        changes.push({ productId: item.productId, originalTarget: item.targetQty, newTarget })
+      }
     }
-    const line = session.items.find((item) => item.productId === productId)
-    if (!line || line.targetQty === newTarget) return
-    const updatedItems = session.items.map((item) =>
-      item.productId === productId ? { ...item, targetQty: newTarget } : item,
-    )
+    if (!changes.length) {
+      toast('No target changes', 'New targets match the current plan.', 'info')
+      return false
+    }
+    const updatedItems = session.items.map((item) => {
+      const change = changes.find((row) => row.productId === item.productId)
+      return change ? { ...item, targetQty: change.newTarget } : item
+    })
     const nextSession = { ...session, items: updatedItems }
     const plan = buildSessionPlan(state, nextSession)
     const merged = mergePicking(session.picking, plan.picking)
-    const log = {
+    const changedAt = nowIso()
+    const logs = changes.map((change) => ({
       id: uid('tcl'),
       sessionId: id,
-      productId,
-      originalTarget: line.targetQty,
-      newTarget,
+      productId: change.productId,
+      originalTarget: change.originalTarget,
+      newTarget: change.newTarget,
       reason: reason.trim(),
       changedBy: user.name,
-      changedAt: nowIso(),
-    }
+      changedAt,
+    }))
     setData({
       productionSessions: state.productionSessions.map((item) =>
         item.id === id
@@ -4874,7 +4991,7 @@ export const db = {
               ...item,
               items: updatedItems,
               picking: merged.picking,
-              targetChanges: [...item.targetChanges, log],
+              targetChanges: [...(item.targetChanges ?? []), ...logs],
               materialAllocations: item.materialAllocations,
               materialAudits: item.materialAudits,
               excessReturns: [
@@ -4885,14 +5002,22 @@ export const db = {
                   qty: row.qty,
                   unit: row.unit,
                   status: 'to_return' as const,
-                  notes: `Target change ${line.targetQty} → ${newTarget}`,
+                  notes: `Amendment ${row.productId}`,
                 })),
               ],
             }
           : item,
       ),
     })
-    toast('Target updated', `${productById(productId)?.name}: ${line.targetQty} → ${newTarget}`)
+    const summary = changes
+      .map((change) => `${productById(change.productId)?.name ?? change.productId}: ${change.originalTarget} → ${change.newTarget}`)
+      .join(', ')
+    toast('Production plan amended', summary)
+    return true
+  },
+
+  changeSessionTarget(id: string, productId: string, newTarget: number, reason: string) {
+    return this.amendSessionPlan(id, [{ productId, targetQty: newTarget }], reason)
   },
 
   togglePickingLine(id: string, lineId: string, picked?: boolean) {

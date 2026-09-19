@@ -1,14 +1,15 @@
 import { useMemo, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
-import { Badge, Button, Card, Field, Input, Modal, PageHeader, StatusBadge } from '@/components/ui'
+import { Badge, Button, Card, Field, Modal, PageHeader, StatusBadge } from '@/components/ui'
 import { ProductMark } from '@/components/ProductMark'
 import { useApi, useLookups, useStore } from '@/store/hooks'
 import { formatDate, formatDateTime, formatQty } from '@/utils/format'
 import type { ProductionSession } from '@/types'
-import { buildSessionPlan, canEditSession, currentUser, isSessionOperationalToday, systemProductionDate, todayOperationalSession } from './sessionPlan'
+import { hasPermission } from '@/features/settings/permissions'
 import { allocationLabel, sessionAllocatedQty } from './materialClosing'
 import { formatUnit } from '@/features/products/masterData'
-import { hasPermission } from '@/features/settings/permissions'
+import { AmendPlanModal, CancelPlanDialog, EditPlannedModal, planActionFlags } from './planAmendment'
+import { buildSessionPlan, canEditSession, currentUser, isSessionOperationalToday, systemProductionDate, todayOperationalSession } from './sessionPlan'
 
 const SAMPLE_SHEET =
   'data:image/svg+xml;utf8,' +
@@ -68,11 +69,14 @@ function SessionWorkspace({ session }: { session: ProductionSession }) {
   const plan = useMemo(() => buildSessionPlan(state, session), [state, session])
   const canEdit = canEditSession(user.role, session.status)
   const adminEdit = hasPermission(state, 'manufacturing.completed.edit')
+  const flags = planActionFlags(state, session)
 
   const [startOpen, setStartOpen] = useState(false)
   const [photo, setPhoto] = useState(session.recipePhoto)
   const [photoName, setPhotoName] = useState(session.recipePhotoName)
-  const [targetEdit, setTargetEdit] = useState<{ productId: string; qty: number; reason: string } | null>(null)
+  const [editPlan, setEditPlan] = useState(false)
+  const [cancelPlan, setCancelPlan] = useState(false)
+  const [amendPlan, setAmendPlan] = useState(false)
 
   const start = () => {
     const ok = api.startSession(session.id, { recipePhoto: photo, recipePhotoName: photoName || 'recipe-sheet.jpg' })
@@ -89,6 +93,9 @@ function SessionWorkspace({ session }: { session: ProductionSession }) {
         subtitle="One daily session — accept, start, pick, then complete all products together."
         actions={
           <div className="flex flex-wrap gap-2">
+            {flags.canEdit && <Button variant="secondary" onClick={() => setEditPlan(true)}>Edit</Button>}
+            {flags.canCancel && <Button variant="secondary" onClick={() => setCancelPlan(true)}>Delete / Cancel</Button>}
+            {flags.canAmend && <Button variant="secondary" onClick={() => setAmendPlan(true)}>Amend Plan</Button>}
             {session.status === 'planned' && canEdit && <Button onClick={() => api.acceptSession(session.id)}>Accept production</Button>}
             {session.status === 'accepted' && canEdit && <Button onClick={() => setStartOpen(true)}>Start production</Button>}
             <Link to={`/manufacturing/history/${session.id}`}><Button variant="secondary">View production details</Button></Link>
@@ -132,7 +139,6 @@ function SessionWorkspace({ session }: { session: ProductionSession }) {
                 <th>Actual</th>
                 <th>Balance</th>
                 <th>Status</th>
-                <th></th>
               </tr>
             </thead>
             <tbody>
@@ -155,13 +161,6 @@ function SessionWorkspace({ session }: { session: ProductionSession }) {
                     <td className="tabular">{item.actualQty ? `${item.actualQty} packs` : '—'}</td>
                     <td className="tabular">{item.productionBalanceQty ? `${formatQty(item.productionBalanceQty)} g` : '—'}</td>
                     <td><StatusBadge status={lineStatus} /></td>
-                    <td>
-                      {canEdit && session.status !== 'completed' && (
-                        <Button size="sm" variant="ghost" onClick={() => setTargetEdit({ productId: item.productId, qty: item.targetQty, reason: '' })}>
-                          Edit target
-                        </Button>
-                      )}
-                    </td>
                   </tr>
                 )
               })}
@@ -246,7 +245,7 @@ function SessionWorkspace({ session }: { session: ProductionSession }) {
 
       {session.targetChanges.length > 0 && (
         <Card className="mb-5 p-5">
-          <div className="mb-2 text-sm font-semibold">Target change log</div>
+          <div className="mb-2 text-sm font-semibold">Amendment history</div>
           {session.targetChanges.map((row) => (
             <div key={row.id} className="mb-2 text-sm text-slate-600">
               {product(row.productId)?.name}: {row.originalTarget} → {row.newTarget} · {row.reason} · {row.changedBy} · {formatDateTime(row.changedAt)}
@@ -283,29 +282,9 @@ function SessionWorkspace({ session }: { session: ProductionSession }) {
           <Button disabled={!photo} onClick={start}>Start production</Button>
         </div>
       </Modal>
-
-      <Modal open={Boolean(targetEdit)} onClose={() => setTargetEdit(null)} title="Edit target" width="max-w-md">
-        {targetEdit && (
-          <div className="space-y-3">
-            <p className="text-sm text-slate-600">
-              Original target: {session.items.find((item) => item.productId === targetEdit.productId)?.originalTargetQty} packs.
-              Current target: {session.items.find((item) => item.productId === targetEdit.productId)?.targetQty} packs.
-              New target: {targetEdit.qty} packs.
-              Difference: {targetEdit.qty - (session.items.find((item) => item.productId === targetEdit.productId)?.originalTargetQty ?? 0)} packs.
-            </p>
-            <Field label="New target (packs)">
-              <Input type="number" min={1} value={targetEdit.qty} onChange={(e) => setTargetEdit({ ...targetEdit, qty: Number(e.target.value) })} />
-            </Field>
-            <Field label="Reason">
-              <Input value={targetEdit.reason} onChange={(e) => setTargetEdit({ ...targetEdit, reason: e.target.value })} placeholder="Insufficient sugar" />
-            </Field>
-            <div className="flex justify-end gap-2">
-              <Button variant="secondary" onClick={() => setTargetEdit(null)}>Cancel</Button>
-              <Button onClick={() => { api.changeSessionTarget(session.id, targetEdit.productId, targetEdit.qty, targetEdit.reason); setTargetEdit(null) }}>Save target</Button>
-            </div>
-          </div>
-        )}
-      </Modal>
+      {editPlan && <EditPlannedModal session={session} open onClose={() => setEditPlan(false)} />}
+      {cancelPlan && <CancelPlanDialog session={session} open onClose={() => setCancelPlan(false)} />}
+      {amendPlan && <AmendPlanModal session={session} open onClose={() => setAmendPlan(false)} />}
     </div>
   )
 }
