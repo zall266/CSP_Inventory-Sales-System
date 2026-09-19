@@ -54,10 +54,10 @@ import {
   resolveTaskReference,
 } from '@/features/tasks/taskModel'
 import { clearAttachmentBlobs, deleteAttachmentBlob } from '@/store/attachmentBlobs'
-import { applyBomCosts, hydrateProducts, normalizeUnit, parseNonNegativeMoney, productHasBom, productIsSellable, productIsUsed, purchaseQtyToBaseQty, resolveProductSku, skuIsUnique, validatePurchaseConversion } from '@/features/products/masterData'
+import { applyBomCosts, hydrateProducts, normalizeUnit, parseNonNegativeMoney, productHasBom, productIsSellable, productIsUsed, purchaseQtyToBaseQty, qtyToBaseUnit, resolveProductSku, skuIsUnique, validatePurchaseConversion } from '@/features/products/masterData'
 import { bomLinesForQty, consumptionCost, hasShortage, materialAvailability } from '@/features/manufacturing/helpers'
-import { buildSessionPlan, canEditSession, currentUser, isSessionOperationalToday, mergePicking } from '@/features/manufacturing/sessionPlan'
-import { buildSessionMaterialClosing, isSignificantVariance } from '@/features/manufacturing/materialClosing'
+import { buildSessionPlan, canEditSession, currentUser, isRawStorePickingLine, isSessionOperationalToday, mergePicking } from '@/features/manufacturing/sessionPlan'
+import { buildSessionMaterialClosing, closingLineFromInput, isSignificantVariance } from '@/features/manufacturing/materialClosing'
 import {
   defaultPermissionsForLegacy,
   displayRoleName,
@@ -142,6 +142,9 @@ import type {
   UserStatus,
   WastageKind,
   BalanceUsageReason,
+  ProductionMaterialAllocation,
+  ProductionMaterialAudit,
+  ProductionMaterialAllocationSource,
 } from '@/types'
 import { nextDatedDocNo, nextDocNo, PROTOTYPE_TODAY, formatMoney, formatQty, round2, stockStatus, uid } from '@/utils/format'
 
@@ -1502,6 +1505,42 @@ function postCancelAgentWithdrawal(input: { withdrawalId: string; requestId?: st
   lastAgentWithdrawalCancel = { key: requestKey, withdrawal: next, at: Date.now() }
   toast('Withdrawal cancelled', formatMoney(amount))
   return next
+}
+
+function makeMaterialAudit(
+  input: Omit<ProductionMaterialAudit, 'id' | 'createdBy' | 'createdAt'> & { createdBy?: string; createdAt?: string },
+): ProductionMaterialAudit {
+  const user = currentUser(state)
+  return {
+    id: uid('pmu'),
+    createdBy: input.createdBy ?? user.name,
+    createdAt: input.createdAt ?? nowIso(),
+    ...input,
+  }
+}
+
+function pickingAllocationFromLine(
+  sessionId: string,
+  line: { productId: string; qtyToPick: number; unit: string },
+): ProductionMaterialAllocation {
+  const product = productById(line.productId)
+  const purchaseQty = line.qtyToPick
+  const purchaseUnit = line.unit
+  const baseQty = round2(product ? qtyToBaseUnit(purchaseQty, purchaseUnit, product) ?? purchaseQty : purchaseQty)
+  const user = currentUser(state)
+  const at = nowIso()
+  return {
+    id: uid('pma'),
+    sessionId,
+    productId: line.productId,
+    source: 'picking',
+    purchaseQty,
+    purchaseUnit,
+    baseQty,
+    baseUnit: product?.unit || purchaseUnit,
+    createdBy: user.name,
+    createdAt: at,
+  }
 }
 
 export const db = {
@@ -4776,6 +4815,8 @@ export const db = {
               uploadedBy: user.name,
               uploadedAt: nowIso(),
               picking: plan.picking,
+              materialAllocations: item.materialAllocations ?? [],
+              materialAudits: item.materialAudits ?? [],
             }
           : item,
       ),
@@ -4834,6 +4875,8 @@ export const db = {
               items: updatedItems,
               picking: merged.picking,
               targetChanges: [...item.targetChanges, log],
+              materialAllocations: item.materialAllocations,
+              materialAudits: item.materialAudits,
               excessReturns: [
                 ...item.excessReturns,
                 ...merged.excess.map((row) => ({
@@ -4854,6 +4897,7 @@ export const db = {
 
   togglePickingLine(id: string, lineId: string, picked?: boolean) {
     const session = state.productionSessions.find((item) => item.id === id)
+    const user = currentUser(state)
     if (!session || session.status !== 'in_progress') {
       toast('Picking is only for in-progress sessions', undefined, 'info')
       return
@@ -4862,18 +4906,161 @@ export const db = {
       toast("Not today's production", 'Picking is only for today\'s operational session.', 'warning')
       return
     }
+    const line = session.picking.find((item) => item.id === lineId)
+    if (!line) return
+    const nextPicked = picked ?? !line.picked
+    let materialAllocations = session.materialAllocations
+    let materialAudits = session.materialAudits
+    if (
+      Array.isArray(session.materialAllocations) &&
+      isRawStorePickingLine(line) &&
+      nextPicked &&
+      !line.picked
+    ) {
+      const alreadyPicked = session.materialAllocations.some(
+        (row) => row.productId === line.productId && row.source === 'picking',
+      )
+      if (!alreadyPicked) {
+        const allocation = pickingAllocationFromLine(id, line)
+        materialAllocations = [...session.materialAllocations, allocation]
+        materialAudits = [
+          ...(session.materialAudits ?? []),
+          makeMaterialAudit({
+            sessionId: id,
+            productId: line.productId,
+            action: 'PICKING_ALLOCATED',
+            source: 'picking',
+            purchaseQty: allocation.purchaseQty,
+            purchaseUnit: allocation.purchaseUnit,
+            baseQty: allocation.baseQty,
+            baseUnit: allocation.baseUnit,
+            createdBy: user.name,
+            createdAt: allocation.createdAt,
+          }),
+        ]
+      }
+    }
     setData({
       productionSessions: state.productionSessions.map((item) =>
         item.id === id
           ? {
               ...item,
-              picking: item.picking.map((line) =>
-                line.id === lineId ? { ...line, picked: picked ?? !line.picked } : line,
-              ),
+              picking: item.picking.map((row) => (row.id === lineId ? { ...row, picked: nextPicked } : row)),
+              materialAllocations,
+              materialAudits,
             }
           : item,
       ),
     })
+  },
+
+  addSessionMaterial(
+    id: string,
+    input: {
+      productId: string
+      mode: 'purchase' | 'loose'
+      purchaseQty?: number
+      looseQty?: number
+      containerType?: string
+      notes?: string
+    },
+  ) {
+    const session = state.productionSessions.find((item) => item.id === id)
+    const user = currentUser(state)
+    if (!session || session.status !== 'in_progress') {
+      toast('Add material only during production', undefined, 'warning')
+      return false
+    }
+    if (!isSessionOperationalToday(session)) {
+      toast("Not today's production", 'Material can only be added to today\'s operational session.', 'warning')
+      return false
+    }
+    if (!canEditSession(user.role, session.status)) {
+      toast('Permission denied', undefined, 'danger')
+      return false
+    }
+    if (!Array.isArray(session.materialAllocations)) {
+      toast('This session has no material allocation ledger', 'Legacy sessions keep stored picking quantities.', 'warning')
+      return false
+    }
+    const product = productById(input.productId)
+    if (!product) {
+      toast('Select a material', undefined, 'warning')
+      return false
+    }
+    const at = nowIso()
+    let allocation: ProductionMaterialAllocation
+    if (input.mode === 'loose') {
+      const looseQty = round2(Number(input.looseQty))
+      if (!Number.isFinite(looseQty) || looseQty <= 0) {
+        toast('Enter a loose quantity', undefined, 'warning')
+        return false
+      }
+      allocation = {
+        id: uid('pma'),
+        sessionId: id,
+        productId: input.productId,
+        source: 'loose',
+        baseQty: looseQty,
+        baseUnit: product.unit,
+        containerType: (input.containerType || 'TONG').trim() || 'TONG',
+        notes: input.notes?.trim() || undefined,
+        createdBy: user.name,
+        createdAt: at,
+      }
+    } else {
+      const purchaseQty = round2(Number(input.purchaseQty))
+      if (!Number.isFinite(purchaseQty) || purchaseQty <= 0) {
+        toast('Enter a purchase quantity', undefined, 'warning')
+        return false
+      }
+      const purchaseUnit = product.purchaseUnit || product.unit
+      const baseQty = round2(qtyToBaseUnit(purchaseQty, purchaseUnit, product) ?? purchaseQty)
+      allocation = {
+        id: uid('pma'),
+        sessionId: id,
+        productId: input.productId,
+        source: 'additional',
+        purchaseQty,
+        purchaseUnit,
+        baseQty,
+        baseUnit: product.unit,
+        notes: input.notes?.trim() || undefined,
+        createdBy: user.name,
+        createdAt: at,
+      }
+    }
+    const source = allocation.source as ProductionMaterialAllocationSource
+    const audit = makeMaterialAudit({
+      sessionId: id,
+      productId: input.productId,
+      action: source === 'loose' ? 'LOOSE_MATERIAL_ALLOCATED' : 'MATERIAL_ADDED',
+      source,
+      purchaseQty: allocation.purchaseQty,
+      purchaseUnit: allocation.purchaseUnit,
+      baseQty: allocation.baseQty,
+      baseUnit: allocation.baseUnit,
+      containerType: allocation.containerType,
+      notes: allocation.notes,
+      createdBy: user.name,
+      createdAt: at,
+    })
+    setData({
+      productionSessions: state.productionSessions.map((item) =>
+        item.id === id
+          ? {
+              ...item,
+              materialAllocations: [...(item.materialAllocations ?? []), allocation],
+              materialAudits: [...(item.materialAudits ?? []), audit],
+            }
+          : item,
+      ),
+    })
+    toast(
+      source === 'loose' ? 'Loose material added' : 'Material added',
+      `${product.name} · ${allocation.purchaseQty != null && allocation.purchaseUnit ? `${allocation.purchaseQty} ${allocation.purchaseUnit} · ` : ''}${allocation.baseQty} ${allocation.baseUnit}`,
+    )
+    return true
   },
 
   completeSession(
@@ -5090,6 +5277,26 @@ export const db = {
       significantVariance: significant.length > 0,
       lines: closingBuilt.lines,
     }
+    const closingAudits = closingBuilt.lines.map((row) =>
+      makeMaterialAudit({
+        sessionId: id,
+        productId: row.productId,
+        action: 'MATERIAL_CLOSING_RECORDED',
+        baseQty: row.actualUsedQty,
+        baseUnit: productById(row.productId)?.unit,
+        notes: `Remaining ${row.remainingQty} · allocated ${row.availableQty}`,
+        createdBy: user.name,
+        createdAt: date,
+      }),
+    )
+    const completedAudit = makeMaterialAudit({
+      sessionId: id,
+      productId: session.items[0]?.productId ?? '',
+      action: 'PRODUCTION_COMPLETED',
+      notes: session.reference,
+      createdBy: user.name,
+      createdAt: date,
+    })
     setData({
       inventory,
       stockMovements: movements,
@@ -5104,8 +5311,13 @@ export const db = {
               posted: true,
               completedBy: user.name,
               completedAt: date,
-              picking: plan.picking.map((line) => ({ ...line, picked: true })),
+              picking: plan.picking.map((line) => {
+                const previous = session.picking.find((row) => row.id === line.id)
+                return { ...line, picked: previous?.picked ?? true }
+              }),
               materialClosing,
+              materialAllocations: item.materialAllocations ?? session.materialAllocations,
+              materialAudits: [...(item.materialAudits ?? session.materialAudits ?? []), ...closingAudits, completedAudit],
             }
           : item,
       ),
@@ -5257,6 +5469,109 @@ export const db = {
     return true
   },
 
+  editCompletedMaterialClosing(
+    id: string,
+    productId: string,
+    input: { fullUnits: number; looseQty: number },
+    reason: string,
+  ) {
+    const session = state.productionSessions.find((item) => item.id === id)
+    const user = currentUser(state)
+    if (!session || session.status !== 'completed') {
+      toast('Only completed sessions use this edit', undefined, 'warning')
+      return false
+    }
+    if (!hasPermission(state, 'manufacturing.completed.edit')) {
+      toast('Permission denied', 'You cannot edit completed production.', 'danger')
+      return false
+    }
+    if (!reason.trim()) {
+      toast('Reason is required', undefined, 'warning')
+      return false
+    }
+    const closing = session.materialClosing
+    const original = closing?.lines.find((row) => row.productId === productId)
+    if (!closing || !original) {
+      toast('No material closing to edit', undefined, 'warning')
+      return false
+    }
+    const product = productById(productId)
+    if (!product) {
+      toast('Material is missing from Product Master.', undefined, 'warning')
+      return false
+    }
+    const rebuilt = closingLineFromInput(product, original.plannedQty, original.availableQty, input)
+    if (!rebuilt.ok) {
+      toast('Cannot update material closing', rebuilt.reason, 'warning')
+      return false
+    }
+    if (rebuilt.line.remainingQty === original.remainingQty && rebuilt.line.actualUsedQty === original.actualUsedQty) {
+      return false
+    }
+    const date = nowIso()
+    const diff = round2(rebuilt.line.actualUsedQty - original.actualUsedQty)
+    let inventory = state.inventory
+    let movements = state.stockMovements
+    if (diff !== 0) {
+      const next = addMovement(movements, inventory, {
+        date,
+        reference: `${session.reference} adj`,
+        productId,
+        warehouseId: session.warehouseId,
+        type: 'adjustment',
+        stockIn: diff < 0 ? -diff : 0,
+        stockOut: diff > 0 ? diff : 0,
+        notes: `Material closing edit · ${reason.trim()}`,
+      })
+      inventory = next.inventory
+      movements = next.movements
+    }
+    const lines = closing.lines.map((row) => (row.productId === productId ? rebuilt.line : row))
+    const materialClosing = {
+      ...closing,
+      lines,
+      significantVariance: lines.some((row) => isSignificantVariance(row)),
+    }
+    const log = {
+      id: uid('cel'),
+      sessionId: id,
+      productId,
+      field: 'remainingQty',
+      originalValue: String(original.remainingQty),
+      newValue: String(rebuilt.line.remainingQty),
+      reason: reason.trim(),
+      editedBy: user.name,
+      editedAt: date,
+    }
+    const audit = makeMaterialAudit({
+      sessionId: id,
+      productId,
+      action: 'MATERIAL_CLOSING_UPDATED',
+      baseQty: rebuilt.line.actualUsedQty,
+      baseUnit: product.unit,
+      notes: `Remaining ${original.remainingQty} → ${rebuilt.line.remainingQty} · actual ${original.actualUsedQty} → ${rebuilt.line.actualUsedQty}`,
+      reason: reason.trim(),
+      createdBy: user.name,
+      createdAt: date,
+    })
+    setData({
+      inventory,
+      stockMovements: movements,
+      productionSessions: state.productionSessions.map((row) =>
+        row.id === id
+          ? {
+              ...row,
+              materialClosing,
+              completedEdits: [...row.completedEdits, log],
+              materialAudits: [...(row.materialAudits ?? []), audit],
+            }
+          : row,
+      ),
+    })
+    toast('Material closing updated', 'Inventory reconciled and audit recorded.')
+    return true
+  },
+
   createDailySession(input: { productionDate: string; items: Array<{ productId: string; targetQty: number }>; notes?: string }) {
     if (!input.items.length) {
       toast('Add products to the daily plan', undefined, 'warning')
@@ -5312,6 +5627,8 @@ export const db = {
       targetChanges: [],
       completedEdits: [],
       posted: false,
+      materialAllocations: [],
+      materialAudits: [],
     }
     setData({ productionSessions: [session, ...state.productionSessions] })
     toast('Daily production created', session.reference)

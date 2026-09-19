@@ -4,7 +4,9 @@ import { Button, Card, ConfirmDialog, Field, FilterRow, Input, Modal, PageHeader
 import { movementLabel } from '@/components/ProductMark'
 import { useApi, useLookups, useStore } from '@/store/hooks'
 import { formatDate, formatDateTime, formatQty } from '@/utils/format'
+import { formatUnit } from '@/features/products/masterData'
 import { sessionTotals } from './sessionPlan'
+import { allocationLabel, expectedRemainingQty, usesPurchaseUnitSplit } from './materialClosing'
 import { hasPermission } from '@/features/settings/permissions'
 
 export function SessionEditDeniedPage() {
@@ -91,7 +93,9 @@ export function ProductionSessionDetailPage() {
   const session = state.productionSessions.find((item) => item.id === id)
   const location = useLocation()
   const [edit, setEdit] = useState<{ productId: string; field: 'actualQty' | 'productionBalanceQty' | 'wasteQty'; value: number; reason: string } | null>(null)
+  const [closingEdit, setClosingEdit] = useState<{ productId: string; fullUnits: string; looseQty: string; reason: string } | null>(null)
   const [confirmEdit, setConfirmEdit] = useState(false)
+  const [confirmClosing, setConfirmClosing] = useState(false)
   const allowEdit = session?.status === 'completed' && hasPermission(state, 'manufacturing.completed.edit')
 
   useEffect(() => {
@@ -188,6 +192,30 @@ export function ProductionSessionDetailPage() {
           ))}
         </Card>
       )}
+      {(session.materialAllocations?.length ?? 0) > 0 && (
+        <Card className="mb-5 p-5">
+          <div className="mb-2 text-sm font-semibold">Material Allocation</div>
+          {[...new Set(session.materialAllocations!.map((row) => row.productId))].map((productId) => {
+            const rows = session.materialAllocations!.filter((row) => row.productId === productId)
+            const total = rows.reduce((sum, row) => sum + row.baseQty, 0)
+            const closing = session.materialClosing?.lines.find((row) => row.productId === productId)
+            return (
+              <div key={productId} className="mb-3 text-sm text-slate-600">
+                <div className="font-medium text-slate-900">{product(productId)?.name}</div>
+                {rows.map((row) => (
+                  <div key={row.id}>{allocationLabel(row)} · Source: {row.source}{row.containerType ? ` · ${row.containerType}` : ''} · {row.createdBy} · {formatDateTime(row.createdAt)}</div>
+                ))}
+                <div>Total Allocated: {formatQty(total)} {formatUnit(product(productId)?.unit)}</div>
+                {closing ? (
+                  <div>
+                    Planned: {formatQty(closing.plannedQty)} · Remaining: {formatQty(closing.remainingQty)} · Actual Used: {formatQty(closing.actualUsedQty)} · Variance: {closing.varianceQty > 0 ? '+' : ''}{formatQty(closing.varianceQty)} ({closing.variancePercent > 0 ? '+' : ''}{formatQty(closing.variancePercent)}%)
+                  </div>
+                ) : null}
+              </div>
+            )
+          })}
+        </Card>
+      )}
       {session.picking.length > 0 && (
         <Card className="mb-5 p-5">
           <div className="mb-2 text-sm font-semibold">Picking</div>
@@ -204,12 +232,43 @@ export function ProductionSessionDetailPage() {
             {session.materialClosing.significantVariance ? ' · Significant variance flagged' : ''}
           </div>
           {session.materialClosing.lines.map((line) => (
-            <div key={line.productId} className="mb-2 text-sm text-slate-600">
-              {product(line.productId)?.name}: planned {formatQty(line.plannedQty)} · available {formatQty(line.availableQty)} · remaining {formatQty(line.remainingQty)} · actual {formatQty(line.actualUsedQty)} · variance {line.varianceQty > 0 ? '+' : ''}{formatQty(line.varianceQty)} ({line.variancePercent > 0 ? '+' : ''}{formatQty(line.variancePercent)}%)
+            <div key={line.productId} className="mb-2 flex flex-wrap items-start justify-between gap-2 text-sm text-slate-600">
+              <div>
+                {product(line.productId)?.name}: planned {formatQty(line.plannedQty)} · allocated {formatQty(line.availableQty)} · expected {formatQty(line.expectedRemainingQty ?? expectedRemainingQty(line.availableQty, line.plannedQty))} · remaining {formatQty(line.remainingQty)} · actual {formatQty(line.actualUsedQty)} · variance {line.varianceQty > 0 ? '+' : ''}{formatQty(line.varianceQty)} ({line.variancePercent > 0 ? '+' : ''}{formatQty(line.variancePercent)}%)
+              </div>
+              {allowEdit && (
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={() => setClosingEdit({
+                    productId: line.productId,
+                    fullUnits: usesPurchaseUnitSplit(product(line.productId)) ? String(line.fullUnits ?? 0) : '0',
+                    looseQty: String(line.looseQty ?? line.remainingQty),
+                    reason: '',
+                  })}
+                >
+                  Edit remaining
+                </Button>
+              )}
             </div>
           ))}
         </Card>
       ) : null}
+      {(session.materialAudits?.length ?? 0) > 0 && (
+        <Card className="mb-5 p-5">
+          <div className="mb-2 text-sm font-semibold">Material Audit Trail</div>
+          {session.materialAudits!.map((row) => (
+            <div key={row.id} className="text-sm text-slate-600">
+              {row.action} · {product(row.productId)?.name ?? (row.productId || session.reference)}
+              {row.purchaseQty != null && row.purchaseUnit ? ` · ${formatQty(row.purchaseQty)} ${formatUnit(row.purchaseUnit)}` : ''}
+              {row.baseQty != null ? ` · ${formatQty(row.baseQty)} ${formatUnit(row.baseUnit)}` : ''}
+              {row.containerType ? ` · ${row.containerType}` : ''}
+              {row.reason ? ` · ${row.reason}` : ''}
+              {' · '}{row.createdBy} · {formatDateTime(row.createdAt)}
+            </div>
+          ))}
+        </Card>
+      )}
       {state.stockMovements.filter((row) => row.reference === session.reference || row.reference.startsWith(`${session.reference} `)).length > 0 && (
         <Card className="mb-5 p-5">
           <div className="mb-2 text-sm font-semibold">Inventory movements</div>
@@ -281,6 +340,65 @@ export function ProductionSessionDetailPage() {
           if (ok) {
             setConfirmEdit(false)
             setEdit(null)
+          }
+        }}
+      />
+      <Modal open={Boolean(closingEdit)} onClose={() => setClosingEdit(null)} title="Edit material remaining" width="max-w-md">
+        {closingEdit && (
+          <div className="space-y-3">
+            <p className="text-sm text-slate-600">Physical remaining is recounted. Actual used and inventory are reconciled. History is kept.</p>
+            <Field label="Material">
+              <div className="flex h-10 items-center text-sm font-medium">{product(closingEdit.productId)?.name}</div>
+            </Field>
+            {usesPurchaseUnitSplit(product(closingEdit.productId)) ? (
+              <>
+                <Field label={`Full ${formatUnit(product(closingEdit.productId)?.purchaseUnit)}`}>
+                  <Input type="number" min={0} value={closingEdit.fullUnits} onChange={(e) => setClosingEdit({ ...closingEdit, fullUnits: e.target.value })} />
+                </Field>
+                <Field label={`Loose ${formatUnit(product(closingEdit.productId)?.unit)}`}>
+                  <Input type="number" min={0} value={closingEdit.looseQty} onChange={(e) => setClosingEdit({ ...closingEdit, looseQty: e.target.value })} />
+                </Field>
+              </>
+            ) : (
+              <Field label={`Physical remaining (${formatUnit(product(closingEdit.productId)?.unit)})`}>
+                <Input type="number" min={0} value={closingEdit.looseQty} onChange={(e) => setClosingEdit({ ...closingEdit, looseQty: e.target.value })} />
+              </Field>
+            )}
+            <Field label="Reason (required)">
+              <Textarea rows={3} value={closingEdit.reason} onChange={(e) => setClosingEdit({ ...closingEdit, reason: e.target.value })} placeholder="Recounted leftover material after completion" />
+            </Field>
+            <div className="flex justify-end gap-2">
+              <Button variant="secondary" onClick={() => setClosingEdit(null)}>Cancel</Button>
+              <Button
+                onClick={() => {
+                  if (!closingEdit.reason.trim()) return
+                  setConfirmClosing(true)
+                }}
+              >
+                Save with audit
+              </Button>
+            </div>
+          </div>
+        )}
+      </Modal>
+      <ConfirmDialog
+        open={confirmClosing}
+        title="Save material closing edit?"
+        message={closingEdit ? `${product(closingEdit.productId)?.name} remaining updated. Reason: ${closingEdit.reason}. Inventory will be reconciled.` : ''}
+        confirmLabel="Save and reconcile inventory"
+        onClose={() => setConfirmClosing(false)}
+        onConfirm={() => {
+          if (!closingEdit) return
+          const split = usesPurchaseUnitSplit(product(closingEdit.productId))
+          const ok = api.editCompletedMaterialClosing(
+            session.id,
+            closingEdit.productId,
+            { fullUnits: split ? Number(closingEdit.fullUnits) : 0, looseQty: Number(closingEdit.looseQty) },
+            closingEdit.reason,
+          )
+          if (ok) {
+            setConfirmClosing(false)
+            setClosingEdit(null)
           }
         }}
       />

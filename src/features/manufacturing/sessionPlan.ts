@@ -1,4 +1,5 @@
-import type { AppState, Bom, PickingLine, ProductionBalance, ProductionSession, ProductionSessionStatus, UserRole } from '@/types'
+import type { AppState, Bom, PickingLine, Product, ProductionBalance, ProductionSession, ProductionSessionStatus, UserRole } from '@/types'
+import { formatUnit, purchaseConversionQty, qtyToBaseUnit, unitsEqual } from '@/features/products/masterData'
 import { round2, systemDateKey } from '@/utils/format'
 import { scaledRequiredQty } from './helpers'
 
@@ -55,6 +56,48 @@ export function sessionStatusLabel(status: string) {
 export function toDisplayQty(qty: number, unit: string) {
   if (unit === 'KG' || unit === 'kg') return { qty: round2(qty * 1000), unit: 'g' }
   return { qty: round2(qty), unit }
+}
+
+export function isRawStorePickingLine(line: Pick<PickingLine, 'id' | 'kind' | 'productId'>) {
+  if (line.kind !== 'raw') return false
+  return line.id === `raw-${line.productId}` || line.id.startsWith(`raw-${line.productId}-`)
+}
+
+export type PurchasePickSuggestion = {
+  purchaseQty: number
+  purchaseUnit: string
+  baseQty: number
+  baseUnit: string
+  note: string
+}
+
+export function suggestPurchasePick(
+  product: Pick<Product, 'unit' | 'purchaseUnit' | 'purchaseConversionQty'> | undefined,
+  bomBaseQty: number,
+): PurchasePickSuggestion {
+  const need = round2(Math.max(0, Number.isFinite(bomBaseQty) ? bomBaseQty : 0))
+  const baseUnit = formatUnit(product?.unit) || 'KG'
+  const purchaseUnit = formatUnit(product?.purchaseUnit ?? product?.unit) || baseUnit
+  const split = Boolean(product && !unitsEqual(product.unit, product.purchaseUnit ?? product.unit))
+  const conversion = product ? purchaseConversionQty(product) : 0
+  if (split && conversion > 0) {
+    const purchaseQty = need > 0 ? Math.max(1, Math.ceil(need / conversion - 1e-9)) : 0
+    const baseQty = round2(purchaseQty * conversion)
+    return {
+      purchaseQty,
+      purchaseUnit,
+      baseQty,
+      baseUnit,
+      note: `1 ${purchaseUnit} = ${conversion} ${baseUnit}`,
+    }
+  }
+  return {
+    purchaseQty: need,
+    purchaseUnit: baseUnit,
+    baseQty: need,
+    baseUnit,
+    note: '',
+  }
 }
 
 export function fromDisplayQty(qty: number, unit: string) {
@@ -235,18 +278,18 @@ export function buildSessionPlan(state: AppState, session: ProductionSession): S
 
   for (const row of consolidatedRaw) {
     const product = state.products.find((item) => item.id === row.productId)
-    const fresh = toDisplayQty(row.qty, row.unit)
-    const gross = toDisplayQty(row.grossQty, row.unit)
+    const plannedBase = round2(product ? qtyToBaseUnit(row.qty, row.unit, product) ?? row.qty : row.qty)
+    const pick = suggestPurchasePick(product, plannedBase)
     picking.push({
       id: `raw-${row.productId}`,
       kind: 'raw',
       productId: row.productId,
       label: product?.name ?? 'Material',
-      requiredQty: gross.qty,
+      requiredQty: plannedBase,
       existingBalanceQty: 0,
-      freshQty: fresh.qty,
-      qtyToPick: fresh.qty,
-      unit: fresh.unit,
+      freshQty: plannedBase,
+      qtyToPick: pick.purchaseQty,
+      unit: pick.purchaseUnit,
       source: 'Raw Material Store',
       location: 'Raw Material Store',
       container: '',
