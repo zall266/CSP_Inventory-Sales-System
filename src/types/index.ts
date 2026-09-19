@@ -930,6 +930,8 @@ export type MaterialClosingLine = {
   plannedQty: number
   /** Total material allocated to this production session, not warehouse on-hand. */
   availableQty: number
+  /** Allocated minus planned. Optional on older completed sessions. */
+  expectedRemainingQty?: number
   remainingQty: number
   actualUsedQty: number
   varianceQty: number

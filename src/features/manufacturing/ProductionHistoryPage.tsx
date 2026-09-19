@@ -6,7 +6,7 @@ import { useApi, useLookups, useStore } from '@/store/hooks'
 import { formatDate, formatDateTime, formatQty } from '@/utils/format'
 import { formatUnit } from '@/features/products/masterData'
 import { sessionTotals } from './sessionPlan'
-import { allocationLabel, usesPurchaseUnitSplit } from './materialClosing'
+import { allocationLabel, expectedRemainingQty, usesPurchaseUnitSplit } from './materialClosing'
 import { hasPermission } from '@/features/settings/permissions'
 
 export function SessionEditDeniedPage() {
@@ -234,7 +234,7 @@ export function ProductionSessionDetailPage() {
           {session.materialClosing.lines.map((line) => (
             <div key={line.productId} className="mb-2 flex flex-wrap items-start justify-between gap-2 text-sm text-slate-600">
               <div>
-                {product(line.productId)?.name}: planned {formatQty(line.plannedQty)} · allocated {formatQty(line.availableQty)} · remaining {formatQty(line.remainingQty)} · actual {formatQty(line.actualUsedQty)} · variance {line.varianceQty > 0 ? '+' : ''}{formatQty(line.varianceQty)} ({line.variancePercent > 0 ? '+' : ''}{formatQty(line.variancePercent)}%)
+                {product(line.productId)?.name}: planned {formatQty(line.plannedQty)} · allocated {formatQty(line.availableQty)} · expected {formatQty(line.expectedRemainingQty ?? expectedRemainingQty(line.availableQty, line.plannedQty))} · remaining {formatQty(line.remainingQty)} · actual {formatQty(line.actualUsedQty)} · variance {line.varianceQty > 0 ? '+' : ''}{formatQty(line.varianceQty)} ({line.variancePercent > 0 ? '+' : ''}{formatQty(line.variancePercent)}%)
               </div>
               {allowEdit && (
                 <Button

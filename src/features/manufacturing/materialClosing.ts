@@ -135,6 +135,10 @@ export function physicalRemainingBaseQty(
   return { ok: true, remaining: round2(looseQty) }
 }
 
+export function expectedRemainingQty(allocatedQty: number, plannedQty: number) {
+  return round2(allocatedQty - plannedQty)
+}
+
 export function closingLineFromInput(
   product: Pick<Product, 'id' | 'unit' | 'purchaseUnit' | 'purchaseConversionQty'>,
   plannedQty: number,
@@ -158,6 +162,7 @@ export function closingLineFromInput(
       productId: product.id,
       plannedQty: round2(plannedQty),
       availableQty: round2(availableQty),
+      expectedRemainingQty: expectedRemainingQty(availableQty, plannedQty),
       remainingQty: remaining.remaining,
       actualUsedQty,
       varianceQty,
@@ -174,12 +179,13 @@ export function isSignificantVariance(line: Pick<MaterialClosingLine, 'varianceP
 
 export function varianceTone(line: Pick<MaterialClosingLine, 'varianceQty' | 'variancePercent'>) {
   if (line.varianceQty === 0) return 'ok' as const
-  if (isSignificantVariance(line)) return line.varianceQty > 0 ? 'high' as const : 'low' as const
+  if (isSignificantVariance(line)) return 'significant' as const
   return line.varianceQty > 0 ? 'high' as const : 'low' as const
 }
 
-export function varianceLabel(line: Pick<MaterialClosingLine, 'varianceQty'>) {
+export function varianceLabel(line: Pick<MaterialClosingLine, 'varianceQty' | 'variancePercent'>) {
   if (line.varianceQty === 0) return 'Within expected usage'
+  if (isSignificantVariance(line)) return 'Significant material variance'
   if (line.varianceQty > 0) return 'Higher than planned'
   return 'Lower than planned'
 }
