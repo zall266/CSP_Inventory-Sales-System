@@ -1008,6 +1008,10 @@ export type ProductionSession = {
   completedAt: string
   cancelledBy?: string
   cancelledAt?: string
+  resultSavedBy?: string
+  resultSavedAt?: string
+  distributionSavedBy?: string
+  distributionSavedAt?: string
   recipePhoto: string
   recipePhotoName: string
   uploadedBy: string

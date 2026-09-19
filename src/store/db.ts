@@ -5188,6 +5188,215 @@ export const db = {
     return true
   },
 
+  saveProductionResult(
+    id: string,
+    results: Array<{
+      productId: string
+      actualQty: number
+      productionBalanceQty: number
+      balanceLocation: string
+      balanceContainer: string
+      wasteQty: number
+      shortProductionReason: string
+      notes: string
+    }>,
+  ) {
+    const session = state.productionSessions.find((item) => item.id === id)
+    const user = currentUser(state)
+    if (!session || session.status !== 'in_progress') {
+      toast('Start production first', undefined, 'warning')
+      return false
+    }
+    if (!isSessionOperationalToday(session)) {
+      toast("Not today's production", 'Complete Production only runs for the current system date.', 'warning')
+      return false
+    }
+    if (!canEditSession(user.role, session.status)) {
+      toast('Permission denied', undefined, 'danger')
+      return false
+    }
+    if (session.posted) {
+      toast('Already posted', undefined, 'info')
+      return false
+    }
+    for (const item of session.items) {
+      const result = results.find((row) => row.productId === item.productId)
+      if (!result || result.actualQty < 0) {
+        toast('Enter actual quantity for every product', undefined, 'warning')
+        return false
+      }
+      if (result.productionBalanceQty > 0 && (!result.balanceLocation || !result.balanceContainer)) {
+        toast('Storage and box required', 'Production balance must have a location and container.', 'warning')
+        return false
+      }
+      if (result.productionBalanceQty > 0 && !isActiveBalanceStorageBox(state, session.warehouseId, result.balanceContainer)) {
+        toast('Select a valid Storage Box', 'Production balance must use an active Warehouse Map storage box.', 'warning')
+        return false
+      }
+      if (result.actualQty < item.targetQty && !result.shortProductionReason) {
+        toast('Select a reason', `${productById(item.productId)?.name} is below target.`, 'warning')
+        return false
+      }
+    }
+    const savedAt = nowIso()
+    setData({
+      productionSessions: state.productionSessions.map((item) =>
+        item.id === id
+          ? {
+              ...item,
+              resultSavedBy: user.name,
+              resultSavedAt: savedAt,
+              items: item.items.map((row) => {
+                const result = results.find((entry) => entry.productId === row.productId)!
+                return {
+                  ...row,
+                  actualQty: result.actualQty,
+                  productionBalanceQty: result.productionBalanceQty,
+                  balanceLocation: result.balanceLocation,
+                  balanceContainer: result.balanceContainer,
+                  wasteQty: result.wasteQty,
+                  shortProductionQty: Math.max(0, row.targetQty - result.actualQty),
+                  shortProductionReason: result.shortProductionReason,
+                  notes: result.notes,
+                }
+              }),
+            }
+          : item,
+      ),
+    })
+    toast('Production result saved', session.reference)
+    return true
+  },
+
+  saveFinishedGoodsDistribution(
+    id: string,
+    results: Array<{ productId: string; displayQty: number; cartonQty: number }>,
+  ) {
+    const session = state.productionSessions.find((item) => item.id === id)
+    const user = currentUser(state)
+    if (!session || session.status !== 'in_progress') {
+      toast('Start production first', undefined, 'warning')
+      return false
+    }
+    if (!isSessionOperationalToday(session)) {
+      toast("Not today's production", 'Complete Production only runs for the current system date.', 'warning')
+      return false
+    }
+    if (!canEditSession(user.role, session.status)) {
+      toast('Permission denied', undefined, 'danger')
+      return false
+    }
+    if (session.posted) {
+      toast('Already posted', undefined, 'info')
+      return false
+    }
+    if (!session.resultSavedAt) {
+      toast('Save Production Result first', 'Step 2 is available after Step 1 is saved.', 'warning')
+      return false
+    }
+    for (const item of session.items) {
+      const result = results.find((row) => row.productId === item.productId)
+      const displayQty = round2(result?.displayQty || 0)
+      const cartonQty = round2(result?.cartonQty || 0)
+      if (displayQty < 0 || cartonQty < 0) {
+        toast('Distribution cannot be negative', undefined, 'warning')
+        return false
+      }
+      if (round2(displayQty + cartonQty) !== round2(item.actualQty)) {
+        toast(
+          'Distribution must equal actual',
+          `${productById(item.productId)?.name}: Display ${formatQty(displayQty)} + Carton ${formatQty(cartonQty)} must equal ${formatQty(item.actualQty)} PACK.`,
+          'warning',
+        )
+        return false
+      }
+    }
+    const savedAt = nowIso()
+    setData({
+      productionSessions: state.productionSessions.map((item) =>
+        item.id === id
+          ? {
+              ...item,
+              distributionSavedBy: user.name,
+              distributionSavedAt: savedAt,
+              items: item.items.map((row) => {
+                const result = results.find((entry) => entry.productId === row.productId)!
+                return {
+                  ...row,
+                  displayQty: round2(result.displayQty || 0),
+                  cartonQty: round2(result.cartonQty || 0),
+                }
+              }),
+            }
+          : item,
+      ),
+    })
+    toast('Finished goods distribution saved', session.reference)
+    return true
+  },
+
+  saveMaterialClosingDraft(
+    id: string,
+    closing: {
+      acknowledged: boolean
+      inputs: Array<{ productId: string; fullUnits: number; looseQty: number }>
+    },
+  ) {
+    const session = state.productionSessions.find((item) => item.id === id)
+    const user = currentUser(state)
+    if (!session || session.status !== 'in_progress') {
+      toast('Start production first', undefined, 'warning')
+      return false
+    }
+    if (!isSessionOperationalToday(session)) {
+      toast("Not today's production", 'Complete Production only runs for the current system date.', 'warning')
+      return false
+    }
+    if (!canEditSession(user.role, session.status)) {
+      toast('Permission denied', undefined, 'danger')
+      return false
+    }
+    if (session.posted) {
+      toast('Already posted', undefined, 'info')
+      return false
+    }
+    if (!session.distributionSavedAt) {
+      toast('Save Finished Goods Distribution first', 'Step 3 is available after Step 2 is saved.', 'warning')
+      return false
+    }
+    if (!closing.acknowledged) {
+      toast('Acknowledge the physical check', 'Tick the material balance acknowledgement before saving.', 'warning')
+      return false
+    }
+    const closingBuilt = buildSessionMaterialClosing(state, session, closing.inputs ?? [])
+    if (!closingBuilt.ok) {
+      toast('Finish Material Closing Check', closingBuilt.reason, 'warning')
+      return false
+    }
+    const savedAt = nowIso()
+    const significant = closingBuilt.lines.filter((row) => isSignificantVariance(row))
+    setData({
+      productionSessions: state.productionSessions.map((item) =>
+        item.id === id
+          ? {
+              ...item,
+              status: 'in_progress' as const,
+              posted: false,
+              materialClosing: {
+                checkedAt: savedAt,
+                checkedBy: user.name,
+                acknowledged: true,
+                significantVariance: significant.length > 0,
+                lines: closingBuilt.lines,
+              },
+            }
+          : item,
+      ),
+    })
+    toast('Material closing saved', session.reference)
+    return true
+  },
+
   completeSession(
     id: string,
     results: Array<{
@@ -5395,9 +5604,10 @@ export const db = {
     }
 
     const significant = closingBuilt.lines.filter((row) => isSignificantVariance(row))
+    const previousClosing = session.materialClosing
     const materialClosing = {
-      checkedAt: date,
-      checkedBy: user.name,
+      checkedAt: previousClosing?.checkedBy ? previousClosing.checkedAt : date,
+      checkedBy: previousClosing?.checkedBy || user.name,
       acknowledged: true,
       significantVariance: significant.length > 0,
       lines: closingBuilt.lines,
