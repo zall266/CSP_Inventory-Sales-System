@@ -136,6 +136,13 @@ export function ProductionSessionDetailPage() {
         {session.status === 'cancelled' && (
           <Info label="Cancelled by" value={`${session.cancelledBy || '—'} ${session.cancelledAt ? formatDateTime(session.cancelledAt) : ''}`} />
         )}
+        {(session.resultSavedBy || session.distributionSavedBy || session.materialClosing?.checkedBy) && (
+          <>
+            <Info label="Production Result" value={session.resultSavedBy ? `${session.resultSavedBy} ${session.resultSavedAt ? formatDateTime(session.resultSavedAt) : ''}` : '—'} />
+            <Info label="Finished Goods Distribution" value={session.distributionSavedBy ? `${session.distributionSavedBy} ${session.distributionSavedAt ? formatDateTime(session.distributionSavedAt) : ''}` : '—'} />
+            <Info label="Material Closing" value={session.materialClosing?.checkedBy ? `${session.materialClosing.checkedBy} ${session.materialClosing.checkedAt ? formatDateTime(session.materialClosing.checkedAt) : ''}` : '—'} />
+          </>
+        )}
       </div>
       {session.recipePhoto && (
         <Card className="mb-5 p-5">

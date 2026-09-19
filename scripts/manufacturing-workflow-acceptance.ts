@@ -237,22 +237,25 @@ check(
 check('Picking List keeps existing complete and add actions', pickingSrc.includes('Today\'s production') && pickingSrc.includes('+ Add Material') && pickingSrc.includes('+ Add Loose') && pickingSrc.includes('Complete production'))
 check('Picking progress still counts all lines', pickingSrc.includes('{picked} / {session.picking.length} lines picked'))
 check(
-  'Two-step completion: Step 1 is Production Result and Step 2 is Material Closing',
-  completeSrc.includes('Step 1 of 2')
+  'Three-step completion: Production Result, Finished Goods Distribution, then Material Closing',
+  completeSrc.includes('Step 1 of 3')
     && completeSrc.includes('Production Result')
-    && completeSrc.includes('Step 2 of 2')
+    && completeSrc.includes('Step 2 of 3')
+    && completeSrc.includes('Finished Goods Distribution')
+    && completeSrc.includes('Step 3 of 3')
     && completeSrc.includes('Material Closing Check')
-    && completeSrc.includes('setStep(2)')
-    && completeSrc.includes('setStep(1)'),
+    && completeSrc.includes('Save & Continue')
+    && completeSrc.includes('saveProductionResult')
+    && completeSrc.includes('saveFinishedGoodsDistribution'),
 )
-check('Next moves from Step 1 to Step 2', completeSrc.includes('const goNext') && completeSrc.includes('{step === 1 &&'))
-check('Complete Production is only available from Step 2', completeSrc.includes('{step === 2 &&') && completeSrc.includes('Complete production') && !completeSrc.includes('Review and complete'))
+check('Save & Continue moves from Step 1 after persist', completeSrc.includes('saveStep1') && completeSrc.includes('{step === 1 &&'))
+check('Complete Production is only available from Step 3', completeSrc.includes('{step === 3 &&') && completeSrc.includes('Complete production') && !completeSrc.includes('Review and complete'))
 check('Recount button is removed; staff edits Physical Remaining', !/\bRecount\b/.test(completeSrc) && completeSrc.includes('If the result looks wrong, recheck the physical balance and edit the value'))
 check('Expected Remaining is visible before remaining is entered', completeSrc.includes('Expected Remaining:') && completeSrc.includes('expectedRemainingQty('))
 check('Actual Used and Variance update immediately from Physical Remaining', completeSrc.includes('closingLineFromInput') && completeSrc.includes('Enter physical remaining to see actual used and variance immediately'))
 check('Complete page has no operational date picker', !/type=["']date["']/.test(completeSrc) && completeSrc.includes('isSessionOperationalToday') && completeSrc.includes('· Today ·'))
 check('Storage Box still uses Warehouse Map source-of-truth', completeSrc.includes('storageBoxSelectOptions(state, session.warehouseId') && completeSrc.includes('isActiveBalanceStorageBox'))
-check('Variance does not disable Complete Production', completeSrc.includes('disabled={!acknowledged || !closingPreview.ok}') && completeSrc.includes('I have checked the physical material balance'))
+check('Variance does not disable Complete Production', completeSrc.includes('disabled={!step3Done || !acknowledged || !closingPreview.ok}') && completeSrc.includes('I have checked the physical material balance'))
 check('Allocated 3 KG minus planned 2.33 KG expects 0.67 KG remaining', expectedRemainingQty(3, 2.33) === 0.67)
 const remaining070 = closingLineFromInput(kgProduct, 2.33, 3, { fullUnits: 0, looseQty: 0.7 })
 check(
@@ -593,11 +596,11 @@ check(
 )
 
 check(
-  'TEST 25 PR #43 two-step completion remains intact',
-  completeSrc.includes('Step 1 of 2')
-    && completeSrc.includes('Production Result')
-    && completeSrc.includes('Step 2 of 2')
+  'TEST 25 PR #43 Material Closing remains intact inside Step 3',
+  completeSrc.includes('Step 3 of 3')
     && completeSrc.includes('Material Closing Check')
+    && completeSrc.includes('Physical Remaining')
+    && completeSrc.includes('I have checked the physical material balance')
     && !completeSrc.includes('amendSessionPlan'),
 )
 check(
@@ -807,6 +810,113 @@ const completedOk = db.completeSession('ps-0910', packResults(db.getSnapshot().p
 const completedSession = db.getSnapshot().productionSessions.find((item) => item.id === 'ps-0910')!
 check('Completed session still exists after amendment path', completedOk === true && completedSession.status === 'completed')
 check('TEST 21 COMPLETED cannot be amended', db.amendSessionPlan('ps-0910', [{ productId: 'p-pack-mt', targetQty: 90 }], 'Too late') === false)
+
+check(
+  'Completion UI opens the first incomplete step by default',
+  completeSrc.includes('if (!session?.resultSavedAt) return 1')
+    && completeSrc.includes('if (!session.distributionSavedAt) return 2')
+    && completeSrc.includes('Save Material Closing'),
+)
+
+db.resetDemo()
+db.switchUser('u-admin')
+db.acceptSession('ps-0910')
+db.startSession('ps-0910', { recipePhoto: 'data:image/png;base64,aaa', recipePhotoName: 'sheet.jpg' })
+pickRawStore('ps-0910')
+const threeStepSession = db.getSnapshot().productionSessions.find((item) => item.id === 'ps-0910')!
+const threeStepResults = packResults(threeStepSession)
+const threeStepMoves = db.getSnapshot().stockMovements.length
+
+db.switchUser('u-mei')
+const skippedTwo = db.saveFinishedGoodsDistribution('ps-0910', threeStepResults)
+check('Step 2 cannot be saved before Step 1', skippedTwo === false)
+
+const step1 = db.saveProductionResult('ps-0910', threeStepResults)
+const afterStep1 = db.getSnapshot().productionSessions.find((item) => item.id === 'ps-0910')!
+check(
+  'Staff A saves Step 1 Production Result',
+  step1 === true
+    && afterStep1.status === 'in_progress'
+    && afterStep1.posted === false
+    && afterStep1.resultSavedBy === 'Mei Ling'
+    && Boolean(afterStep1.resultSavedAt)
+    && afterStep1.items.every((item) => item.actualQty === item.targetQty)
+    && db.getSnapshot().stockMovements.length === threeStepMoves,
+)
+check('Refresh still has Step 1 actor after reopen snapshot', db.getSnapshot().productionSessions.find((item) => item.id === 'ps-0910')?.resultSavedBy === 'Mei Ling')
+
+db.switchUser('u-kumar')
+const afterStaffBOpen = db.getSnapshot().productionSessions.find((item) => item.id === 'ps-0910')!
+check('Staff B sees Step 1 completed and Step 2 available', Boolean(afterStaffBOpen.resultSavedAt) && !afterStaffBOpen.distributionSavedAt)
+
+const skippedThree = db.saveMaterialClosingDraft('ps-0910', { acknowledged: true, inputs: plannedRemainingInputs('ps-0910') })
+check('Step 3 cannot be saved before Step 2', skippedThree === false)
+
+const invalidDist = db.saveFinishedGoodsDistribution(
+  'ps-0910',
+  afterStaffBOpen.items.map((item) => ({ productId: item.productId, displayQty: 20, cartonQty: 60 })),
+)
+check(
+  'Invalid distribution is blocked and does not post inventory',
+  invalidDist === false
+    && db.getSnapshot().productionSessions.find((item) => item.id === 'ps-0910')?.distributionSavedAt == null
+    && db.getSnapshot().stockMovements.length === threeStepMoves,
+)
+
+const step2 = db.saveFinishedGoodsDistribution(
+  'ps-0910',
+  afterStaffBOpen.items.map((item) => ({ productId: item.productId, displayQty: 10, cartonQty: item.actualQty - 10 })),
+)
+const afterStep2 = db.getSnapshot().productionSessions.find((item) => item.id === 'ps-0910')!
+check(
+  'Staff B saves Step 2 Finished Goods Distribution',
+  step2 === true
+    && afterStep2.distributionSavedBy === 'Kumar Raj'
+    && Boolean(afterStep2.distributionSavedAt)
+    && afterStep2.status === 'in_progress'
+    && afterStep2.posted === false
+    && afterStep2.items.every((item) => item.displayQty === 10 && item.cartonQty === item.actualQty - 10)
+    && db.getSnapshot().stockMovements.length === threeStepMoves,
+)
+
+db.switchUser('u-hafiz')
+const afterStaffCOpen = db.getSnapshot().productionSessions.find((item) => item.id === 'ps-0910')!
+check('Staff C sees Step 1 and Step 2 complete', Boolean(afterStaffCOpen.resultSavedAt) && Boolean(afterStaffCOpen.distributionSavedAt) && !afterStaffCOpen.materialClosing?.checkedBy)
+
+const step3 = db.saveMaterialClosingDraft('ps-0910', { acknowledged: true, inputs: plannedRemainingInputs('ps-0910') })
+const afterStep3 = db.getSnapshot().productionSessions.find((item) => item.id === 'ps-0910')!
+check(
+  'Staff C saves Step 3 Material Closing without posting',
+  step3 === true
+    && afterStep3.status === 'in_progress'
+    && afterStep3.posted === false
+    && afterStep3.materialClosing?.checkedBy === 'Hafiz Malik'
+    && Boolean(afterStep3.materialClosing?.checkedAt)
+    && db.getSnapshot().stockMovements.length === threeStepMoves,
+)
+const closingStamp = afterStep3.materialClosing!.checkedAt
+
+db.switchUser('u-admin')
+const posted = db.completeSession('ps-0910', packResults(db.getSnapshot().productionSessions.find((item) => item.id === 'ps-0910')!), {
+  acknowledged: true,
+  inputs: plannedRemainingInputs('ps-0910'),
+})
+const postedSession = db.getSnapshot().productionSessions.find((item) => item.id === 'ps-0910')!
+check(
+  'Manager completes once and preserves Material Closing actor',
+  posted === true
+    && postedSession.status === 'completed'
+    && postedSession.posted === true
+    && postedSession.completedBy === 'Admin'
+    && Boolean(postedSession.completedAt)
+    && postedSession.materialClosing?.checkedBy === 'Hafiz Malik'
+    && postedSession.materialClosing?.checkedAt === closingStamp
+    && postedSession.resultSavedBy === 'Mei Ling'
+    && postedSession.distributionSavedBy === 'Kumar Raj',
+)
+check('Inventory posts only on Complete Production', db.getSnapshot().stockMovements.length > threeStepMoves)
+const postedAgain = db.completeSession('ps-0910', packResults(postedSession), { acknowledged: true, inputs: plannedRemainingInputs('ps-0910') })
+check('Duplicate Complete Production is blocked', postedAgain === false && postedSession.status === 'completed')
 
 const failed = results.filter((row) => !row.ok)
 console.log(`\n${results.filter((row) => row.ok).length}/${results.length} passed`)
