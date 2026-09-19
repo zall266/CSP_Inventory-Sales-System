@@ -45,6 +45,7 @@ const {
   varianceLabel,
 } = await import('@/features/manufacturing/materialClosing')
 const { isRawStorePickingLine, suggestPurchasePick } = await import('@/features/manufacturing/sessionPlan')
+const { groupPickingListForDisplay } = await import('@/features/manufacturing/PickingListPage')
 const { round2 } = await import('@/utils/format')
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
@@ -219,6 +220,17 @@ check(
 )
 check('Picking stays checklist-first with no Brought Qty field', pickingSrc.includes('Mark picked') && !/Brought Qty/i.test(pickingSrc))
 check(
+  'Picking List UI groups Fresh Materials before Production Balance',
+  pickingSrc.includes('Collect all fresh materials from the Store first.')
+    && pickingSrc.includes('After fresh materials are collected, go to Storage Box.')
+    && pickingSrc.indexOf('title="Fresh Materials"') < pickingSrc.indexOf('title="Production Balance"')
+    && pickingSrc.includes('freshLines.map')
+    && pickingSrc.includes('balanceLines.map')
+    && !pickingSrc.includes('{session.picking.map'),
+)
+check('Picking List keeps existing complete and add actions', pickingSrc.includes('Today\'s production') && pickingSrc.includes('+ Add Material') && pickingSrc.includes('+ Add Loose') && pickingSrc.includes('Complete production'))
+check('Picking progress still counts all lines', pickingSrc.includes('{picked} / {session.picking.length} lines picked'))
+check(
   'Two-step completion: Step 1 is Production Result and Step 2 is Material Closing',
   completeSrc.includes('Step 1 of 2')
     && completeSrc.includes('Production Result')
@@ -255,6 +267,32 @@ check('Small over-use is a warning, not a block', varianceLabel({ varianceQty: 0
 check('Variance above 10% is significant', varianceLabel({ varianceQty: 3.5, variancePercent: 77.8 }) === 'Significant material variance')
 
 const started = db.getSnapshot().productionSessions.find((item) => item.id === 'ps-0910')!
+const groupedPicking = groupPickingListForDisplay(started.picking)
+const originalBalance = started.picking.filter((line) => line.kind === 'balance')
+check('Stored picking order is unchanged (balance still generated first)', started.picking[0]?.kind === 'balance')
+check('Display grouping puts no production balance in Fresh Materials', groupedPicking.fresh.length > 0 && groupedPicking.fresh.every((line) => line.kind !== 'balance'))
+check('Display grouping keeps all production balance after fresh materials', groupedPicking.balance.length > 0 && groupedPicking.balance.every((line) => line.kind === 'balance'))
+check('Display grouping keeps every picking line', groupedPicking.fresh.length + groupedPicking.balance.length === started.picking.length)
+check(
+  'Display grouping preserves required, pick qty, and source',
+  [...groupedPicking.fresh, ...groupedPicking.balance].every((line) => {
+    const original = started.picking.find((row) => row.id === line.id)
+    return Boolean(original && original.requiredQty === line.requiredQty && original.qtyToPick === line.qtyToPick && original.source === line.source && original.location === line.location)
+  }),
+)
+check(
+  'Production Balance display order matches existing FIFO/source order',
+  groupedPicking.balance.length === originalBalance.length && groupedPicking.balance.every((line, index) => line.id === originalBalance[index].id),
+)
+check(
+  'Shared raw materials stay one consolidated store line in the fresh section',
+  groupedPicking.fresh.filter((line) => line.id === 'raw-p-milkpw').length === 1,
+)
+const movementsBeforePick = db.getSnapshot().stockMovements.length
+db.togglePickingLine('ps-0910', groupedPicking.fresh.find((line) => !line.picked)!.id, true)
+check('Mark picked does not create a stock movement', db.getSnapshot().stockMovements.length === movementsBeforePick)
+check('Progress still counts the marked line', db.getSnapshot().productionSessions.find((item) => item.id === 'ps-0910')!.picking.filter((line) => line.picked).length >= 1)
+
 const blockedNoAck = db.completeSession(started.id, packResults(started))
 check('Complete without acknowledgement is rejected', blockedNoAck === false && db.getSnapshot().productionSessions.find((item) => item.id === 'ps-0910')?.status === 'in_progress')
 
