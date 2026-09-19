@@ -37,10 +37,12 @@ const {
   buildSessionMaterialClosing,
   closingLineFromInput,
   conversionNote,
+  expectedRemainingQty,
   physicalRemainingBaseQty,
   plannedClosingMaterials,
   sessionAllocatedQty,
   usesAllocationLedger,
+  varianceLabel,
 } = await import('@/features/manufacturing/materialClosing')
 const { isRawStorePickingLine, suggestPurchasePick } = await import('@/features/manufacturing/sessionPlan')
 const { round2 } = await import('@/utils/format')
@@ -216,6 +218,41 @@ check(
     && !completeSrc.includes('System Available'),
 )
 check('Picking stays checklist-first with no Brought Qty field', pickingSrc.includes('Mark picked') && !/Brought Qty/i.test(pickingSrc))
+check(
+  'Two-step completion: Step 1 is Production Result and Step 2 is Material Closing',
+  completeSrc.includes('Step 1 of 2')
+    && completeSrc.includes('Production Result')
+    && completeSrc.includes('Step 2 of 2')
+    && completeSrc.includes('Material Closing Check')
+    && completeSrc.includes('setStep(2)')
+    && completeSrc.includes('setStep(1)'),
+)
+check('Next moves from Step 1 to Step 2', completeSrc.includes('const goNext') && completeSrc.includes('{step === 1 &&'))
+check('Complete Production is only available from Step 2', completeSrc.includes('{step === 2 &&') && completeSrc.includes('Complete production') && !completeSrc.includes('Review and complete'))
+check('Recount button is removed; staff edits Physical Remaining', !/\bRecount\b/.test(completeSrc) && completeSrc.includes('If the result looks wrong, recheck the physical balance and edit the value'))
+check('Expected Remaining is visible before remaining is entered', completeSrc.includes('Expected Remaining:') && completeSrc.includes('expectedRemainingQty('))
+check('Actual Used and Variance update immediately from Physical Remaining', completeSrc.includes('closingLineFromInput') && completeSrc.includes('Enter physical remaining to see actual used and variance immediately'))
+check('Complete page has no operational date picker', !/type=["']date["']/.test(completeSrc) && completeSrc.includes('isSessionOperationalToday') && completeSrc.includes('· Today ·'))
+check('Storage Box still uses Warehouse Map source-of-truth', completeSrc.includes('storageBoxSelectOptions(state, session.warehouseId') && completeSrc.includes('isActiveBalanceStorageBox'))
+check('Variance does not disable Complete Production', completeSrc.includes('disabled={!acknowledged || !closingPreview.ok}') && completeSrc.includes('I have checked the physical material balance'))
+check('Allocated 3 KG minus planned 2.33 KG expects 0.67 KG remaining', expectedRemainingQty(3, 2.33) === 0.67)
+const remaining070 = closingLineFromInput(kgProduct, 2.33, 3, { fullUnits: 0, looseQty: 0.7 })
+check(
+  'Remaining 0.70 KG uses 2.30 KG with variance -0.03 KG',
+  remaining070.ok
+    && remaining070.line.remainingQty === 0.7
+    && remaining070.line.actualUsedQty === 2.3
+    && remaining070.line.varianceQty === -0.03
+    && remaining070.line.expectedRemainingQty === 0.67,
+)
+const remaining050 = closingLineFromInput(kgProduct, 2.33, 3, { fullUnits: 0, looseQty: 0.5 })
+check(
+  'Editing remaining 0.70 → 0.50 recalculates actual used and variance immediately',
+  remaining050.ok && remaining050.line.actualUsedQty === 2.5 && remaining050.line.varianceQty === 0.17 && remaining050.line.remainingQty === 0.5,
+)
+check('Zero variance is within expected usage', varianceLabel({ varianceQty: 0, variancePercent: 0 }) === 'Within expected usage')
+check('Small over-use is a warning, not a block', varianceLabel({ varianceQty: 0.2, variancePercent: 8 }) === 'Higher than planned')
+check('Variance above 10% is significant', varianceLabel({ varianceQty: 3.5, variancePercent: 77.8 }) === 'Significant material variance')
 
 const started = db.getSnapshot().productionSessions.find((item) => item.id === 'ps-0910')!
 const blockedNoAck = db.completeSession(started.id, packResults(started))
@@ -280,6 +317,10 @@ check('Variance is stored on the session', done.materialClosing!.lines.some((row
 const milkOuts = after.stockMovements.filter((row) => row.reference === done.reference && row.productId === 'p-milkpw' && row.type === 'production_out')
 const milkLine = done.materialClosing!.lines.find((row) => row.productId === 'p-milkpw')!
 check('Inventory posts actual used quantity', milkOuts.length === 1 && milkOuts[0].stockOut === milkLine.actualUsedQty)
+check(
+  'Closing stores expected remaining as allocated minus planned',
+  milkLine.expectedRemainingQty === round2(milkLine.availableQty - milkLine.plannedQty),
+)
 check('Planned quantity is not posted again', milkOuts.length === 1)
 check('Milk inventory dropped by actual used only', inventoryOf('p-milkpw') === round2(milkBefore - milkLine.actualUsedQty))
 check('Sugar inventory dropped by closing actual used', inventoryOf('p-sugar') === round2(sugarBefore - done.materialClosing!.lines.find((row) => row.productId === 'p-sugar')!.actualUsedQty))
