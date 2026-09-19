@@ -28,7 +28,7 @@ import { fileURLToPath } from 'node:url'
 import path from 'node:path'
 
 const { db } = await import('@/store/db')
-const { allocateBalanceFifo, isSessionOperationalToday, systemProductionDate, todaySessions } = await import(
+const { allocateBalanceFifo, isSessionOperationalToday, remainingTargetQty, systemProductionDate, todaySessions } = await import(
   '@/features/manufacturing/sessionPlan'
 )
 const {
@@ -47,12 +47,18 @@ const {
 const { isRawStorePickingLine, suggestPurchasePick } = await import('@/features/manufacturing/sessionPlan')
 const { groupPickingListForDisplay } = await import('@/features/manufacturing/PickingListPage')
 const { round2 } = await import('@/utils/format')
+const { hasPermission } = await import('@/features/settings/permissions')
+const { getBalanceStorageBoxes } = await import('@/features/warehouse/warehouseModel')
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const todaySrc = readFileSync(path.join(root, 'src/features/manufacturing/TodaysProductionPage.tsx'), 'utf8')
 const completeSrc = readFileSync(path.join(root, 'src/features/manufacturing/CompleteProductionPage.tsx'), 'utf8')
 const sessionPlanSrc = readFileSync(path.join(root, 'src/features/manufacturing/sessionPlan.ts'), 'utf8')
 const pickingSrc = readFileSync(path.join(root, 'src/features/manufacturing/PickingListPage.tsx'), 'utf8')
+const planningSrc = readFileSync(path.join(root, 'src/features/manufacturing/ProductionPlanningPage.tsx'), 'utf8')
+const planAmendmentSrc = readFileSync(path.join(root, 'src/features/manufacturing/planAmendment.tsx'), 'utf8')
+const dbSrc = readFileSync(path.join(root, 'src/store/db.ts'), 'utf8')
+const permissionsSrc = readFileSync(path.join(root, 'src/features/settings/permissions.ts'), 'utf8')
 
 type Check = { name: string; ok: boolean; detail?: string }
 const results: Check[] = []
@@ -585,6 +591,222 @@ check(
   highVarSession.materialClosing?.significantVariance === true
     && db.getSnapshot().notifications.filter((row) => row.title === 'Significant material variance').length > notifyBefore,
 )
+
+check(
+  'TEST 25 PR #43 two-step completion remains intact',
+  completeSrc.includes('Step 1 of 2')
+    && completeSrc.includes('Production Result')
+    && completeSrc.includes('Step 2 of 2')
+    && completeSrc.includes('Material Closing Check')
+    && !completeSrc.includes('amendSessionPlan'),
+)
+check(
+  'TEST 26 PR #44 picking list still renders Fresh Materials then Production Balance',
+  pickingSrc.indexOf('title="Fresh Materials"') < pickingSrc.indexOf('title="Production Balance"')
+    && pickingSrc.includes('freshLines.map')
+    && pickingSrc.includes('balanceLines.map'),
+)
+
+db.resetDemo()
+db.switchUser('u-admin')
+
+const plannedEdit = db.createDailySession({
+  productionDate: '2026-09-12',
+  items: [
+    { productId: 'p-pack-mt', targetQty: 50 },
+    { productId: 'p-pack-st', targetQty: 40 },
+  ],
+  notes: 'Original planned notes',
+})
+check('Planned session created for edit/cancel tests', Boolean(plannedEdit?.id))
+const plannedUpdated = db.updatePlannedSession(plannedEdit!.id, {
+  productionDate: '2026-09-12',
+  notes: 'Updated planned notes',
+  items: [
+    { productId: 'p-pack-mt', targetQty: 55 },
+    { productId: 'p-pack-st', targetQty: 40 },
+  ],
+})
+const afterPlannedEdit = db.getSnapshot().productionSessions.find((item) => item.id === plannedEdit!.id)!
+check(
+  'TEST 1 PLANNED can be edited',
+  plannedUpdated === true
+    && afterPlannedEdit.status === 'planned'
+    && afterPlannedEdit.notes === 'Updated planned notes'
+    && afterPlannedEdit.items.find((item) => item.productId === 'p-pack-mt')?.targetQty === 55
+    && afterPlannedEdit.items.find((item) => item.productId === 'p-pack-mt')?.originalTargetQty === 55
+    && afterPlannedEdit.items.find((item) => item.productId === 'p-pack-st')?.targetQty === 40,
+)
+
+const cancelled = db.cancelPlannedSession(plannedEdit!.id)
+const afterCancel = db.getSnapshot().productionSessions.find((item) => item.id === plannedEdit!.id)
+check(
+  'TEST 2 PLANNED can be cancelled/deleted safely',
+  cancelled === true
+    && afterCancel?.status === 'cancelled'
+    && Boolean(afterCancel?.cancelledBy)
+    && Boolean(afterCancel?.cancelledAt)
+    && afterCancel.items.length === 2,
+)
+check('Cancelled plan is not hard deleted', Boolean(afterCancel?.id) && afterCancel?.reference === plannedEdit?.reference)
+check('TEST 22 CANCELLED cannot be amended', db.amendSessionPlan(plannedEdit!.id, [{ productId: 'p-pack-mt', targetQty: 70 }], 'Should fail') === false)
+check('Cancelled plan cannot be accepted', (() => { db.acceptSession(plannedEdit!.id); return db.getSnapshot().productionSessions.find((item) => item.id === plannedEdit!.id)?.status === 'cancelled' })())
+
+db.resetDemo()
+db.switchUser('u-admin')
+const seedPlanned = db.getSnapshot().productionSessions.find((item) => item.id === 'ps-0910')!
+check('Seed plan loads without amendment history', Array.isArray(seedPlanned.targetChanges) && seedPlanned.targetChanges.length === 0)
+
+db.acceptSession('ps-0910')
+const accepted = db.getSnapshot().productionSessions.find((item) => item.id === 'ps-0910')!
+check('Accepted session keeps the same id', accepted?.status === 'accepted' && accepted.id === 'ps-0910')
+check(
+  'TEST 3 ACCEPTED cannot use normal Edit',
+  db.updatePlannedSession('ps-0910', { productionDate: accepted.productionDate, items: accepted.items.map((item) => ({ productId: item.productId, targetQty: item.targetQty + 1 })) }) === false
+    && db.getSnapshot().productionSessions.find((item) => item.id === 'ps-0910')?.items.find((item) => item.productId === 'p-pack-mt')?.targetQty === 45,
+)
+check('ACCEPTED cannot be cancelled', db.cancelPlannedSession('ps-0910') === false && db.getSnapshot().productionSessions.find((item) => item.id === 'ps-0910')?.status === 'accepted')
+check('Planning UI keeps Edit/Cancel for planned and Amend Plan for later statuses', planningSrc.includes('>Edit<') && planningSrc.includes('Delete / Cancel') && planningSrc.includes('Amend Plan'))
+check('Today UI exposes Amend Plan and does not keep silent Edit target', todaySrc.includes('Amend Plan') && !todaySrc.includes('Edit target'))
+check(
+  'Amendment confirmation is required before save',
+  planAmendmentSrc.includes('Confirm Amendment')
+    && planAmendmentSrc.includes('Amend production plan?')
+    && planAmendmentSrc.includes('if (saving) return'),
+)
+const mfgRunMatch = permissionsSrc.match(/const MFG_RUN: PermissionKey\[\] = \[([\s\S]*?)\]/)
+check(
+  'Plan actions use permission keys, not role-name checks',
+  planAmendmentSrc.includes("hasPermission(state, 'manufacturing.plan.edit')")
+    && planAmendmentSrc.includes("hasPermission(state, 'manufacturing.plan.amend')")
+    && !/role\s*===\s*['"]Owner['"]/.test(planAmendmentSrc)
+    && !/role\s*===\s*['"]Admin['"]/.test(planAmendmentSrc)
+    && !/role\s*===\s*['"]Owner['"]/.test(planningSrc)
+    && permissionsSrc.includes("'manufacturing.plan.amend'")
+    && permissionsSrc.includes("'manufacturing.plan.edit'"),
+)
+check(
+  'Staff manufacturing run permissions do not include plan amend',
+  Boolean(mfgRunMatch && !mfgRunMatch[1].includes('manufacturing.plan.amend') && !mfgRunMatch[1].includes('manufacturing.plan.edit')),
+)
+
+db.switchUser('u-mei')
+check('Staff has operational manufacturing.edit but not plan amend', hasPermission(db.getSnapshot(), 'manufacturing.edit') === true && hasPermission(db.getSnapshot(), 'manufacturing.plan.amend') === false)
+check(
+  'TEST 5 Staff cannot Amend',
+  db.amendSessionPlan('ps-0910', [{ productId: 'p-pack-mt', targetQty: 60 }], 'Staff should not amend') === false
+    && db.getSnapshot().productionSessions.find((item) => item.id === 'ps-0910')?.items.find((item) => item.productId === 'p-pack-mt')?.targetQty === 45,
+)
+
+db.switchUser('u-admin')
+check('Authorized admin can amend', hasPermission(db.getSnapshot(), 'manufacturing.plan.amend') === true)
+check('TEST 6 Amendment requires reason', db.amendSessionPlan('ps-0910', [{ productId: 'p-pack-mt', targetQty: 60 }], '') === false)
+check('TEST 7 Whitespace-only reason is rejected', db.amendSessionPlan('ps-0910', [{ productId: 'p-pack-mt', targetQty: 60 }], '   ') === false)
+
+const beforeMoves = db.getSnapshot().stockMovements.length
+const beforeBalances = JSON.stringify(db.getSnapshot().productionBalances)
+const beforeBoxes = JSON.stringify(getBalanceStorageBoxes(db.getSnapshot()).map((row) => ({ slotId: row.slotId, name: row.name, active: row.active })))
+const originalMatcha = db.getSnapshot().productionSessions.find((item) => item.id === 'ps-0910')!.items.find((item) => item.productId === 'p-pack-mt')!
+
+const firstAmend = db.amendSessionPlan(
+  'ps-0910',
+  [
+    { productId: 'p-pack-mt', targetQty: 60 },
+    { productId: 'p-pack-cl', targetQty: 45 },
+    { productId: 'p-pack-st', targetQty: 45 },
+  ],
+  'Additional customer order',
+)
+const afterFirstAmend = db.getSnapshot().productionSessions.find((item) => item.id === 'ps-0910')!
+const matchaAfter = afterFirstAmend.items.find((item) => item.productId === 'p-pack-mt')!
+const strawberryAfter = afterFirstAmend.items.find((item) => item.productId === 'p-pack-st')!
+const chocolateAfter = afterFirstAmend.items.find((item) => item.productId === 'p-pack-cl')!
+check('TEST 4 ACCEPTED can Amend by authorized Owner/Admin', firstAmend === true && matchaAfter.targetQty === 60)
+check('TEST 8 Amendment creates audit record', afterFirstAmend.targetChanges.length === 1 && afterFirstAmend.targetChanges[0].reason === 'Additional customer order' && afterFirstAmend.targetChanges[0].changedBy === 'Admin' && Boolean(afterFirstAmend.targetChanges[0].changedAt) && afterFirstAmend.targetChanges[0].originalTarget === 45 && afterFirstAmend.targetChanges[0].newTarget === 60 && afterFirstAmend.targetChanges[0].sessionId === 'ps-0910')
+check('TEST 9 Original target remains preserved', matchaAfter.originalTargetQty === originalMatcha.originalTargetQty && matchaAfter.originalTargetQty === 45)
+check('TEST 23 Existing Production Session remains the same session', afterFirstAmend.id === 'ps-0910' && afterFirstAmend.reference === accepted.reference)
+check('TEST 24 Multi-product amendment changes only the selected product', strawberryAfter.targetQty === 45 && chocolateAfter.targetQty === 45 && strawberryAfter.originalTargetQty === 45)
+check('TEST 20 Amendment does not create inventory movement', db.getSnapshot().stockMovements.length === beforeMoves)
+check('TEST 18 Production Balance FIFO remains unchanged', JSON.stringify(db.getSnapshot().productionBalances) === beforeBalances)
+check(
+  'TEST 19 Storage Box source remains unchanged',
+  JSON.stringify(getBalanceStorageBoxes(db.getSnapshot()).map((row) => ({ slotId: row.slotId, name: row.name, active: row.active }))) === beforeBoxes,
+)
+check('No-op amendment is rejected', db.amendSessionPlan('ps-0910', [{ productId: 'p-pack-mt', targetQty: 60 }], 'Same target') === false && db.getSnapshot().productionSessions.find((item) => item.id === 'ps-0910')!.targetChanges.length === 1)
+
+const secondAmend = db.amendSessionPlan('ps-0910', [{ productId: 'p-pack-mt', targetQty: 65 }], 'Production adjustment')
+const afterSecond = db.getSnapshot().productionSessions.find((item) => item.id === 'ps-0910')!
+check(
+  'TEST 10 Multiple amendments preserve complete history',
+  secondAmend === true
+    && afterSecond.targetChanges.length === 2
+    && afterSecond.targetChanges[0].originalTarget === 45
+    && afterSecond.targetChanges[0].newTarget === 60
+    && afterSecond.targetChanges[1].originalTarget === 60
+    && afterSecond.targetChanges[1].newTarget === 65
+    && afterSecond.items.find((item) => item.productId === 'p-pack-mt')?.targetQty === 65,
+)
+
+db.startSession('ps-0910', { recipePhoto: 'data:image/png;base64,aaa', recipePhotoName: 'sheet.jpg' })
+pickRawStore('ps-0910')
+const startedAmend = db.getSnapshot().productionSessions.find((item) => item.id === 'ps-0910')!
+const milkBeforeIncrease = startedAmend.picking.find((line) => line.productId === 'p-milkpw' && line.kind !== 'balance')?.requiredQty
+    ?? startedAmend.picking.find((line) => line.productId === 'p-milkpw')?.requiredQty
+const pickingIdsBefore = startedAmend.picking.map((line) => line.id).sort().join(',')
+const groupedBefore = groupPickingListForDisplay(startedAmend.picking)
+check('Started session still groups Fresh Materials then Production Balance', groupedBefore.fresh.length > 0 && groupedBefore.fresh.every((line) => line.kind !== 'balance') && groupedBefore.balance.every((line) => line.kind === 'balance'))
+
+const inProgressAmend = db.amendSessionPlan('ps-0910', [{ productId: 'p-pack-mt', targetQty: 80 }], 'Operational requirement')
+const afterInProgress = db.getSnapshot().productionSessions.find((item) => item.id === 'ps-0910')!
+check('TEST 11 IN_PROGRESS can be amended by authorized user', inProgressAmend === true && afterInProgress.status === 'in_progress' && afterInProgress.items.find((item) => item.productId === 'p-pack-mt')?.targetQty === 80)
+const milkAfterIncrease = afterInProgress.picking.find((line) => line.productId === 'p-milkpw' && line.kind !== 'balance')?.requiredQty
+  ?? afterInProgress.picking.find((line) => line.productId === 'p-milkpw')?.requiredQty
+check('TEST 15 BOM recalculates for new target', typeof milkBeforeIncrease === 'number' && typeof milkAfterIncrease === 'number' && milkAfterIncrease > milkBeforeIncrease!)
+check(
+  'TEST 16 Picking List reflects updated remaining requirement',
+  afterInProgress.picking.some((line) => line.kind !== 'balance' && line.requiredQty > 0)
+    && new Set(afterInProgress.picking.map((line) => line.id)).size === afterInProgress.picking.length
+    && pickingIdsBefore.split(',').every((id) => afterInProgress.picking.some((line) => line.id === id)),
+)
+const groupedAfter = groupPickingListForDisplay(afterInProgress.picking)
+check(
+  'TEST 17 Picking List still renders Fresh Materials then Production Balance',
+  groupedAfter.fresh.length > 0
+    && groupedAfter.balance.length > 0
+    && groupedAfter.fresh.every((line) => line.kind !== 'balance')
+    && groupedAfter.balance.every((line) => line.kind === 'balance')
+    && afterInProgress.picking.filter((line) => line.kind === 'balance').length === groupedAfter.balance.length,
+)
+
+const liveMatcha = afterInProgress.items.find((item) => item.productId === 'p-pack-mt')!
+liveMatcha.actualQty = 40
+check('Injected actual production is 40', db.getSnapshot().productionSessions.find((item) => item.id === 'ps-0910')!.items.find((item) => item.productId === 'p-pack-mt')!.actualQty === 40)
+const blockedLow = db.amendSessionPlan('ps-0910', [{ productId: 'p-pack-mt', targetQty: 39 }], 'Too low')
+check(
+  'TEST 12 IN_PROGRESS cannot reduce target below actual production',
+  blockedLow === false
+    && db.getSnapshot().productionSessions.find((item) => item.id === 'ps-0910')!.items.find((item) => item.productId === 'p-pack-mt')!.targetQty === 80
+    && db.getSnapshot().ui.toasts.some((row) => row.title === 'New target cannot be lower than actual production completed.'),
+)
+const equalActual = db.amendSessionPlan('ps-0910', [{ productId: 'p-pack-mt', targetQty: 40 }], 'Equal to actual')
+const afterEqual = db.getSnapshot().productionSessions.find((item) => item.id === 'ps-0910')!.items.find((item) => item.productId === 'p-pack-mt')!
+check('Target equal to actual production is allowed', equalActual === true && afterEqual.targetQty === 40 && afterEqual.actualQty === 40 && remainingTargetQty(afterEqual) === 0)
+
+const increaseAgain = db.amendSessionPlan('ps-0910', [{ productId: 'p-pack-mt', targetQty: 60 }], 'Customer order reduced then recovered')
+const afterIncrease = db.getSnapshot().productionSessions.find((item) => item.id === 'ps-0910')!.items.find((item) => item.productId === 'p-pack-mt')!
+check(
+  'TEST 13 Target increase calculates remaining target correctly',
+  increaseAgain === true && afterIncrease.targetQty === 60 && remainingTargetQty(afterIncrease) === 20,
+)
+check('TEST 14 Existing actual production is not reset', afterIncrease.actualQty === 40 && afterIncrease.originalTargetQty === 45)
+
+const completedOk = db.completeSession('ps-0910', packResults(db.getSnapshot().productionSessions.find((item) => item.id === 'ps-0910')!), {
+  acknowledged: true,
+  inputs: plannedRemainingInputs('ps-0910'),
+})
+const completedSession = db.getSnapshot().productionSessions.find((item) => item.id === 'ps-0910')!
+check('Completed session still exists after amendment path', completedOk === true && completedSession.status === 'completed')
+check('TEST 21 COMPLETED cannot be amended', db.amendSessionPlan('ps-0910', [{ productId: 'p-pack-mt', targetQty: 90 }], 'Too late') === false)
 
 const failed = results.filter((row) => !row.ok)
 console.log(`\n${results.filter((row) => row.ok).length}/${results.length} passed`)

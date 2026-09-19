@@ -50,6 +50,8 @@ export const PERMISSION_KEYS: PermissionKey[] = [
   'manufacturing.complete',
   'manufacturing.completed.edit',
   'manufacturing.history.view',
+  'manufacturing.plan.edit',
+  'manufacturing.plan.amend',
   'reports.view',
   'reports.export',
   'finance.view',
@@ -168,6 +170,8 @@ export const PERMISSION_GROUPS: Array<{ id: string; label: string; keys: Permiss
       'manufacturing.complete',
       'manufacturing.completed.edit',
       'manufacturing.history.view',
+      'manufacturing.plan.edit',
+      'manufacturing.plan.amend',
     ],
   },
   { id: 'reports', label: 'Reports', keys: ['reports.view', 'reports.export'] },
@@ -247,6 +251,8 @@ export const PERMISSION_LABELS: Record<PermissionKey, string> = {
   'manufacturing.complete': 'Complete Production',
   'manufacturing.completed.edit': 'Edit Completed Production',
   'manufacturing.history.view': 'View Production History',
+  'manufacturing.plan.edit': 'Edit Planned Production',
+  'manufacturing.plan.amend': 'Amend Production Plan',
   'reports.view': 'View Reports',
   'reports.export': 'Export Reports',
   'finance.view': 'View Finance',
@@ -289,6 +295,8 @@ export const PERMISSION_LABELS: Record<PermissionKey, string> = {
   'customer.pricing.view': 'View Customer Pricing',
   'customer.pricing.manage': 'Manage Customer Pricing',
 }
+
+export const MANUFACTURING_PLAN_PERMISSION_KEYS = ['manufacturing.plan.edit', 'manufacturing.plan.amend'] as const
 
 export function emptyPermissions(): RolePermissions {
   return Object.fromEntries(PERMISSION_KEYS.map((key) => [key, false])) as RolePermissions

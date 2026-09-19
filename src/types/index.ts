@@ -26,7 +26,7 @@ export type MovementType =
   | 'sales_return_repack'
   | 'sales_return_waste'
 export type ProductionStatus = 'draft' | 'planned' | 'in_progress' | 'paused' | 'completed' | 'cancelled'
-export type ProductionSessionStatus = 'planned' | 'accepted' | 'in_progress' | 'completed'
+export type ProductionSessionStatus = 'planned' | 'accepted' | 'in_progress' | 'completed' | 'cancelled'
 export type ShortProductionReason =
   | 'Material Shortage'
   | 'Production Loss'
@@ -1006,6 +1006,8 @@ export type ProductionSession = {
   startedAt: string
   completedBy: string
   completedAt: string
+  cancelledBy?: string
+  cancelledAt?: string
   recipePhoto: string
   recipePhotoName: string
   uploadedBy: string
@@ -1143,6 +1145,8 @@ export type PermissionKey =
   | 'manufacturing.complete'
   | 'manufacturing.completed.edit'
   | 'manufacturing.history.view'
+  | 'manufacturing.plan.edit'
+  | 'manufacturing.plan.amend'
   | 'reports.view'
   | 'reports.export'
   | 'finance.view'

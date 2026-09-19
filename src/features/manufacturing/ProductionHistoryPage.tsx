@@ -133,6 +133,9 @@ export function ProductionSessionDetailPage() {
         <Info label="Accepted by" value={`${session.acceptedBy || '—'} ${session.acceptedAt ? formatDateTime(session.acceptedAt) : ''}`} />
         <Info label="Started by" value={`${session.startedBy || '—'} ${session.startedAt ? formatDateTime(session.startedAt) : ''}`} />
         <Info label="Completed by" value={`${session.completedBy || '—'} ${session.completedAt ? formatDateTime(session.completedAt) : ''}`} />
+        {session.status === 'cancelled' && (
+          <Info label="Cancelled by" value={`${session.cancelledBy || '—'} ${session.cancelledAt ? formatDateTime(session.cancelledAt) : ''}`} />
+        )}
       </div>
       {session.recipePhoto && (
         <Card className="mb-5 p-5">
@@ -176,7 +179,7 @@ export function ProductionSessionDetailPage() {
       <div className="mb-5 text-sm text-slate-500">Planned {totals.planned} packs · Actual {totals.actual} packs · Balance {formatQty(totals.balance)} g</div>
       {session.targetChanges.length > 0 && (
         <Card className="mb-5 p-5">
-          <div className="mb-2 text-sm font-semibold">Target changes</div>
+          <div className="mb-2 text-sm font-semibold">Amendment history</div>
           {session.targetChanges.map((row) => (
             <div key={row.id} className="text-sm text-slate-600">{product(row.productId)?.name}: {row.originalTarget} → {row.newTarget} · {row.reason} · {row.changedBy} · {formatDateTime(row.changedAt)}</div>
           ))}
