@@ -45,6 +45,7 @@ import {
   buildReceivingLines,
   parseReceivingPhoto,
 } from '@/features/receiving/receivingModel'
+import { INVENTORY_USAGE_PERMISSION_KEYS, activeStockOrder } from '@/features/inventory/toOrderModel'
 import {
   TASK_PERMISSION_KEYS,
   defaultStaffTaskCategories,
@@ -133,6 +134,7 @@ import type {
   Settings,
   StaffTask,
   StaffTaskInput,
+  StockOrder,
   StockStatus,
   StorageLocationType,
   ToastTone,
@@ -205,7 +207,7 @@ function hydrateData(data: AppData): AppData {
       const raw = data.settings?.roleMatrix?.[role.id] ?? {}
       const normalized = normalizePermissions(raw)
       const defaults = defaultPermissionsForLegacy(role.legacyRole)
-      for (const key of [...WAREHOUSE_MAP_KEYS, ...AGENT_PERMISSION_KEYS, ...TASK_PERMISSION_KEYS, ...RECEIVING_PERMISSION_KEYS, ...OPENING_BALANCE_PERMISSION_KEYS, ...SALES_RETURN_PERMISSION_KEYS, ...CUSTOMER_PRICING_PERMISSION_KEYS, ...MANUFACTURING_PLAN_PERMISSION_KEYS]) {
+      for (const key of [...WAREHOUSE_MAP_KEYS, ...AGENT_PERMISSION_KEYS, ...TASK_PERMISSION_KEYS, ...RECEIVING_PERMISSION_KEYS, ...OPENING_BALANCE_PERMISSION_KEYS, ...SALES_RETURN_PERMISSION_KEYS, ...CUSTOMER_PRICING_PERMISSION_KEYS, ...MANUFACTURING_PLAN_PERMISSION_KEYS, ...INVENTORY_USAGE_PERMISSION_KEYS]) {
         if (raw[key] === undefined) normalized[key] = defaults[key]
       }
       return [role.id, normalized]
@@ -270,6 +272,7 @@ function hydrateData(data: AppData): AppData {
     staffTasks: data.staffTasks ?? [],
     staffTaskOccurrences: missingTaskOccurrences(data.staffTasks ?? [], data.staffTaskOccurrences ?? [], PROTOTYPE_TODAY),
     receivings: data.receivings ?? [],
+    stockOrders: data.stockOrders ?? [],
     openingBalances: data.openingBalances ?? [],
     salesReturns: hydrateSalesReturns(data.salesReturns),
     returnSources: data.returnSources ?? defaultReturnSources(PROTOTYPE_TODAY.toISOString()),
@@ -3392,6 +3395,7 @@ export const db = {
       receivedBy: actor.id,
       receivedByName: actor.name,
       status: 'completed',
+      stockOrderId: input.stockOrderId || undefined,
     }
 
     let inventory = state.inventory
@@ -3414,16 +3418,58 @@ export const db = {
     const previousReceivings = state.receivings ?? []
     const previousInventory = state.inventory
     const previousMovements = state.stockMovements
+    const previousOrders = state.stockOrders ?? []
+    const previousAudits = state.documentAuditLogs ?? []
+    let stockOrders = previousOrders
+    let documentAuditLogs = previousAudits
+    const linkedOrder = input.stockOrderId
+      ? previousOrders.find((row) => row.id === input.stockOrderId && row.status === 'ordered')
+      : undefined
+    const receivedLine = linkedOrder
+      ? built.lines.find((line) => line.productId === linkedOrder.productId)
+      : undefined
+    if (linkedOrder && receivedLine && linkedOrder.warehouseId === input.warehouseId) {
+      stockOrders = previousOrders.map((row) =>
+        row.id === linkedOrder.id
+          ? {
+              ...row,
+              status: 'received' as const,
+              receivedBy: actor.name,
+              receivedAt: date,
+              receivingId: receiving.id,
+              receivingNo,
+              receivedQty: receivedLine.baseQty,
+            }
+          : row,
+      )
+      documentAuditLogs = [
+        makeDocAudit({
+          action: 'stock_order_received',
+          documentType: 'stock_order',
+          documentId: linkedOrder.id,
+          documentNo: receivingNo,
+          field: 'status',
+          oldValue: 'ordered',
+          newValue: 'received',
+        }),
+        ...documentAuditLogs,
+      ]
+    }
+
     setData({
       receivings: [receiving, ...previousReceivings],
       inventory,
       stockMovements: movements,
+      stockOrders,
+      documentAuditLogs,
     })
     if (lastPersistFailed) {
       setData({
         receivings: previousReceivings,
         inventory: previousInventory,
         stockMovements: previousMovements,
+        stockOrders: previousOrders,
+        documentAuditLogs: previousAudits,
       })
       toast('Receiving could not be saved', 'Storage is full or unavailable. Stock was not updated.', 'danger')
       return null
@@ -3625,6 +3671,155 @@ export const db = {
     setData({ inventory: applied.inventory, stockMovements: applied.movements })
     const product = productById(input.productId)
     toast('Stock adjusted', `${product?.name ?? 'Product'} updated.`)
+    return true
+  },
+
+  recordStockUsage(input: { productId: string; warehouseId: string; qty: number; notes?: string }) {
+    if (!hasPermission(state, 'inventory.usage')) {
+      toast('Permission denied', 'You cannot record stock usage.', 'danger')
+      return null
+    }
+    if (!isCompanyWarehouseId(state.warehouses, input.warehouseId)) {
+      toast('Choose a company warehouse', undefined, 'warning')
+      return null
+    }
+    const qty = Number(input.qty)
+    if (!Number.isFinite(qty) || !(qty > 0)) {
+      toast('Enter a quantity', undefined, 'warning')
+      return null
+    }
+    const product = productById(input.productId)
+    if (!product || product.status !== 'active') {
+      toast('Choose a product', undefined, 'warning')
+      return null
+    }
+    const current = getQty(input.productId, input.warehouseId)
+    if (!state.settings.allowNegativeStock && qty > current) {
+      toast('Not enough stock', `Current stock is ${current}.`, 'danger')
+      return null
+    }
+    const reference = nextDocNo(
+      state.stockMovements.filter((row) => row.reference.startsWith('USE-')).map((row) => row.reference),
+      'USE-',
+      4,
+    )
+    const applied = addMovement(state.stockMovements, state.inventory, {
+      date: nowIso(),
+      reference,
+      productId: input.productId,
+      warehouseId: input.warehouseId,
+      type: 'stock_usage',
+      stockIn: 0,
+      stockOut: qty,
+      notes: input.notes?.trim() || undefined,
+    })
+    const nextQty = applied.inventory.find((row) => row.productId === input.productId && row.warehouseId === input.warehouseId)?.qty ?? current - qty
+    setData({
+      inventory: applied.inventory,
+      stockMovements: applied.movements,
+      documentAuditLogs: pushDocAudit(
+        makeDocAudit({
+          action: 'stock_usage_recorded',
+          documentType: 'stock_usage',
+          documentId: applied.movements[0].id,
+          documentNo: reference,
+          field: 'qty',
+          oldValue: String(current),
+          newValue: String(nextQty),
+        }),
+      ),
+    })
+    toast('Stock usage recorded', `${product.name} −${formatQty(qty)} ${product.unit}`)
+    return applied.movements[0]
+  },
+
+  markStockOrdered(input: { productId: string; warehouseId: string; channel?: string; remark?: string; orderedQty?: number }) {
+    if (!hasPermission(state, 'inventory.adjust')) {
+      toast('Permission denied', 'You cannot mark items as ordered.', 'danger')
+      return null
+    }
+    if (!isCompanyWarehouseId(state.warehouses, input.warehouseId)) {
+      toast('Choose a company warehouse', undefined, 'warning')
+      return null
+    }
+    const product = productById(input.productId)
+    if (!product || product.status !== 'active') {
+      toast('Choose a product', undefined, 'warning')
+      return null
+    }
+    const existing = activeStockOrder(state, input.productId, input.warehouseId)
+    if (existing) {
+      toast('Already ordered', 'This item is already awaiting receiving.', 'info')
+      return existing
+    }
+    const actor = currentUser(state)
+    const qty = Number(input.orderedQty)
+    const order: StockOrder = {
+      id: uid('sord'),
+      productId: input.productId,
+      warehouseId: input.warehouseId,
+      status: 'ordered',
+      channel: input.channel?.trim() || undefined,
+      remark: input.remark?.trim() || undefined,
+      orderedQty: Number.isFinite(qty) && qty > 0 ? qty : undefined,
+      markedOrderedBy: actor.name,
+      markedOrderedAt: nowIso(),
+    }
+    setData({
+      stockOrders: [order, ...(state.stockOrders ?? [])],
+      documentAuditLogs: pushDocAudit(
+        makeDocAudit({
+          action: 'stock_order_marked',
+          documentType: 'stock_order',
+          documentId: order.id,
+          documentNo: product.sku || product.name,
+          field: 'status',
+          oldValue: 'low_stock',
+          newValue: 'ordered',
+        }),
+      ),
+    })
+    toast('Marked as ordered', product.name)
+    return order
+  },
+
+  cancelStockOrder(id: string, reason?: string) {
+    if (!hasPermission(state, 'inventory.adjust')) {
+      toast('Permission denied', 'You cannot cancel an ordered item.', 'danger')
+      return false
+    }
+    const current = (state.stockOrders ?? []).find((row) => row.id === id)
+    if (!current || current.status !== 'ordered') {
+      toast('Order not found', undefined, 'warning')
+      return false
+    }
+    const actor = currentUser(state)
+    const cancelReason = reason?.trim() || undefined
+    setData({
+      stockOrders: (state.stockOrders ?? []).map((row) =>
+        row.id === id
+          ? {
+              ...row,
+              status: 'cancelled' as const,
+              cancelledBy: actor.name,
+              cancelledAt: nowIso(),
+              cancelReason,
+            }
+          : row,
+      ),
+      documentAuditLogs: pushDocAudit(
+        makeDocAudit({
+          action: 'stock_order_cancelled',
+          documentType: 'stock_order',
+          documentId: current.id,
+          documentNo: productById(current.productId)?.sku || current.id,
+          field: 'status',
+          oldValue: 'ordered',
+          newValue: 'cancelled',
+        }),
+      ),
+    })
+    toast('Order cancelled', cancelReason)
     return true
   },
 

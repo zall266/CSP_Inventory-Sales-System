@@ -50,6 +50,7 @@ export function movementLabel(type: string) {
     production_balance_out: 'Production Balance Used',
     receiving: 'Receiving',
     opening_balance: 'Opening Balance',
+    stock_usage: 'Stock Usage',
   }
   return map[type] ?? type
 }
