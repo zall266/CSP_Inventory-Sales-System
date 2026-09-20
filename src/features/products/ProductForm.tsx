@@ -17,6 +17,7 @@ export type ProductFormValue = {
   sellingPrice: number | ''
   status: ProductStatus
   sellable: boolean
+  reorderLevel: number | ''
 }
 
 export function emptyProductForm(categoryId: string, material = false): ProductFormValue {
@@ -32,6 +33,7 @@ export function emptyProductForm(categoryId: string, material = false): ProductF
     sellingPrice: '',
     status: 'active',
     sellable: !material,
+    reorderLevel: 0,
   }
 }
 
@@ -48,13 +50,15 @@ export function formFromProduct(product: Product): ProductFormValue {
     sellingPrice: product.sellingPrice,
     status: product.status,
     sellable: product.sellable !== false,
+    reorderLevel: product.reorderLevel ?? 0,
   }
 }
 
-export function toProductInput(form: ProductFormValue, material: boolean, current?: Pick<Product, 'wholesalePrice'>): ProductInput {
+export function toProductInput(form: ProductFormValue, material: boolean, current?: Pick<Product, 'wholesalePrice' | 'reorderLevel'>): ProductInput {
   const conversion = Number(form.purchaseConversionQty || 1)
   const purchaseCost = form.purchaseCost === '' ? Number(form.costPrice || 0) : Number(form.purchaseCost)
   const costPrice = form.costPrice === '' ? purchaseCost : Number(form.costPrice)
+  const reorderLevel = form.reorderLevel === '' ? (current?.reorderLevel ?? 0) : Number(form.reorderLevel)
   return {
     name: form.name,
     sku: form.sku,
@@ -68,7 +72,7 @@ export function toProductInput(form: ProductFormValue, material: boolean, curren
     wholesalePrice: current?.wholesalePrice ?? 0,
     status: form.status,
     sellable: form.sellable,
-    reorderLevel: 0,
+    reorderLevel: Number.isFinite(reorderLevel) && reorderLevel >= 0 ? reorderLevel : current?.reorderLevel ?? 0,
     trackBatch: false,
     trackExpiry: false,
   }
@@ -228,6 +232,15 @@ export function ProductForm({
           />
         </Field>
       )}
+      <Field label="Min Stock" hint="Low stock when current quantity is at or below this value.">
+        <Input
+          type="number"
+          min={0}
+          step="any"
+          value={form.reorderLevel}
+          onChange={(event) => setForm({ ...form, reorderLevel: event.target.value === '' ? '' : Number(event.target.value) })}
+        />
+      </Field>
       <Field label="Sellable" hint={form.sellable ? 'Can be sold in POS, invoice and quotation.' : 'Hidden from normal sales.'}>
         <Toggle checked={form.sellable} onChange={(value) => setForm({ ...form, sellable: value })} label={form.sellable ? 'ON' : 'OFF'} />
       </Field>

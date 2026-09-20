@@ -6,6 +6,7 @@ import { SalesPage } from '@/features/sales/SalesPage'
 import { CategoriesPage, ProductsPage, RawMaterialsPage } from '@/features/products/ProductsPage'
 import { PRODUCT_PRICING_PATH, ProductPricingPage } from '@/features/products/ProductPricingPage'
 import { InventoryPage } from '@/features/inventory/InventoryPage'
+import { StockUsagePage, ToOrderPage } from '@/features/inventory/ToOrderPages'
 import { WarehouseMapPage } from '@/features/warehouse/WarehouseMapPage'
 import { StockAdjustmentPage, StockCountPage, StockMovementsPage, StockTransferPage } from '@/features/inventory/StockPages'
 import { NewPurchasePage, PurchasesPage } from '@/features/purchases/PurchasesPage'
@@ -70,6 +71,8 @@ export default function App() {
           <Route path="/purchase-returns" element={<PurchaseReturnsPage />} />
           <Route path="/suppliers" element={<SuppliersPage />} />
           <Route path="/inventory" element={<InventoryPage />} />
+          <Route path="/inventory/stock-usage" element={<StockUsagePage />} />
+          <Route path="/inventory/to-order" element={<ToOrderPage />} />
           <Route path="/inventory/warehouse-map" element={<WarehouseMapPage />} />
           <Route path="/inventory/opening-balance/:id" element={<OpeningBalancePage />} />
           <Route path="/inventory/opening-balance" element={<OpeningBalancePage />} />
