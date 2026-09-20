@@ -178,6 +178,9 @@ export function InvoiceA4({ state, sale }: { state: AppState; sale: Sale }) {
         <SignatureBox label="Prepared by" />
         <SignatureBox label="Authorized by / Signature" />
       </div>
+      <p className="a4-avoid-break mt-8 border-t border-slate-200 pt-3 text-center text-[9px] leading-relaxed tracking-wide text-slate-500">
+        This is a computer-generated document and does not require a signature.
+      </p>
     </div>
   )
 }
