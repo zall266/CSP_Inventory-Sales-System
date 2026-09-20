@@ -265,7 +265,7 @@ export function NewReceivingPage() {
           {lines.map((line, index) => {
             const product = state.products.find((item) => item.id === line.productId)
             return (
-              <div key={index} className="grid gap-2 rounded-xl border border-slate-100 p-3 lg:grid-cols-8">
+              <div key={index} className="grid items-start gap-2 rounded-xl border border-slate-100 p-3 lg:grid-cols-8">
                 <Field label="Raw material" className="lg:col-span-2">
                   <Select
                     value={line.productId}
@@ -312,8 +312,8 @@ export function NewReceivingPage() {
                     }
                   />
                 </Field>
-                <div className="flex items-end justify-between gap-2 lg:col-span-2">
-                  <Field label="Line note">
+                <div className="flex min-w-0 items-end gap-2 lg:col-span-2">
+                  <Field label="Line note" className="min-w-0 flex-1">
                     <Input
                       value={line.notes}
                       onChange={(event) =>
@@ -321,8 +321,13 @@ export function NewReceivingPage() {
                       }
                     />
                   </Field>
-                  <button type="button" onClick={() => setLines(lines.filter((_, i) => i !== index))}>
-                    <Trash2 size={14} className="text-slate-400" />
+                  <button
+                    type="button"
+                    aria-label="Remove line"
+                    className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-lg text-slate-400 hover:bg-slate-50 hover:text-slate-600"
+                    onClick={() => setLines(lines.filter((_, i) => i !== index))}
+                  >
+                    <Trash2 size={14} />
                   </button>
                 </div>
               </div>
