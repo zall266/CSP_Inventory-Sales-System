@@ -174,10 +174,6 @@ export function InvoiceA4({ state, sale }: { state: AppState; sale: Sale }) {
         <div className="font-bold uppercase tracking-wide text-slate-500">Terms & conditions</div>
         <div className="whitespace-pre-wrap">{company.documentTerms.replace('This quotation is not an invoice and does not request payment.', 'Please settle outstanding amounts by the due date.')}</div>
       </div>
-      <div className="a4-avoid-break mt-10 flex gap-8">
-        <SignatureBox label="Prepared by" />
-        <SignatureBox label="Authorized by / Signature" />
-      </div>
       <p className="a4-avoid-break mt-8 border-t border-slate-200 pt-3 text-center text-[9px] leading-relaxed tracking-wide text-slate-500">
         This is a computer-generated document and does not require a signature.
       </p>
