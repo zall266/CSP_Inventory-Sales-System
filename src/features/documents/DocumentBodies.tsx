@@ -221,7 +221,7 @@ export function DeliveryA4({ state, order }: { state: AppState; order: DeliveryO
             <th>No</th>
             <th>Product</th>
             <th>Description</th>
-            <th className="text-right">Quantity</th>
+            <th style={{ textAlign: 'right' }}>Quantity</th>
             <th>Unit</th>
           </tr>
         </thead>
