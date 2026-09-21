@@ -5,7 +5,7 @@ import { movementLabel } from '@/components/ProductMark'
 import { useApi, useLookups, useStore } from '@/store/hooks'
 import { formatDate, formatDateTime, formatQty } from '@/utils/format'
 import { formatUnit } from '@/features/products/masterData'
-import { sessionTotals } from './sessionPlan'
+import { originSessionForLine, sessionTotals } from './sessionPlan'
 import { allocationLabel, expectedRemainingQty, usesPurchaseUnitSplit } from './materialClosing'
 import { hasPermission } from '@/features/settings/permissions'
 
@@ -133,6 +133,16 @@ export function ProductionSessionDetailPage() {
         <Info label="Accepted by" value={`${session.acceptedBy || '—'} ${session.acceptedAt ? formatDateTime(session.acceptedAt) : ''}`} />
         <Info label="Started by" value={`${session.startedBy || '—'} ${session.startedAt ? formatDateTime(session.startedAt) : ''}`} />
         <Info label="Completed by" value={`${session.completedBy || '—'} ${session.completedAt ? formatDateTime(session.completedAt) : ''}`} />
+        {session.status === 'cancelled' && (
+          <Info label="Cancelled by" value={`${session.cancelledBy || '—'} ${session.cancelledAt ? formatDateTime(session.cancelledAt) : ''}`} />
+        )}
+        {(session.resultSavedBy || session.distributionSavedBy || session.materialClosing?.checkedBy) && (
+          <>
+            <Info label="Production Result" value={session.resultSavedBy ? `${session.resultSavedBy} ${session.resultSavedAt ? formatDateTime(session.resultSavedAt) : ''}` : '—'} />
+            <Info label="Finished Goods Distribution" value={session.distributionSavedBy ? `${session.distributionSavedBy} ${session.distributionSavedAt ? formatDateTime(session.distributionSavedAt) : ''}` : '—'} />
+            <Info label="Material Closing" value={session.materialClosing?.checkedBy ? `${session.materialClosing.checkedBy} ${session.materialClosing.checkedAt ? formatDateTime(session.materialClosing.checkedAt) : ''}` : '—'} />
+          </>
+        )}
       </div>
       {session.recipePhoto && (
         <Card className="mb-5 p-5">
@@ -157,18 +167,34 @@ export function ProductionSessionDetailPage() {
               </tr>
             </thead>
             <tbody>
-              {session.items.map((item) => (
+              {session.items.map((item) => {
+                const origin = originSessionForLine(state.productionSessions, item)
+                const originLine = origin?.items.find((row) => row.id === item.carriedFromItemId)
+                return (
                 <tr key={item.id} className="cursor-default">
-                  <td className="font-medium">{product(item.productId)?.name}</td>
+                  <td className="font-medium">
+                    {product(item.productId)?.name}
+                    {origin && (
+                      <div className="text-xs font-normal text-indigo-700">
+                        Continued from {formatDate(`${origin.productionDate}T00:00:00+08:00`)}
+                        {originLine ? ` · original ${originLine.originalTargetQty}` : ''}
+                      </div>
+                    )}
+                  </td>
                   <td className="tabular">{item.originalTargetQty}</td>
                   <td className="tabular">{item.targetQty}</td>
                   <td className="tabular">{item.actualQty || '—'}</td>
-                  <td>{item.shortProductionQty ? `${item.shortProductionQty} · ${item.shortProductionReason}` : '—'}</td>
+                  <td>
+                    {item.carryForward && session.posted
+                      ? `Carry Forward · ${Math.max(0, item.targetQty - (item.actualQty || 0))} remaining`
+                      : item.shortProductionQty ? `${item.shortProductionQty} · ${item.shortProductionReason}` : '—'}
+                  </td>
                   <td className="tabular">{item.productionBalanceQty ? `${formatQty(item.productionBalanceQty)} g` : '—'}</td>
                   <td>{item.balanceContainer || '—'}</td>
                   <td className="tabular">{item.wasteQty ? `${formatQty(item.wasteQty)} g` : '—'}</td>
                 </tr>
-              ))}
+                )
+              })}
             </tbody>
           </table>
         </div>
@@ -176,7 +202,7 @@ export function ProductionSessionDetailPage() {
       <div className="mb-5 text-sm text-slate-500">Planned {totals.planned} packs · Actual {totals.actual} packs · Balance {formatQty(totals.balance)} g</div>
       {session.targetChanges.length > 0 && (
         <Card className="mb-5 p-5">
-          <div className="mb-2 text-sm font-semibold">Target changes</div>
+          <div className="mb-2 text-sm font-semibold">Amendment history</div>
           {session.targetChanges.map((row) => (
             <div key={row.id} className="text-sm text-slate-600">{product(row.productId)?.name}: {row.originalTarget} → {row.newTarget} · {row.reason} · {row.changedBy} · {formatDateTime(row.changedAt)}</div>
           ))}

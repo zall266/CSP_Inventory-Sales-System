@@ -22,11 +22,12 @@ export type MovementType =
   | 'production_balance_out'
   | 'receiving'
   | 'opening_balance'
+  | 'stock_usage'
   | 'sales_return_good'
   | 'sales_return_repack'
   | 'sales_return_waste'
 export type ProductionStatus = 'draft' | 'planned' | 'in_progress' | 'paused' | 'completed' | 'cancelled'
-export type ProductionSessionStatus = 'planned' | 'accepted' | 'in_progress' | 'completed'
+export type ProductionSessionStatus = 'planned' | 'accepted' | 'in_progress' | 'completed' | 'cancelled'
 export type ShortProductionReason =
   | 'Material Shortage'
   | 'Production Loss'
@@ -520,11 +521,15 @@ export type DocumentAuditAction =
   | 'customer_wholesale_price_created'
   | 'customer_wholesale_price_updated'
   | 'customer_wholesale_price_deactivated'
+  | 'stock_usage_recorded'
+  | 'stock_order_marked'
+  | 'stock_order_cancelled'
+  | 'stock_order_received'
 
 export type DocumentAuditLog = {
   id: string
   action: DocumentAuditAction
-  documentType: 'quotation' | 'invoice' | 'delivery' | 'agent_sale' | 'agent_withdrawal' | 'staff_task' | 'staff_task_category' | 'opening_balance' | 'sales_return' | 'customer_wholesale_price'
+  documentType: 'quotation' | 'invoice' | 'delivery' | 'agent_sale' | 'agent_withdrawal' | 'staff_task' | 'staff_task_category' | 'opening_balance' | 'sales_return' | 'customer_wholesale_price' | 'stock_order' | 'stock_usage'
   documentId: string
   documentNo: string
   field: string
@@ -556,6 +561,28 @@ export type Purchase = {
 
 export type ReceivingSource = 'supplier' | 'shopee' | 'direct' | 'other'
 export type ReceivingStatus = 'completed'
+export type StockOrderStatus = 'ordered' | 'received' | 'cancelled'
+export type StockOrderChannel = 'Shopee' | 'TikTok Shop' | 'Supplier' | 'Other'
+
+export type StockOrder = {
+  id: string
+  productId: string
+  warehouseId: string
+  status: StockOrderStatus
+  channel?: StockOrderChannel | string
+  remark?: string
+  orderedQty?: number
+  markedOrderedBy: string
+  markedOrderedAt: string
+  cancelledBy?: string
+  cancelledAt?: string
+  cancelReason?: string
+  receivedBy?: string
+  receivedAt?: string
+  receivingId?: string
+  receivingNo?: string
+  receivedQty?: number
+}
 
 export type ReceivingLine = {
   productId: string
@@ -584,6 +611,7 @@ export type Receiving = {
   receivedBy: string
   receivedByName: string
   status: ReceivingStatus
+  stockOrderId?: string
 }
 
 export type OpeningBalanceType = 'stock_item' | 'finished_goods' | 'production_balance'
@@ -923,6 +951,12 @@ export type ProductionSessionItem = {
   notes: string
   displayQty: number
   cartonQty: number
+  /** Intent on in_progress; committed queue only when session.posted. */
+  carryForward?: boolean
+  carriedFromSessionId?: string
+  carriedFromItemId?: string
+  carriedForwardAt?: string
+  carriedForwardBy?: string
 }
 
 export type MaterialClosingLine = {
@@ -1006,6 +1040,12 @@ export type ProductionSession = {
   startedAt: string
   completedBy: string
   completedAt: string
+  cancelledBy?: string
+  cancelledAt?: string
+  resultSavedBy?: string
+  resultSavedAt?: string
+  distributionSavedBy?: string
+  distributionSavedAt?: string
   recipePhoto: string
   recipePhotoName: string
   uploadedBy: string
@@ -1130,6 +1170,7 @@ export type PermissionKey =
   | 'inventory.adjust'
   | 'inventory.transfer'
   | 'inventory.count'
+  | 'inventory.usage'
   | 'warehouse_map.view'
   | 'warehouse_map.putaway'
   | 'warehouse_map.move'
@@ -1143,6 +1184,8 @@ export type PermissionKey =
   | 'manufacturing.complete'
   | 'manufacturing.completed.edit'
   | 'manufacturing.history.view'
+  | 'manufacturing.plan.edit'
+  | 'manufacturing.plan.amend'
   | 'reports.view'
   | 'reports.export'
   | 'finance.view'
@@ -1280,6 +1323,7 @@ export type AppData = {
   documentAuditLogs: DocumentAuditLog[]
   purchases: Purchase[]
   receivings: Receiving[]
+  stockOrders: StockOrder[]
   salesReturns: SalesReturn[]
   returnSources: ReturnSource[]
   returnReasons: ReturnReason[]
@@ -1446,6 +1490,7 @@ export type ReceivingInput = {
   photoName?: string
   notes?: string
   date?: string
+  stockOrderId?: string
 }
 
 export type OpeningBalanceInput = {

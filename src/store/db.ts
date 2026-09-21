@@ -45,6 +45,7 @@ import {
   buildReceivingLines,
   parseReceivingPhoto,
 } from '@/features/receiving/receivingModel'
+import { INVENTORY_USAGE_PERMISSION_KEYS, activeStockOrder } from '@/features/inventory/toOrderModel'
 import {
   TASK_PERMISSION_KEYS,
   defaultStaffTaskCategories,
@@ -56,7 +57,7 @@ import {
 import { clearAttachmentBlobs, deleteAttachmentBlob } from '@/store/attachmentBlobs'
 import { applyBomCosts, hydrateProducts, normalizeUnit, parseNonNegativeMoney, productHasBom, productIsSellable, productIsUsed, purchaseQtyToBaseQty, qtyToBaseUnit, resolveProductSku, skuIsUnique, validatePurchaseConversion } from '@/features/products/masterData'
 import { bomLinesForQty, consumptionCost, hasShortage, materialAvailability } from '@/features/manufacturing/helpers'
-import { buildSessionPlan, canEditSession, currentUser, isRawStorePickingLine, isSessionOperationalToday, mergePicking } from '@/features/manufacturing/sessionPlan'
+import { buildSessionPlan, canAmendPlanStatus, canEditSession, canRunProduction, currentUser, isCarryForwardResumed, isRawStorePickingLine, isSessionOperationalToday, mergePicking, remainingTargetQty, systemProductionDate, todaySessions } from '@/features/manufacturing/sessionPlan'
 import { buildSessionMaterialClosing, closingLineFromInput, isSignificantVariance } from '@/features/manufacturing/materialClosing'
 import {
   defaultPermissionsForLegacy,
@@ -65,6 +66,7 @@ import {
   hasPermission,
   isOwnerRole,
   isOwnerUser,
+  MANUFACTURING_PLAN_PERMISSION_KEYS,
   normalizePermissions,
   roleById,
   roleName,
@@ -132,6 +134,7 @@ import type {
   Settings,
   StaffTask,
   StaffTaskInput,
+  StockOrder,
   StockStatus,
   StorageLocationType,
   ToastTone,
@@ -204,7 +207,7 @@ function hydrateData(data: AppData): AppData {
       const raw = data.settings?.roleMatrix?.[role.id] ?? {}
       const normalized = normalizePermissions(raw)
       const defaults = defaultPermissionsForLegacy(role.legacyRole)
-      for (const key of [...WAREHOUSE_MAP_KEYS, ...AGENT_PERMISSION_KEYS, ...TASK_PERMISSION_KEYS, ...RECEIVING_PERMISSION_KEYS, ...OPENING_BALANCE_PERMISSION_KEYS, ...SALES_RETURN_PERMISSION_KEYS, ...CUSTOMER_PRICING_PERMISSION_KEYS]) {
+      for (const key of [...WAREHOUSE_MAP_KEYS, ...AGENT_PERMISSION_KEYS, ...TASK_PERMISSION_KEYS, ...RECEIVING_PERMISSION_KEYS, ...OPENING_BALANCE_PERMISSION_KEYS, ...SALES_RETURN_PERMISSION_KEYS, ...CUSTOMER_PRICING_PERMISSION_KEYS, ...MANUFACTURING_PLAN_PERMISSION_KEYS, ...INVENTORY_USAGE_PERMISSION_KEYS]) {
         if (raw[key] === undefined) normalized[key] = defaults[key]
       }
       return [role.id, normalized]
@@ -269,6 +272,7 @@ function hydrateData(data: AppData): AppData {
     staffTasks: data.staffTasks ?? [],
     staffTaskOccurrences: missingTaskOccurrences(data.staffTasks ?? [], data.staffTaskOccurrences ?? [], PROTOTYPE_TODAY),
     receivings: data.receivings ?? [],
+    stockOrders: data.stockOrders ?? [],
     openingBalances: data.openingBalances ?? [],
     salesReturns: hydrateSalesReturns(data.salesReturns),
     returnSources: data.returnSources ?? defaultReturnSources(PROTOTYPE_TODAY.toISOString()),
@@ -279,7 +283,9 @@ function hydrateData(data: AppData): AppData {
         ...item,
         displayQty: item.displayQty ?? 0,
         cartonQty: item.cartonQty ?? 0,
+        carryForward: item.carryForward ?? false,
       })),
+      targetChanges: session.targetChanges ?? [],
     })),
     settings: {
       ...data.settings,
@@ -3390,6 +3396,7 @@ export const db = {
       receivedBy: actor.id,
       receivedByName: actor.name,
       status: 'completed',
+      stockOrderId: input.stockOrderId || undefined,
     }
 
     let inventory = state.inventory
@@ -3412,16 +3419,58 @@ export const db = {
     const previousReceivings = state.receivings ?? []
     const previousInventory = state.inventory
     const previousMovements = state.stockMovements
+    const previousOrders = state.stockOrders ?? []
+    const previousAudits = state.documentAuditLogs ?? []
+    let stockOrders = previousOrders
+    let documentAuditLogs = previousAudits
+    const linkedOrder = input.stockOrderId
+      ? previousOrders.find((row) => row.id === input.stockOrderId && row.status === 'ordered')
+      : undefined
+    const receivedLine = linkedOrder
+      ? built.lines.find((line) => line.productId === linkedOrder.productId)
+      : undefined
+    if (linkedOrder && receivedLine && linkedOrder.warehouseId === input.warehouseId) {
+      stockOrders = previousOrders.map((row) =>
+        row.id === linkedOrder.id
+          ? {
+              ...row,
+              status: 'received' as const,
+              receivedBy: actor.name,
+              receivedAt: date,
+              receivingId: receiving.id,
+              receivingNo,
+              receivedQty: receivedLine.baseQty,
+            }
+          : row,
+      )
+      documentAuditLogs = [
+        makeDocAudit({
+          action: 'stock_order_received',
+          documentType: 'stock_order',
+          documentId: linkedOrder.id,
+          documentNo: receivingNo,
+          field: 'status',
+          oldValue: 'ordered',
+          newValue: 'received',
+        }),
+        ...documentAuditLogs,
+      ]
+    }
+
     setData({
       receivings: [receiving, ...previousReceivings],
       inventory,
       stockMovements: movements,
+      stockOrders,
+      documentAuditLogs,
     })
     if (lastPersistFailed) {
       setData({
         receivings: previousReceivings,
         inventory: previousInventory,
         stockMovements: previousMovements,
+        stockOrders: previousOrders,
+        documentAuditLogs: previousAudits,
       })
       toast('Receiving could not be saved', 'Storage is full or unavailable. Stock was not updated.', 'danger')
       return null
@@ -3623,6 +3672,155 @@ export const db = {
     setData({ inventory: applied.inventory, stockMovements: applied.movements })
     const product = productById(input.productId)
     toast('Stock adjusted', `${product?.name ?? 'Product'} updated.`)
+    return true
+  },
+
+  recordStockUsage(input: { productId: string; warehouseId: string; qty: number; notes?: string }) {
+    if (!hasPermission(state, 'inventory.usage')) {
+      toast('Permission denied', 'You cannot record stock usage.', 'danger')
+      return null
+    }
+    if (!isCompanyWarehouseId(state.warehouses, input.warehouseId)) {
+      toast('Choose a company warehouse', undefined, 'warning')
+      return null
+    }
+    const qty = Number(input.qty)
+    if (!Number.isFinite(qty) || !(qty > 0)) {
+      toast('Enter a quantity', undefined, 'warning')
+      return null
+    }
+    const product = productById(input.productId)
+    if (!product || product.status !== 'active') {
+      toast('Choose a product', undefined, 'warning')
+      return null
+    }
+    const current = getQty(input.productId, input.warehouseId)
+    if (!state.settings.allowNegativeStock && qty > current) {
+      toast('Not enough stock', `Current stock is ${current}.`, 'danger')
+      return null
+    }
+    const reference = nextDocNo(
+      state.stockMovements.filter((row) => row.reference.startsWith('USE-')).map((row) => row.reference),
+      'USE-',
+      4,
+    )
+    const applied = addMovement(state.stockMovements, state.inventory, {
+      date: nowIso(),
+      reference,
+      productId: input.productId,
+      warehouseId: input.warehouseId,
+      type: 'stock_usage',
+      stockIn: 0,
+      stockOut: qty,
+      notes: input.notes?.trim() || undefined,
+    })
+    const nextQty = applied.inventory.find((row) => row.productId === input.productId && row.warehouseId === input.warehouseId)?.qty ?? current - qty
+    setData({
+      inventory: applied.inventory,
+      stockMovements: applied.movements,
+      documentAuditLogs: pushDocAudit(
+        makeDocAudit({
+          action: 'stock_usage_recorded',
+          documentType: 'stock_usage',
+          documentId: applied.movements[0].id,
+          documentNo: reference,
+          field: 'qty',
+          oldValue: String(current),
+          newValue: String(nextQty),
+        }),
+      ),
+    })
+    toast('Stock usage recorded', `${product.name} −${formatQty(qty)} ${product.unit}`)
+    return applied.movements[0]
+  },
+
+  markStockOrdered(input: { productId: string; warehouseId: string; channel?: string; remark?: string; orderedQty?: number }) {
+    if (!hasPermission(state, 'inventory.adjust')) {
+      toast('Permission denied', 'You cannot mark items as ordered.', 'danger')
+      return null
+    }
+    if (!isCompanyWarehouseId(state.warehouses, input.warehouseId)) {
+      toast('Choose a company warehouse', undefined, 'warning')
+      return null
+    }
+    const product = productById(input.productId)
+    if (!product || product.status !== 'active') {
+      toast('Choose a product', undefined, 'warning')
+      return null
+    }
+    const existing = activeStockOrder(state, input.productId, input.warehouseId)
+    if (existing) {
+      toast('Already ordered', 'This item is already awaiting receiving.', 'info')
+      return existing
+    }
+    const actor = currentUser(state)
+    const qty = Number(input.orderedQty)
+    const order: StockOrder = {
+      id: uid('sord'),
+      productId: input.productId,
+      warehouseId: input.warehouseId,
+      status: 'ordered',
+      channel: input.channel?.trim() || undefined,
+      remark: input.remark?.trim() || undefined,
+      orderedQty: Number.isFinite(qty) && qty > 0 ? qty : undefined,
+      markedOrderedBy: actor.name,
+      markedOrderedAt: nowIso(),
+    }
+    setData({
+      stockOrders: [order, ...(state.stockOrders ?? [])],
+      documentAuditLogs: pushDocAudit(
+        makeDocAudit({
+          action: 'stock_order_marked',
+          documentType: 'stock_order',
+          documentId: order.id,
+          documentNo: product.sku || product.name,
+          field: 'status',
+          oldValue: 'low_stock',
+          newValue: 'ordered',
+        }),
+      ),
+    })
+    toast('Marked as ordered', product.name)
+    return order
+  },
+
+  cancelStockOrder(id: string, reason?: string) {
+    if (!hasPermission(state, 'inventory.adjust')) {
+      toast('Permission denied', 'You cannot cancel an ordered item.', 'danger')
+      return false
+    }
+    const current = (state.stockOrders ?? []).find((row) => row.id === id)
+    if (!current || current.status !== 'ordered') {
+      toast('Order not found', undefined, 'warning')
+      return false
+    }
+    const actor = currentUser(state)
+    const cancelReason = reason?.trim() || undefined
+    setData({
+      stockOrders: (state.stockOrders ?? []).map((row) =>
+        row.id === id
+          ? {
+              ...row,
+              status: 'cancelled' as const,
+              cancelledBy: actor.name,
+              cancelledAt: nowIso(),
+              cancelReason,
+            }
+          : row,
+      ),
+      documentAuditLogs: pushDocAudit(
+        makeDocAudit({
+          action: 'stock_order_cancelled',
+          documentType: 'stock_order',
+          documentId: current.id,
+          documentNo: productById(current.productId)?.sku || current.id,
+          field: 'status',
+          oldValue: 'ordered',
+          newValue: 'cancelled',
+        }),
+      ),
+    })
+    toast('Order cancelled', cancelReason)
     return true
   },
 
@@ -4758,7 +4956,7 @@ export const db = {
   acceptSession(id: string) {
     const session = state.productionSessions.find((item) => item.id === id)
     const user = currentUser(state)
-    if (!session || session.status !== 'planned') {
+    if (!session || session.status === 'cancelled' || session.status !== 'planned') {
       toast('Only a planned session can be accepted', undefined, 'warning')
       return
     }
@@ -4781,7 +4979,7 @@ export const db = {
   startSession(id: string, input: { recipePhoto: string; recipePhotoName: string }) {
     const session = state.productionSessions.find((item) => item.id === id)
     const user = currentUser(state)
-    if (!session || (session.status !== 'accepted' && session.status !== 'planned')) {
+    if (!session || session.status === 'cancelled' || (session.status !== 'accepted' && session.status !== 'planned')) {
       toast('Accept production before starting', undefined, 'warning')
       return false
     }
@@ -4825,48 +5023,163 @@ export const db = {
     return true
   },
 
-  changeSessionTarget(id: string, productId: string, newTarget: number, reason: string) {
+  updatePlannedSession(id: string, input: { productionDate: string; notes?: string; items: Array<{ productId: string; targetQty: number }> }) {
+    const session = state.productionSessions.find((item) => item.id === id)
+    if (!session) return false
+    if (!hasPermission(state, 'manufacturing.plan.edit')) {
+      toast('Permission denied', 'You cannot edit a production plan.', 'danger')
+      return false
+    }
+    if (session.status !== 'planned') {
+      toast('Normal edit is not allowed after the plan is accepted', 'Use Amend Plan for accepted or in-progress sessions.', 'warning')
+      return false
+    }
+    if (!input.items.length) {
+      toast('Add products to the daily plan', undefined, 'warning')
+      return false
+    }
+    if (input.items.some((row) => !Number.isFinite(row.targetQty) || row.targetQty <= 0)) {
+      toast('Target must be greater than zero', undefined, 'warning')
+      return false
+    }
+    const nextItems = input.items.map((row) => {
+      const existing = session.items.find((item) => item.productId === row.productId)
+      const bom = state.boms.find((item) => item.productId === row.productId && item.status === 'active')
+      if (existing) {
+        return {
+          ...existing,
+          bomId: bom?.id ?? existing.bomId,
+          originalTargetQty: row.targetQty,
+          targetQty: row.targetQty,
+        }
+      }
+      return {
+        id: uid('psi'),
+        sessionId: id,
+        productId: row.productId,
+        bomId: bom?.id ?? '',
+        originalTargetQty: row.targetQty,
+        targetQty: row.targetQty,
+        actualQty: 0,
+        shortProductionQty: 0,
+        shortProductionReason: '',
+        productionBalanceQty: 0,
+        balanceLocation: 'Main Warehouse',
+        balanceContainer: '',
+        wasteQty: 0,
+        wasteReason: '',
+        notes: '',
+        displayQty: 0,
+        cartonQty: 0,
+      }
+    })
+    setData({
+      productionSessions: state.productionSessions.map((item) =>
+        item.id === id
+          ? {
+              ...item,
+              productionDate: input.productionDate,
+              notes: input.notes ?? item.notes,
+              items: nextItems,
+            }
+          : item,
+      ),
+    })
+    toast('Production plan updated', session.reference)
+    return true
+  },
+
+  cancelPlannedSession(id: string) {
     const session = state.productionSessions.find((item) => item.id === id)
     const user = currentUser(state)
-    if (!session) return
+    if (!session) return false
+    if (!hasPermission(state, 'manufacturing.plan.edit')) {
+      toast('Permission denied', 'You cannot cancel a production plan.', 'danger')
+      return false
+    }
+    if (session.status !== 'planned') {
+      toast('Only planned sessions can be cancelled', 'Accepted or started sessions cannot be deleted.', 'warning')
+      return false
+    }
+    setData({
+      productionSessions: state.productionSessions.map((item) =>
+        item.id === id
+          ? {
+              ...item,
+              status: 'cancelled' as const,
+              cancelledBy: user.name,
+              cancelledAt: nowIso(),
+            }
+          : item,
+      ),
+    })
+    toast('Production plan cancelled', session.reference, 'warning')
+    return true
+  },
+
+  amendSessionPlan(id: string, items: Array<{ productId: string; targetQty: number }>, reason: string) {
+    const session = state.productionSessions.find((item) => item.id === id)
+    const user = currentUser(state)
+    if (!session) return false
+    if (!hasPermission(state, 'manufacturing.plan.amend')) {
+      toast('Permission denied', 'You cannot amend a production plan.', 'danger')
+      return false
+    }
+    if (session.status === 'planned') {
+      toast('Use Edit for planned sessions', 'Amend Plan is only for accepted or in-progress sessions.', 'warning')
+      return false
+    }
+    if (!canAmendPlanStatus(session.status)) {
+      toast('This plan cannot be amended', 'Completed and cancelled sessions are view only.', 'warning')
+      return false
+    }
     if (!isSessionOperationalToday(session)) {
       toast("Not today's production", 'Target changes are only for today\'s operational session.', 'warning')
-      return
-    }
-    if (session.status === 'completed') {
-      toast('Completed sessions cannot change target here', 'Admin can edit completed records separately.', 'warning')
-      return
-    }
-    if (!canEditSession(user.role, session.status)) {
-      toast('Permission denied', undefined, 'danger')
-      return
+      return false
     }
     if (!reason.trim()) {
-      toast('Enter a reason', 'Target changes must be explained.', 'warning')
-      return
+      toast('Enter a reason', 'Every amendment must be explained.', 'warning')
+      return false
     }
-    if (newTarget <= 0) {
-      toast('Target must be greater than zero', undefined, 'warning')
-      return
+    const changes: Array<{ productId: string; originalTarget: number; newTarget: number }> = []
+    for (const item of session.items) {
+      const next = items.find((row) => row.productId === item.productId)
+      if (!next) continue
+      const newTarget = Number(next.targetQty)
+      if (!Number.isFinite(newTarget) || newTarget <= 0) {
+        toast('Target must be greater than zero', undefined, 'warning')
+        return false
+      }
+      if (newTarget < (item.actualQty || 0)) {
+        toast('New target cannot be lower than actual production completed.', undefined, 'warning')
+        return false
+      }
+      if (newTarget !== item.targetQty) {
+        changes.push({ productId: item.productId, originalTarget: item.targetQty, newTarget })
+      }
     }
-    const line = session.items.find((item) => item.productId === productId)
-    if (!line || line.targetQty === newTarget) return
-    const updatedItems = session.items.map((item) =>
-      item.productId === productId ? { ...item, targetQty: newTarget } : item,
-    )
+    if (!changes.length) {
+      toast('No target changes', 'New targets match the current plan.', 'info')
+      return false
+    }
+    const updatedItems = session.items.map((item) => {
+      const change = changes.find((row) => row.productId === item.productId)
+      return change ? { ...item, targetQty: change.newTarget } : item
+    })
     const nextSession = { ...session, items: updatedItems }
     const plan = buildSessionPlan(state, nextSession)
     const merged = mergePicking(session.picking, plan.picking)
-    const log = {
+    const changedAt = nowIso()
+    const logs = changes.map((change) => ({
       id: uid('tcl'),
       sessionId: id,
-      productId,
-      originalTarget: line.targetQty,
-      newTarget,
+      productId: change.productId,
+      originalTarget: change.originalTarget,
+      newTarget: change.newTarget,
       reason: reason.trim(),
       changedBy: user.name,
-      changedAt: nowIso(),
-    }
+      changedAt,
+    }))
     setData({
       productionSessions: state.productionSessions.map((item) =>
         item.id === id
@@ -4874,7 +5187,7 @@ export const db = {
               ...item,
               items: updatedItems,
               picking: merged.picking,
-              targetChanges: [...item.targetChanges, log],
+              targetChanges: [...(item.targetChanges ?? []), ...logs],
               materialAllocations: item.materialAllocations,
               materialAudits: item.materialAudits,
               excessReturns: [
@@ -4885,14 +5198,22 @@ export const db = {
                   qty: row.qty,
                   unit: row.unit,
                   status: 'to_return' as const,
-                  notes: `Target change ${line.targetQty} → ${newTarget}`,
+                  notes: `Amendment ${row.productId}`,
                 })),
               ],
             }
           : item,
       ),
     })
-    toast('Target updated', `${productById(productId)?.name}: ${line.targetQty} → ${newTarget}`)
+    const summary = changes
+      .map((change) => `${productById(change.productId)?.name ?? change.productId}: ${change.originalTarget} → ${change.newTarget}`)
+      .join(', ')
+    toast('Production plan amended', summary)
+    return true
+  },
+
+  changeSessionTarget(id: string, productId: string, newTarget: number, reason: string) {
+    return this.amendSessionPlan(id, [{ productId, targetQty: newTarget }], reason)
   },
 
   togglePickingLine(id: string, lineId: string, picked?: boolean) {
@@ -5063,6 +5384,220 @@ export const db = {
     return true
   },
 
+  saveProductionResult(
+    id: string,
+    results: Array<{
+      productId: string
+      actualQty: number
+      productionBalanceQty: number
+      balanceLocation: string
+      balanceContainer: string
+      wasteQty: number
+      shortProductionReason: string
+      notes: string
+      carryForward?: boolean
+    }>,
+  ) {
+    const session = state.productionSessions.find((item) => item.id === id)
+    const user = currentUser(state)
+    if (!session || session.status !== 'in_progress') {
+      toast('Start production first', undefined, 'warning')
+      return false
+    }
+    if (!isSessionOperationalToday(session)) {
+      toast("Not today's production", 'Complete Production only runs for the current system date.', 'warning')
+      return false
+    }
+    if (!canEditSession(user.role, session.status)) {
+      toast('Permission denied', undefined, 'danger')
+      return false
+    }
+    if (session.posted) {
+      toast('Already posted', undefined, 'info')
+      return false
+    }
+    for (const item of session.items) {
+      const result = results.find((row) => row.productId === item.productId)
+      if (!result || result.actualQty < 0) {
+        toast('Enter actual quantity for every product', undefined, 'warning')
+        return false
+      }
+      if (result.productionBalanceQty > 0 && (!result.balanceLocation || !result.balanceContainer)) {
+        toast('Storage and box required', 'Production balance must have a location and container.', 'warning')
+        return false
+      }
+      if (result.productionBalanceQty > 0 && !isActiveBalanceStorageBox(state, session.warehouseId, result.balanceContainer)) {
+        toast('Select a valid Storage Box', 'Production balance must use an active Warehouse Map storage box.', 'warning')
+        return false
+      }
+      if (result.actualQty < item.targetQty && !result.carryForward && !result.shortProductionReason) {
+        toast('Select a reason', `${productById(item.productId)?.name} is below target. Choose Carry Forward or Short Production.`, 'warning')
+        return false
+      }
+    }
+    const savedAt = nowIso()
+    setData({
+      productionSessions: state.productionSessions.map((item) =>
+        item.id === id
+          ? {
+              ...item,
+              resultSavedBy: user.name,
+              resultSavedAt: savedAt,
+              items: item.items.map((row) => {
+                const result = results.find((entry) => entry.productId === row.productId)!
+                const carryForward = Boolean(result.carryForward) && result.actualQty < row.targetQty
+                return {
+                  ...row,
+                  actualQty: result.actualQty,
+                  productionBalanceQty: result.productionBalanceQty,
+                  balanceLocation: result.balanceLocation,
+                  balanceContainer: result.balanceContainer,
+                  wasteQty: result.wasteQty,
+                  shortProductionQty: carryForward ? 0 : Math.max(0, row.targetQty - result.actualQty),
+                  shortProductionReason: carryForward ? '' : result.shortProductionReason,
+                  notes: result.notes,
+                  carryForward,
+                  carriedForwardAt: undefined,
+                  carriedForwardBy: undefined,
+                }
+              }),
+            }
+          : item,
+      ),
+    })
+    toast('Production result saved', session.reference)
+    return true
+  },
+
+  saveFinishedGoodsDistribution(
+    id: string,
+    results: Array<{ productId: string; displayQty: number; cartonQty: number }>,
+  ) {
+    const session = state.productionSessions.find((item) => item.id === id)
+    const user = currentUser(state)
+    if (!session || session.status !== 'in_progress') {
+      toast('Start production first', undefined, 'warning')
+      return false
+    }
+    if (!isSessionOperationalToday(session)) {
+      toast("Not today's production", 'Complete Production only runs for the current system date.', 'warning')
+      return false
+    }
+    if (!canEditSession(user.role, session.status)) {
+      toast('Permission denied', undefined, 'danger')
+      return false
+    }
+    if (session.posted) {
+      toast('Already posted', undefined, 'info')
+      return false
+    }
+    if (!session.resultSavedAt) {
+      toast('Save Production Result first', 'Step 2 is available after Step 1 is saved.', 'warning')
+      return false
+    }
+    for (const item of session.items) {
+      const result = results.find((row) => row.productId === item.productId)
+      const displayQty = round2(result?.displayQty || 0)
+      const cartonQty = round2(result?.cartonQty || 0)
+      if (displayQty < 0 || cartonQty < 0) {
+        toast('Distribution cannot be negative', undefined, 'warning')
+        return false
+      }
+      if (round2(displayQty + cartonQty) !== round2(item.actualQty)) {
+        toast(
+          'Distribution must equal actual',
+          `${productById(item.productId)?.name}: Display ${formatQty(displayQty)} + Carton ${formatQty(cartonQty)} must equal ${formatQty(item.actualQty)} PACK.`,
+          'warning',
+        )
+        return false
+      }
+    }
+    const savedAt = nowIso()
+    setData({
+      productionSessions: state.productionSessions.map((item) =>
+        item.id === id
+          ? {
+              ...item,
+              distributionSavedBy: user.name,
+              distributionSavedAt: savedAt,
+              items: item.items.map((row) => {
+                const result = results.find((entry) => entry.productId === row.productId)!
+                return {
+                  ...row,
+                  displayQty: round2(result.displayQty || 0),
+                  cartonQty: round2(result.cartonQty || 0),
+                }
+              }),
+            }
+          : item,
+      ),
+    })
+    toast('Finished goods distribution saved', session.reference)
+    return true
+  },
+
+  saveMaterialClosingDraft(
+    id: string,
+    closing: {
+      acknowledged: boolean
+      inputs: Array<{ productId: string; fullUnits: number; looseQty: number }>
+    },
+  ) {
+    const session = state.productionSessions.find((item) => item.id === id)
+    const user = currentUser(state)
+    if (!session || session.status !== 'in_progress') {
+      toast('Start production first', undefined, 'warning')
+      return false
+    }
+    if (!isSessionOperationalToday(session)) {
+      toast("Not today's production", 'Complete Production only runs for the current system date.', 'warning')
+      return false
+    }
+    if (!canEditSession(user.role, session.status)) {
+      toast('Permission denied', undefined, 'danger')
+      return false
+    }
+    if (session.posted) {
+      toast('Already posted', undefined, 'info')
+      return false
+    }
+    if (!session.distributionSavedAt) {
+      toast('Save Finished Goods Distribution first', 'Step 3 is available after Step 2 is saved.', 'warning')
+      return false
+    }
+    if (!closing.acknowledged) {
+      toast('Acknowledge the physical check', 'Tick the material balance acknowledgement before saving.', 'warning')
+      return false
+    }
+    const closingBuilt = buildSessionMaterialClosing(state, session, closing.inputs ?? [])
+    if (!closingBuilt.ok) {
+      toast('Finish Material Closing Check', closingBuilt.reason, 'warning')
+      return false
+    }
+    const savedAt = nowIso()
+    const significant = closingBuilt.lines.filter((row) => isSignificantVariance(row))
+    setData({
+      productionSessions: state.productionSessions.map((item) =>
+        item.id === id
+          ? {
+              ...item,
+              status: 'in_progress' as const,
+              posted: false,
+              materialClosing: {
+                checkedAt: savedAt,
+                checkedBy: user.name,
+                acknowledged: true,
+                significantVariance: significant.length > 0,
+                lines: closingBuilt.lines,
+              },
+            }
+          : item,
+      ),
+    })
+    toast('Material closing saved', session.reference)
+    return true
+  },
+
   completeSession(
     id: string,
     results: Array<{
@@ -5076,6 +5611,7 @@ export const db = {
       notes: string
       displayQty: number
       cartonQty: number
+      carryForward?: boolean
     }>,
     closing?: {
       acknowledged: boolean
@@ -5123,8 +5659,9 @@ export const db = {
         toast('Select a valid Storage Box', 'Production balance must use an active Warehouse Map storage box.', 'warning')
         return false
       }
-      if (result.actualQty < item.targetQty && !result.shortProductionReason) {
-        toast('Select a reason', `${productById(item.productId)?.name} is below target.`, 'warning')
+      const carryForward = Boolean(result.carryForward ?? item.carryForward) && result.actualQty < item.targetQty
+      if (result.actualQty < item.targetQty && !carryForward && !result.shortProductionReason) {
+        toast('Select a reason', `${productById(item.productId)?.name} is below target. Choose Carry Forward or Short Production.`, 'warning')
         return false
       }
       const displayQty = round2(result.displayQty || 0)
@@ -5142,8 +5679,10 @@ export const db = {
         return false
       }
     }
+    const date = nowIso()
     const items = session.items.map((item) => {
       const result = results.find((row) => row.productId === item.productId)!
+      const carryForward = Boolean(result.carryForward ?? item.carryForward) && result.actualQty < item.targetQty
       return {
         ...item,
         actualQty: result.actualQty,
@@ -5151,16 +5690,18 @@ export const db = {
         balanceLocation: result.balanceLocation,
         balanceContainer: result.balanceContainer,
         wasteQty: result.wasteQty,
-        shortProductionQty: Math.max(0, item.targetQty - result.actualQty),
-        shortProductionReason: result.shortProductionReason,
+        shortProductionQty: carryForward ? 0 : Math.max(0, item.targetQty - result.actualQty),
+        shortProductionReason: carryForward ? '' : result.shortProductionReason,
         notes: result.notes,
         displayQty: round2(result.displayQty || 0),
         cartonQty: round2(result.cartonQty || 0),
+        carryForward,
+        carriedForwardAt: carryForward ? date : undefined,
+        carriedForwardBy: carryForward ? user.name : undefined,
       }
     })
     const working = { ...session, items }
     const plan = buildSessionPlan(state, working)
-    const date = nowIso()
     let inventory = state.inventory
     let movements = state.stockMovements
     let balances = state.productionBalances
@@ -5270,9 +5811,10 @@ export const db = {
     }
 
     const significant = closingBuilt.lines.filter((row) => isSignificantVariance(row))
+    const previousClosing = session.materialClosing
     const materialClosing = {
-      checkedAt: date,
-      checkedBy: user.name,
+      checkedAt: previousClosing?.checkedBy ? previousClosing.checkedAt : date,
+      checkedBy: previousClosing?.checkedBy || user.name,
       acknowledged: true,
       significantVariance: significant.length > 0,
       lines: closingBuilt.lines,
@@ -5339,6 +5881,127 @@ export const db = {
     emit()
     toast('Production completed', session.reference)
     return true
+  },
+
+  continueCarryForward(originSessionId: string, originItemId: string) {
+    const user = currentUser(state)
+    if (!canRunProduction(user.role)) {
+      toast('Permission denied', 'You cannot continue production.', 'danger')
+      return null
+    }
+    const originSession = state.productionSessions.find((item) => item.id === originSessionId)
+    const origin = originSession?.items.find((item) => item.id === originItemId)
+    if (!originSession || !origin) {
+      toast('Carry Forward not found', undefined, 'warning')
+      return null
+    }
+    if (!originSession.posted || originSession.status !== 'completed' || !origin.carryForward) {
+      toast('Carry Forward is not ready', 'Finish and complete the original production first.', 'warning')
+      return null
+    }
+    const remaining = remainingTargetQty(origin)
+    if (remaining <= 0) {
+      toast('Nothing remaining to continue', undefined, 'info')
+      return null
+    }
+    if (isCarryForwardResumed(state.productionSessions, origin.id)) {
+      toast('Already continued', 'This flavour is already on a later production session.', 'warning')
+      return null
+    }
+    const today = systemProductionDate()
+    const operational = todaySessions(state.productionSessions, today).find(
+      (item) => item.status !== 'completed' && item.status !== 'cancelled',
+    )
+    const bom = state.boms.find((item) => item.productId === origin.productId && item.status === 'active')
+    const makeLine = (sessionId: string) => ({
+      id: uid('psi'),
+      sessionId,
+      productId: origin.productId,
+      bomId: bom?.id ?? origin.bomId,
+      originalTargetQty: remaining,
+      targetQty: remaining,
+      actualQty: 0,
+      shortProductionQty: 0,
+      shortProductionReason: '',
+      productionBalanceQty: 0,
+      balanceLocation: 'Main Warehouse',
+      balanceContainer: '',
+      wasteQty: 0,
+      wasteReason: '',
+      notes: '',
+      displayQty: 0,
+      cartonQty: 0,
+      carryForward: false,
+      carriedFromSessionId: originSession.id,
+      carriedFromItemId: origin.id,
+    })
+    if (!operational) {
+      const created = this.createDailySession({
+        productionDate: today,
+        items: [{ productId: origin.productId, targetQty: remaining }],
+        notes: `Continued from ${originSession.reference}`,
+      })
+      if (!created) return null
+      setData({
+        productionSessions: state.productionSessions.map((item) =>
+          item.id === created.id
+            ? {
+                ...item,
+                items: item.items.map((row) =>
+                  row.productId === origin.productId
+                    ? {
+                        ...row,
+                        originalTargetQty: remaining,
+                        targetQty: remaining,
+                        actualQty: 0,
+                        productionBalanceQty: 0,
+                        shortProductionQty: 0,
+                        shortProductionReason: '',
+                        carryForward: false,
+                        carriedFromSessionId: originSession.id,
+                        carriedFromItemId: origin.id,
+                      }
+                    : row,
+                ),
+              }
+            : item,
+        ),
+      })
+      toast('Continued on today\'s production', productById(origin.productId)?.name)
+      return state.productionSessions.find((item) => item.id === created.id) ?? created
+    }
+    if (operational.items.some((item) => item.productId === origin.productId)) {
+      toast('Already on today\'s production', productById(origin.productId)?.name, 'warning')
+      return null
+    }
+    const nextItem = makeLine(operational.id)
+    const nextItems = [...operational.items, nextItem]
+    const nextSession = { ...operational, items: nextItems }
+    const merged = operational.status === 'in_progress' ? mergePicking(operational.picking, buildSessionPlan(state, nextSession).picking) : { picking: operational.picking, excess: [] }
+    setData({
+      productionSessions: state.productionSessions.map((item) =>
+        item.id === operational.id
+          ? {
+              ...item,
+              items: nextItems,
+              picking: merged.picking,
+              excessReturns: [
+                ...item.excessReturns,
+                ...merged.excess.map((row) => ({
+                  id: uid('ex'),
+                  productId: row.productId,
+                  qty: row.qty,
+                  unit: row.unit,
+                  status: 'to_return' as const,
+                  notes: `Carry forward ${row.productId}`,
+                })),
+              ],
+            }
+          : item,
+      ),
+    })
+    toast('Continued on today\'s production', productById(origin.productId)?.name)
+    return state.productionSessions.find((item) => item.id === operational.id) ?? nextSession
   },
 
   editCompletedSession(

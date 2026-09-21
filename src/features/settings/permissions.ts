@@ -37,6 +37,7 @@ export const PERMISSION_KEYS: PermissionKey[] = [
   'inventory.adjust',
   'inventory.transfer',
   'inventory.count',
+  'inventory.usage',
   'warehouse_map.view',
   'warehouse_map.putaway',
   'warehouse_map.move',
@@ -50,6 +51,8 @@ export const PERMISSION_KEYS: PermissionKey[] = [
   'manufacturing.complete',
   'manufacturing.completed.edit',
   'manufacturing.history.view',
+  'manufacturing.plan.edit',
+  'manufacturing.plan.amend',
   'reports.view',
   'reports.export',
   'finance.view',
@@ -143,7 +146,7 @@ export const PERMISSION_GROUPS: Array<{ id: string; label: string; keys: Permiss
   {
     id: 'inventory',
     label: 'Inventory',
-    keys: ['inventory.view', 'inventory.adjust', 'inventory.transfer', 'inventory.count', 'opening_balance.view', 'opening_balance.create'],
+    keys: ['inventory.view', 'inventory.adjust', 'inventory.transfer', 'inventory.count', 'inventory.usage', 'opening_balance.view', 'opening_balance.create'],
   },
   {
     id: 'warehouse_map',
@@ -168,6 +171,8 @@ export const PERMISSION_GROUPS: Array<{ id: string; label: string; keys: Permiss
       'manufacturing.complete',
       'manufacturing.completed.edit',
       'manufacturing.history.view',
+      'manufacturing.plan.edit',
+      'manufacturing.plan.amend',
     ],
   },
   { id: 'reports', label: 'Reports', keys: ['reports.view', 'reports.export'] },
@@ -232,6 +237,7 @@ export const PERMISSION_LABELS: Record<PermissionKey, string> = {
   'inventory.adjust': 'Adjust Stock',
   'inventory.transfer': 'Stock Transfer',
   'inventory.count': 'Stock Count',
+  'inventory.usage': 'Record Stock Usage',
   'opening_balance.view': 'View Opening Balance',
   'opening_balance.create': 'Create Opening Balance',
   'warehouse_map.view': 'View Warehouse Map',
@@ -247,6 +253,8 @@ export const PERMISSION_LABELS: Record<PermissionKey, string> = {
   'manufacturing.complete': 'Complete Production',
   'manufacturing.completed.edit': 'Edit Completed Production',
   'manufacturing.history.view': 'View Production History',
+  'manufacturing.plan.edit': 'Edit Planned Production',
+  'manufacturing.plan.amend': 'Amend Production Plan',
   'reports.view': 'View Reports',
   'reports.export': 'Export Reports',
   'finance.view': 'View Finance',
@@ -290,6 +298,8 @@ export const PERMISSION_LABELS: Record<PermissionKey, string> = {
   'customer.pricing.manage': 'Manage Customer Pricing',
 }
 
+export const MANUFACTURING_PLAN_PERMISSION_KEYS = ['manufacturing.plan.edit', 'manufacturing.plan.amend'] as const
+
 export function emptyPermissions(): RolePermissions {
   return Object.fromEntries(PERMISSION_KEYS.map((key) => [key, false])) as RolePermissions
 }
@@ -328,7 +338,7 @@ const DOCUMENT_KEYS: PermissionKey[] = [
 const PURCHASES_ALL: PermissionKey[] = ['purchases.view', 'purchases.create', 'purchases.edit', 'purchases.delete']
 const RECEIVING_STAFF: PermissionKey[] = ['receiving.view', 'receiving.create']
 const RECEIVING_ALL: PermissionKey[] = ['receiving.view', 'receiving.create', 'receiving.link_purchase']
-const INVENTORY_ALL: PermissionKey[] = ['inventory.view', 'inventory.adjust', 'inventory.transfer', 'inventory.count']
+const INVENTORY_ALL: PermissionKey[] = ['inventory.view', 'inventory.adjust', 'inventory.transfer', 'inventory.count', 'inventory.usage']
 const AGENT_STOCK_OPS: PermissionKey[] = ['agent.view', 'agent.stock.view', 'agent.stock.transfer']
 const WAREHOUSE_MAP_STAFF: PermissionKey[] = ['warehouse_map.view', 'warehouse_map.putaway', 'warehouse_map.move', 'warehouse_map.balance.use']
 const WAREHOUSE_MAP_ALL: PermissionKey[] = [
@@ -378,6 +388,7 @@ export function defaultPermissionsForLegacy(role: UserRole): RolePermissions {
       ...DOCUMENT_KEYS,
       ...RECEIVING_STAFF,
       'inventory.view',
+      'inventory.usage',
       ...WAREHOUSE_MAP_STAFF,
       ...MFG_RUN,
       'reports.view',

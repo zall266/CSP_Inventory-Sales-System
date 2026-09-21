@@ -28,7 +28,7 @@ import { fileURLToPath } from 'node:url'
 import path from 'node:path'
 
 const { db } = await import('@/store/db')
-const { allocateBalanceFifo, isSessionOperationalToday, systemProductionDate, todaySessions } = await import(
+const { allocateBalanceFifo, bomForProduct, buildSessionPlan, bulkRequiredGrams, committedCarryForwardOrigins, isSessionOperationalToday, remainingTargetQty, systemProductionDate, todaySessions } = await import(
   '@/features/manufacturing/sessionPlan'
 )
 const {
@@ -47,12 +47,22 @@ const {
 const { isRawStorePickingLine, suggestPurchasePick } = await import('@/features/manufacturing/sessionPlan')
 const { groupPickingListForDisplay } = await import('@/features/manufacturing/PickingListPage')
 const { round2 } = await import('@/utils/format')
+const { hasPermission } = await import('@/features/settings/permissions')
+const { getBalanceStorageBoxes } = await import('@/features/warehouse/warehouseModel')
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const todaySrc = readFileSync(path.join(root, 'src/features/manufacturing/TodaysProductionPage.tsx'), 'utf8')
 const completeSrc = readFileSync(path.join(root, 'src/features/manufacturing/CompleteProductionPage.tsx'), 'utf8')
 const sessionPlanSrc = readFileSync(path.join(root, 'src/features/manufacturing/sessionPlan.ts'), 'utf8')
 const pickingSrc = readFileSync(path.join(root, 'src/features/manufacturing/PickingListPage.tsx'), 'utf8')
+const planningSrc = readFileSync(path.join(root, 'src/features/manufacturing/ProductionPlanningPage.tsx'), 'utf8')
+const planAmendmentSrc = readFileSync(path.join(root, 'src/features/manufacturing/planAmendment.tsx'), 'utf8')
+const dbSrc = readFileSync(path.join(root, 'src/store/db.ts'), 'utf8')
+const permissionsSrc = readFileSync(path.join(root, 'src/features/settings/permissions.ts'), 'utf8')
+const carryForwardSrc = readFileSync(path.join(root, 'src/features/manufacturing/CarryForwardPage.tsx'), 'utf8')
+const typesSrc = readFileSync(path.join(root, 'src/types/index.ts'), 'utf8')
+const sidebarSrc = readFileSync(path.join(root, 'src/components/layout/Sidebar.tsx'), 'utf8')
+const historySrc = readFileSync(path.join(root, 'src/features/manufacturing/ProductionHistoryPage.tsx'), 'utf8')
 
 type Check = { name: string; ok: boolean; detail?: string }
 const results: Check[] = []
@@ -126,6 +136,54 @@ function remainingInputsFor(sessionId: string, remainingByProduct: Record<string
     fullUnits: 0,
     looseQty: remainingByProduct[row.productId] ?? row.availableQty,
   }))
+}
+
+function flavourResults(
+  session: { items: Array<{ productId: string; targetQty: number }> },
+  input: {
+    actualQty: number
+    productionBalanceQty?: number
+    carryForward?: boolean
+    shortProductionReason?: string
+  },
+) {
+  return session.items.map((item) => ({
+    productId: item.productId,
+    actualQty: input.actualQty,
+    productionBalanceQty: input.productionBalanceQty ?? 0,
+    balanceLocation: 'Main Warehouse',
+    balanceContainer: (input.productionBalanceQty ?? 0) > 0 ? 'Box 1' : '',
+    wasteQty: 0,
+    shortProductionReason: input.shortProductionReason ?? '',
+    notes: '',
+    displayQty: 0,
+    cartonQty: input.actualQty,
+    carryForward: input.carryForward,
+  }))
+}
+
+function startFlavourSession(productId: string, targetQty: number) {
+  db.resetDemo()
+  db.switchUser('u-admin')
+  db.cancelPlannedSession('ps-0910')
+  const created = db.createDailySession({
+    productionDate: systemProductionDate(),
+    items: [{ productId, targetQty }],
+  })
+  if (!created) return undefined
+  db.acceptSession(created.id)
+  db.startSession(created.id, { recipePhoto: 'data:image/png;base64,aaa', recipePhotoName: 'sheet.jpg' })
+  pickRawStore(created.id)
+  return db.getSnapshot().productionSessions.find((item) => item.id === created.id)
+}
+
+function availableBalanceG(productId: string) {
+  return round2(
+    db
+      .getSnapshot()
+      .productionBalances.filter((row) => row.productId === productId && row.status === 'available' && row.quantity > 0)
+      .reduce((sum, row) => sum + row.quantity, 0),
+  )
 }
 
 db.resetDemo()
@@ -231,22 +289,25 @@ check(
 check('Picking List keeps existing complete and add actions', pickingSrc.includes('Today\'s production') && pickingSrc.includes('+ Add Material') && pickingSrc.includes('+ Add Loose') && pickingSrc.includes('Complete production'))
 check('Picking progress still counts all lines', pickingSrc.includes('{picked} / {session.picking.length} lines picked'))
 check(
-  'Two-step completion: Step 1 is Production Result and Step 2 is Material Closing',
-  completeSrc.includes('Step 1 of 2')
+  'Three-step completion: Production Result, Finished Goods Distribution, then Material Closing',
+  completeSrc.includes('Step 1 of 3')
     && completeSrc.includes('Production Result')
-    && completeSrc.includes('Step 2 of 2')
+    && completeSrc.includes('Step 2 of 3')
+    && completeSrc.includes('Finished Goods Distribution')
+    && completeSrc.includes('Step 3 of 3')
     && completeSrc.includes('Material Closing Check')
-    && completeSrc.includes('setStep(2)')
-    && completeSrc.includes('setStep(1)'),
+    && completeSrc.includes('Save & Continue')
+    && completeSrc.includes('saveProductionResult')
+    && completeSrc.includes('saveFinishedGoodsDistribution'),
 )
-check('Next moves from Step 1 to Step 2', completeSrc.includes('const goNext') && completeSrc.includes('{step === 1 &&'))
-check('Complete Production is only available from Step 2', completeSrc.includes('{step === 2 &&') && completeSrc.includes('Complete production') && !completeSrc.includes('Review and complete'))
+check('Save & Continue moves from Step 1 after persist', completeSrc.includes('saveStep1') && completeSrc.includes('{step === 1 &&'))
+check('Complete Production is only available from Step 3', completeSrc.includes('{step === 3 &&') && completeSrc.includes('Complete production') && !completeSrc.includes('Review and complete'))
 check('Recount button is removed; staff edits Physical Remaining', !/\bRecount\b/.test(completeSrc) && completeSrc.includes('If the result looks wrong, recheck the physical balance and edit the value'))
 check('Expected Remaining is visible before remaining is entered', completeSrc.includes('Expected Remaining:') && completeSrc.includes('expectedRemainingQty('))
 check('Actual Used and Variance update immediately from Physical Remaining', completeSrc.includes('closingLineFromInput') && completeSrc.includes('Enter physical remaining to see actual used and variance immediately'))
 check('Complete page has no operational date picker', !/type=["']date["']/.test(completeSrc) && completeSrc.includes('isSessionOperationalToday') && completeSrc.includes('· Today ·'))
 check('Storage Box still uses Warehouse Map source-of-truth', completeSrc.includes('storageBoxSelectOptions(state, session.warehouseId') && completeSrc.includes('isActiveBalanceStorageBox'))
-check('Variance does not disable Complete Production', completeSrc.includes('disabled={!acknowledged || !closingPreview.ok}') && completeSrc.includes('I have checked the physical material balance'))
+check('Variance does not disable Complete Production', completeSrc.includes('disabled={!step3Done || !acknowledged || !closingPreview.ok}') && completeSrc.includes('I have checked the physical material balance'))
 check('Allocated 3 KG minus planned 2.33 KG expects 0.67 KG remaining', expectedRemainingQty(3, 2.33) === 0.67)
 const remaining070 = closingLineFromInput(kgProduct, 2.33, 3, { fullUnits: 0, looseQty: 0.7 })
 check(
@@ -584,6 +645,576 @@ check(
   'TEST 11 variance above 10% notifies and does not block',
   highVarSession.materialClosing?.significantVariance === true
     && db.getSnapshot().notifications.filter((row) => row.title === 'Significant material variance').length > notifyBefore,
+)
+
+check(
+  'TEST 25 PR #43 Material Closing remains intact inside Step 3',
+  completeSrc.includes('Step 3 of 3')
+    && completeSrc.includes('Material Closing Check')
+    && completeSrc.includes('Physical Remaining')
+    && completeSrc.includes('I have checked the physical material balance')
+    && !completeSrc.includes('amendSessionPlan'),
+)
+check(
+  'TEST 26 PR #44 picking list still renders Fresh Materials then Production Balance',
+  pickingSrc.indexOf('title="Fresh Materials"') < pickingSrc.indexOf('title="Production Balance"')
+    && pickingSrc.includes('freshLines.map')
+    && pickingSrc.includes('balanceLines.map'),
+)
+
+db.resetDemo()
+db.switchUser('u-admin')
+
+const plannedEdit = db.createDailySession({
+  productionDate: '2026-09-12',
+  items: [
+    { productId: 'p-pack-mt', targetQty: 50 },
+    { productId: 'p-pack-st', targetQty: 40 },
+  ],
+  notes: 'Original planned notes',
+})
+check('Planned session created for edit/cancel tests', Boolean(plannedEdit?.id))
+const plannedUpdated = db.updatePlannedSession(plannedEdit!.id, {
+  productionDate: '2026-09-12',
+  notes: 'Updated planned notes',
+  items: [
+    { productId: 'p-pack-mt', targetQty: 55 },
+    { productId: 'p-pack-st', targetQty: 40 },
+  ],
+})
+const afterPlannedEdit = db.getSnapshot().productionSessions.find((item) => item.id === plannedEdit!.id)!
+check(
+  'TEST 1 PLANNED can be edited',
+  plannedUpdated === true
+    && afterPlannedEdit.status === 'planned'
+    && afterPlannedEdit.notes === 'Updated planned notes'
+    && afterPlannedEdit.items.find((item) => item.productId === 'p-pack-mt')?.targetQty === 55
+    && afterPlannedEdit.items.find((item) => item.productId === 'p-pack-mt')?.originalTargetQty === 55
+    && afterPlannedEdit.items.find((item) => item.productId === 'p-pack-st')?.targetQty === 40,
+)
+
+const cancelled = db.cancelPlannedSession(plannedEdit!.id)
+const afterCancel = db.getSnapshot().productionSessions.find((item) => item.id === plannedEdit!.id)
+check(
+  'TEST 2 PLANNED can be cancelled/deleted safely',
+  cancelled === true
+    && afterCancel?.status === 'cancelled'
+    && Boolean(afterCancel?.cancelledBy)
+    && Boolean(afterCancel?.cancelledAt)
+    && afterCancel.items.length === 2,
+)
+check('Cancelled plan is not hard deleted', Boolean(afterCancel?.id) && afterCancel?.reference === plannedEdit?.reference)
+check('TEST 22 CANCELLED cannot be amended', db.amendSessionPlan(plannedEdit!.id, [{ productId: 'p-pack-mt', targetQty: 70 }], 'Should fail') === false)
+check('Cancelled plan cannot be accepted', (() => { db.acceptSession(plannedEdit!.id); return db.getSnapshot().productionSessions.find((item) => item.id === plannedEdit!.id)?.status === 'cancelled' })())
+
+db.resetDemo()
+db.switchUser('u-admin')
+const seedPlanned = db.getSnapshot().productionSessions.find((item) => item.id === 'ps-0910')!
+check('Seed plan loads without amendment history', Array.isArray(seedPlanned.targetChanges) && seedPlanned.targetChanges.length === 0)
+
+db.acceptSession('ps-0910')
+const accepted = db.getSnapshot().productionSessions.find((item) => item.id === 'ps-0910')!
+check('Accepted session keeps the same id', accepted?.status === 'accepted' && accepted.id === 'ps-0910')
+check(
+  'TEST 3 ACCEPTED cannot use normal Edit',
+  db.updatePlannedSession('ps-0910', { productionDate: accepted.productionDate, items: accepted.items.map((item) => ({ productId: item.productId, targetQty: item.targetQty + 1 })) }) === false
+    && db.getSnapshot().productionSessions.find((item) => item.id === 'ps-0910')?.items.find((item) => item.productId === 'p-pack-mt')?.targetQty === 45,
+)
+check('ACCEPTED cannot be cancelled', db.cancelPlannedSession('ps-0910') === false && db.getSnapshot().productionSessions.find((item) => item.id === 'ps-0910')?.status === 'accepted')
+check('Planning UI keeps Edit/Cancel for planned and Amend Plan for later statuses', planningSrc.includes('>Edit<') && planningSrc.includes('Delete / Cancel') && planningSrc.includes('Amend Plan'))
+check('Today UI exposes Amend Plan and does not keep silent Edit target', todaySrc.includes('Amend Plan') && !todaySrc.includes('Edit target'))
+check(
+  'Amendment confirmation is required before save',
+  planAmendmentSrc.includes('Confirm Amendment')
+    && planAmendmentSrc.includes('Amend production plan?')
+    && planAmendmentSrc.includes('if (saving) return'),
+)
+const mfgRunMatch = permissionsSrc.match(/const MFG_RUN: PermissionKey\[\] = \[([\s\S]*?)\]/)
+check(
+  'Plan actions use permission keys, not role-name checks',
+  planAmendmentSrc.includes("hasPermission(state, 'manufacturing.plan.edit')")
+    && planAmendmentSrc.includes("hasPermission(state, 'manufacturing.plan.amend')")
+    && !/role\s*===\s*['"]Owner['"]/.test(planAmendmentSrc)
+    && !/role\s*===\s*['"]Admin['"]/.test(planAmendmentSrc)
+    && !/role\s*===\s*['"]Owner['"]/.test(planningSrc)
+    && permissionsSrc.includes("'manufacturing.plan.amend'")
+    && permissionsSrc.includes("'manufacturing.plan.edit'"),
+)
+check(
+  'Staff manufacturing run permissions do not include plan amend',
+  Boolean(mfgRunMatch && !mfgRunMatch[1].includes('manufacturing.plan.amend') && !mfgRunMatch[1].includes('manufacturing.plan.edit')),
+)
+
+db.switchUser('u-mei')
+check('Staff has operational manufacturing.edit but not plan amend', hasPermission(db.getSnapshot(), 'manufacturing.edit') === true && hasPermission(db.getSnapshot(), 'manufacturing.plan.amend') === false)
+check(
+  'TEST 5 Staff cannot Amend',
+  db.amendSessionPlan('ps-0910', [{ productId: 'p-pack-mt', targetQty: 60 }], 'Staff should not amend') === false
+    && db.getSnapshot().productionSessions.find((item) => item.id === 'ps-0910')?.items.find((item) => item.productId === 'p-pack-mt')?.targetQty === 45,
+)
+
+db.switchUser('u-admin')
+check('Authorized admin can amend', hasPermission(db.getSnapshot(), 'manufacturing.plan.amend') === true)
+check('TEST 6 Amendment requires reason', db.amendSessionPlan('ps-0910', [{ productId: 'p-pack-mt', targetQty: 60 }], '') === false)
+check('TEST 7 Whitespace-only reason is rejected', db.amendSessionPlan('ps-0910', [{ productId: 'p-pack-mt', targetQty: 60 }], '   ') === false)
+
+const beforeMoves = db.getSnapshot().stockMovements.length
+const beforeBalances = JSON.stringify(db.getSnapshot().productionBalances)
+const beforeBoxes = JSON.stringify(getBalanceStorageBoxes(db.getSnapshot()).map((row) => ({ slotId: row.slotId, name: row.name, active: row.active })))
+const originalMatcha = db.getSnapshot().productionSessions.find((item) => item.id === 'ps-0910')!.items.find((item) => item.productId === 'p-pack-mt')!
+
+const firstAmend = db.amendSessionPlan(
+  'ps-0910',
+  [
+    { productId: 'p-pack-mt', targetQty: 60 },
+    { productId: 'p-pack-cl', targetQty: 45 },
+    { productId: 'p-pack-st', targetQty: 45 },
+  ],
+  'Additional customer order',
+)
+const afterFirstAmend = db.getSnapshot().productionSessions.find((item) => item.id === 'ps-0910')!
+const matchaAfter = afterFirstAmend.items.find((item) => item.productId === 'p-pack-mt')!
+const strawberryAfter = afterFirstAmend.items.find((item) => item.productId === 'p-pack-st')!
+const chocolateAfter = afterFirstAmend.items.find((item) => item.productId === 'p-pack-cl')!
+check('TEST 4 ACCEPTED can Amend by authorized Owner/Admin', firstAmend === true && matchaAfter.targetQty === 60)
+check('TEST 8 Amendment creates audit record', afterFirstAmend.targetChanges.length === 1 && afterFirstAmend.targetChanges[0].reason === 'Additional customer order' && afterFirstAmend.targetChanges[0].changedBy === 'Admin' && Boolean(afterFirstAmend.targetChanges[0].changedAt) && afterFirstAmend.targetChanges[0].originalTarget === 45 && afterFirstAmend.targetChanges[0].newTarget === 60 && afterFirstAmend.targetChanges[0].sessionId === 'ps-0910')
+check('TEST 9 Original target remains preserved', matchaAfter.originalTargetQty === originalMatcha.originalTargetQty && matchaAfter.originalTargetQty === 45)
+check('TEST 23 Existing Production Session remains the same session', afterFirstAmend.id === 'ps-0910' && afterFirstAmend.reference === accepted.reference)
+check('TEST 24 Multi-product amendment changes only the selected product', strawberryAfter.targetQty === 45 && chocolateAfter.targetQty === 45 && strawberryAfter.originalTargetQty === 45)
+check('TEST 20 Amendment does not create inventory movement', db.getSnapshot().stockMovements.length === beforeMoves)
+check('TEST 18 Production Balance FIFO remains unchanged', JSON.stringify(db.getSnapshot().productionBalances) === beforeBalances)
+check(
+  'TEST 19 Storage Box source remains unchanged',
+  JSON.stringify(getBalanceStorageBoxes(db.getSnapshot()).map((row) => ({ slotId: row.slotId, name: row.name, active: row.active }))) === beforeBoxes,
+)
+check('No-op amendment is rejected', db.amendSessionPlan('ps-0910', [{ productId: 'p-pack-mt', targetQty: 60 }], 'Same target') === false && db.getSnapshot().productionSessions.find((item) => item.id === 'ps-0910')!.targetChanges.length === 1)
+
+const secondAmend = db.amendSessionPlan('ps-0910', [{ productId: 'p-pack-mt', targetQty: 65 }], 'Production adjustment')
+const afterSecond = db.getSnapshot().productionSessions.find((item) => item.id === 'ps-0910')!
+check(
+  'TEST 10 Multiple amendments preserve complete history',
+  secondAmend === true
+    && afterSecond.targetChanges.length === 2
+    && afterSecond.targetChanges[0].originalTarget === 45
+    && afterSecond.targetChanges[0].newTarget === 60
+    && afterSecond.targetChanges[1].originalTarget === 60
+    && afterSecond.targetChanges[1].newTarget === 65
+    && afterSecond.items.find((item) => item.productId === 'p-pack-mt')?.targetQty === 65,
+)
+
+db.startSession('ps-0910', { recipePhoto: 'data:image/png;base64,aaa', recipePhotoName: 'sheet.jpg' })
+pickRawStore('ps-0910')
+const startedAmend = db.getSnapshot().productionSessions.find((item) => item.id === 'ps-0910')!
+const milkBeforeIncrease = startedAmend.picking.find((line) => line.productId === 'p-milkpw' && line.kind !== 'balance')?.requiredQty
+    ?? startedAmend.picking.find((line) => line.productId === 'p-milkpw')?.requiredQty
+const pickingIdsBefore = startedAmend.picking.map((line) => line.id).sort().join(',')
+const groupedBefore = groupPickingListForDisplay(startedAmend.picking)
+check('Started session still groups Fresh Materials then Production Balance', groupedBefore.fresh.length > 0 && groupedBefore.fresh.every((line) => line.kind !== 'balance') && groupedBefore.balance.every((line) => line.kind === 'balance'))
+
+const inProgressAmend = db.amendSessionPlan('ps-0910', [{ productId: 'p-pack-mt', targetQty: 80 }], 'Operational requirement')
+const afterInProgress = db.getSnapshot().productionSessions.find((item) => item.id === 'ps-0910')!
+check('TEST 11 IN_PROGRESS can be amended by authorized user', inProgressAmend === true && afterInProgress.status === 'in_progress' && afterInProgress.items.find((item) => item.productId === 'p-pack-mt')?.targetQty === 80)
+const milkAfterIncrease = afterInProgress.picking.find((line) => line.productId === 'p-milkpw' && line.kind !== 'balance')?.requiredQty
+  ?? afterInProgress.picking.find((line) => line.productId === 'p-milkpw')?.requiredQty
+check('TEST 15 BOM recalculates for new target', typeof milkBeforeIncrease === 'number' && typeof milkAfterIncrease === 'number' && milkAfterIncrease > milkBeforeIncrease!)
+check(
+  'TEST 16 Picking List reflects updated remaining requirement',
+  afterInProgress.picking.some((line) => line.kind !== 'balance' && line.requiredQty > 0)
+    && new Set(afterInProgress.picking.map((line) => line.id)).size === afterInProgress.picking.length
+    && pickingIdsBefore.split(',').every((id) => afterInProgress.picking.some((line) => line.id === id)),
+)
+const groupedAfter = groupPickingListForDisplay(afterInProgress.picking)
+check(
+  'TEST 17 Picking List still renders Fresh Materials then Production Balance',
+  groupedAfter.fresh.length > 0
+    && groupedAfter.balance.length > 0
+    && groupedAfter.fresh.every((line) => line.kind !== 'balance')
+    && groupedAfter.balance.every((line) => line.kind === 'balance')
+    && afterInProgress.picking.filter((line) => line.kind === 'balance').length === groupedAfter.balance.length,
+)
+
+const liveMatcha = afterInProgress.items.find((item) => item.productId === 'p-pack-mt')!
+liveMatcha.actualQty = 40
+check('Injected actual production is 40', db.getSnapshot().productionSessions.find((item) => item.id === 'ps-0910')!.items.find((item) => item.productId === 'p-pack-mt')!.actualQty === 40)
+const blockedLow = db.amendSessionPlan('ps-0910', [{ productId: 'p-pack-mt', targetQty: 39 }], 'Too low')
+check(
+  'TEST 12 IN_PROGRESS cannot reduce target below actual production',
+  blockedLow === false
+    && db.getSnapshot().productionSessions.find((item) => item.id === 'ps-0910')!.items.find((item) => item.productId === 'p-pack-mt')!.targetQty === 80
+    && db.getSnapshot().ui.toasts.some((row) => row.title === 'New target cannot be lower than actual production completed.'),
+)
+const equalActual = db.amendSessionPlan('ps-0910', [{ productId: 'p-pack-mt', targetQty: 40 }], 'Equal to actual')
+const afterEqual = db.getSnapshot().productionSessions.find((item) => item.id === 'ps-0910')!.items.find((item) => item.productId === 'p-pack-mt')!
+check('Target equal to actual production is allowed', equalActual === true && afterEqual.targetQty === 40 && afterEqual.actualQty === 40 && remainingTargetQty(afterEqual) === 0)
+
+const increaseAgain = db.amendSessionPlan('ps-0910', [{ productId: 'p-pack-mt', targetQty: 60 }], 'Customer order reduced then recovered')
+const afterIncrease = db.getSnapshot().productionSessions.find((item) => item.id === 'ps-0910')!.items.find((item) => item.productId === 'p-pack-mt')!
+check(
+  'TEST 13 Target increase calculates remaining target correctly',
+  increaseAgain === true && afterIncrease.targetQty === 60 && remainingTargetQty(afterIncrease) === 20,
+)
+check('TEST 14 Existing actual production is not reset', afterIncrease.actualQty === 40 && afterIncrease.originalTargetQty === 45)
+
+const completedOk = db.completeSession('ps-0910', packResults(db.getSnapshot().productionSessions.find((item) => item.id === 'ps-0910')!), {
+  acknowledged: true,
+  inputs: plannedRemainingInputs('ps-0910'),
+})
+const completedSession = db.getSnapshot().productionSessions.find((item) => item.id === 'ps-0910')!
+check('Completed session still exists after amendment path', completedOk === true && completedSession.status === 'completed')
+check('TEST 21 COMPLETED cannot be amended', db.amendSessionPlan('ps-0910', [{ productId: 'p-pack-mt', targetQty: 90 }], 'Too late') === false)
+
+check(
+  'Completion UI opens the first incomplete step by default',
+  completeSrc.includes('if (!session?.resultSavedAt) return 1')
+    && completeSrc.includes('if (!session.distributionSavedAt) return 2')
+    && completeSrc.includes('Save Material Closing'),
+)
+
+db.resetDemo()
+db.switchUser('u-admin')
+db.acceptSession('ps-0910')
+db.startSession('ps-0910', { recipePhoto: 'data:image/png;base64,aaa', recipePhotoName: 'sheet.jpg' })
+pickRawStore('ps-0910')
+const threeStepSession = db.getSnapshot().productionSessions.find((item) => item.id === 'ps-0910')!
+const threeStepResults = packResults(threeStepSession)
+const threeStepMoves = db.getSnapshot().stockMovements.length
+
+db.switchUser('u-mei')
+const skippedTwo = db.saveFinishedGoodsDistribution('ps-0910', threeStepResults)
+check('Step 2 cannot be saved before Step 1', skippedTwo === false)
+
+const step1 = db.saveProductionResult('ps-0910', threeStepResults)
+const afterStep1 = db.getSnapshot().productionSessions.find((item) => item.id === 'ps-0910')!
+check(
+  'Staff A saves Step 1 Production Result',
+  step1 === true
+    && afterStep1.status === 'in_progress'
+    && afterStep1.posted === false
+    && afterStep1.resultSavedBy === 'Mei Ling'
+    && Boolean(afterStep1.resultSavedAt)
+    && afterStep1.items.every((item) => item.actualQty === item.targetQty)
+    && db.getSnapshot().stockMovements.length === threeStepMoves,
+)
+check('Refresh still has Step 1 actor after reopen snapshot', db.getSnapshot().productionSessions.find((item) => item.id === 'ps-0910')?.resultSavedBy === 'Mei Ling')
+
+db.switchUser('u-kumar')
+const afterStaffBOpen = db.getSnapshot().productionSessions.find((item) => item.id === 'ps-0910')!
+check('Staff B sees Step 1 completed and Step 2 available', Boolean(afterStaffBOpen.resultSavedAt) && !afterStaffBOpen.distributionSavedAt)
+
+const skippedThree = db.saveMaterialClosingDraft('ps-0910', { acknowledged: true, inputs: plannedRemainingInputs('ps-0910') })
+check('Step 3 cannot be saved before Step 2', skippedThree === false)
+
+const invalidDist = db.saveFinishedGoodsDistribution(
+  'ps-0910',
+  afterStaffBOpen.items.map((item) => ({ productId: item.productId, displayQty: 20, cartonQty: 60 })),
+)
+check(
+  'Invalid distribution is blocked and does not post inventory',
+  invalidDist === false
+    && db.getSnapshot().productionSessions.find((item) => item.id === 'ps-0910')?.distributionSavedAt == null
+    && db.getSnapshot().stockMovements.length === threeStepMoves,
+)
+
+const step2 = db.saveFinishedGoodsDistribution(
+  'ps-0910',
+  afterStaffBOpen.items.map((item) => ({ productId: item.productId, displayQty: 10, cartonQty: item.actualQty - 10 })),
+)
+const afterStep2 = db.getSnapshot().productionSessions.find((item) => item.id === 'ps-0910')!
+check(
+  'Staff B saves Step 2 Finished Goods Distribution',
+  step2 === true
+    && afterStep2.distributionSavedBy === 'Kumar Raj'
+    && Boolean(afterStep2.distributionSavedAt)
+    && afterStep2.status === 'in_progress'
+    && afterStep2.posted === false
+    && afterStep2.items.every((item) => item.displayQty === 10 && item.cartonQty === item.actualQty - 10)
+    && db.getSnapshot().stockMovements.length === threeStepMoves,
+)
+
+db.switchUser('u-hafiz')
+const afterStaffCOpen = db.getSnapshot().productionSessions.find((item) => item.id === 'ps-0910')!
+check('Staff C sees Step 1 and Step 2 complete', Boolean(afterStaffCOpen.resultSavedAt) && Boolean(afterStaffCOpen.distributionSavedAt) && !afterStaffCOpen.materialClosing?.checkedBy)
+
+const step3 = db.saveMaterialClosingDraft('ps-0910', { acknowledged: true, inputs: plannedRemainingInputs('ps-0910') })
+const afterStep3 = db.getSnapshot().productionSessions.find((item) => item.id === 'ps-0910')!
+check(
+  'Staff C saves Step 3 Material Closing without posting',
+  step3 === true
+    && afterStep3.status === 'in_progress'
+    && afterStep3.posted === false
+    && afterStep3.materialClosing?.checkedBy === 'Hafiz Malik'
+    && Boolean(afterStep3.materialClosing?.checkedAt)
+    && db.getSnapshot().stockMovements.length === threeStepMoves,
+)
+const closingStamp = afterStep3.materialClosing!.checkedAt
+
+db.switchUser('u-admin')
+const posted = db.completeSession('ps-0910', packResults(db.getSnapshot().productionSessions.find((item) => item.id === 'ps-0910')!), {
+  acknowledged: true,
+  inputs: plannedRemainingInputs('ps-0910'),
+})
+const postedSession = db.getSnapshot().productionSessions.find((item) => item.id === 'ps-0910')!
+check(
+  'Manager completes once and preserves Material Closing actor',
+  posted === true
+    && postedSession.status === 'completed'
+    && postedSession.posted === true
+    && postedSession.completedBy === 'Admin'
+    && Boolean(postedSession.completedAt)
+    && postedSession.materialClosing?.checkedBy === 'Hafiz Malik'
+    && postedSession.materialClosing?.checkedAt === closingStamp
+    && postedSession.resultSavedBy === 'Mei Ling'
+    && postedSession.distributionSavedBy === 'Kumar Raj',
+)
+check('Inventory posts only on Complete Production', db.getSnapshot().stockMovements.length > threeStepMoves)
+const postedAgain = db.completeSession('ps-0910', packResults(postedSession), { acknowledged: true, inputs: plannedRemainingInputs('ps-0910') })
+check('Duplicate Complete Production is blocked', postedAgain === false && postedSession.status === 'completed')
+
+check(
+  'Carry Forward UI is mutually exclusive with Short Production',
+  completeSrc.includes('Carry Forward')
+    && completeSrc.includes('Short Production')
+    && completeSrc.includes('Continue this flavour on another production day')
+    && completeSrc.includes('carryForward: true, shortProductionReason: \'\''),
+)
+check('Production nav includes Carry Forward without redesigning 3-step flow', sidebarSrc.includes("label: 'Carry Forward'") && sidebarSrc.includes('/manufacturing/carry-forward'))
+check('Carry Forward page uses Continue Production on committed origins', carryForwardSrc.includes('Continue Production') && carryForwardSrc.includes('committedCarryForwardOrigins'))
+check('Today continuation line shows Continued from date', todaySrc.includes('Continued from {formatDate') && historySrc.includes('Carry Forward ·'))
+check(
+  'Approved Carry Forward fields only; no resume audit or session-level status',
+  typesSrc.includes('carryForward?: boolean')
+    && typesSrc.includes('carriedFromSessionId?: string')
+    && typesSrc.includes('carriedFromItemId?: string')
+    && typesSrc.includes('carriedForwardAt?: string')
+    && typesSrc.includes('carriedForwardBy?: string')
+    && !typesSrc.includes('resumedAt')
+    && !typesSrc.includes('resumedBy')
+    && !typesSrc.includes('CARRY_FORWARD'),
+)
+check('Queue helper requires posted completed origins with remaining work', sessionPlanSrc.includes('if (!session.posted || session.status !== \'completed\') return []'))
+check('Continuation originalTargetQty is remaining, not origin originalTargetQty', dbSrc.includes('originalTargetQty: remaining') && dbSrc.includes('targetQty: remaining') && dbSrc.includes('productionBalanceQty: 0'))
+check('completeSession remains the inventory posting path', dbSrc.includes('completeSession(') && !dbSrc.includes('postCarryForward') && dbSrc.includes('if (session.posted)'))
+check('Existing seed sessions hydrate Carry Forward defaults', (() => {
+  db.resetDemo()
+  const seedLine = db.getSnapshot().productionSessions.find((item) => item.id === 'ps-0908')?.items[0]
+  return seedLine?.carryForward === false && seedLine.carriedFromItemId == null
+})())
+
+const day1 = startFlavourSession('p-pack-mlt', 100)!
+const milkBom = bomForProduct(db.getSnapshot(), 'p-pack-mlt')!
+const required40 = bulkRequiredGrams(milkBom, 40)
+const milkTea = () => db.getSnapshot().productionSessions.find((item) => item.id === day1.id)!
+const cfIntent = flavourResults(day1, { actualQty: 60, productionBalanceQty: 10000, carryForward: true })
+const milkMovesBeforeIntent = db.getSnapshot().stockMovements.length
+const milkFgBefore = inventoryOf('p-pack-mlt')
+const milkPbBefore = availableBalanceG('p-pack-mlt')
+const savedCfIntent = db.saveProductionResult(day1.id, cfIntent)
+const afterIntent = milkTea()
+check(
+  'Step 1 persists Carry Forward intent without posting',
+  savedCfIntent === true
+    && afterIntent.status === 'in_progress'
+    && afterIntent.posted === false
+    && afterIntent.items[0].carryForward === true
+    && afterIntent.items[0].actualQty === 60
+    && afterIntent.items[0].originalTargetQty === 100
+    && afterIntent.items[0].shortProductionQty === 0
+    && !afterIntent.items[0].carriedForwardAt
+    && db.getSnapshot().stockMovements.length === milkMovesBeforeIntent
+    && committedCarryForwardOrigins(db.getSnapshot()).length === 0,
+)
+
+const failedCfComplete = db.completeSession(day1.id, cfIntent, { acknowledged: false, inputs: plannedRemainingInputs(day1.id) })
+check(
+  'Failed completeSession creates no CF queue and no inventory posting',
+  failedCfComplete === false
+    && milkTea().posted === false
+    && milkTea().status === 'in_progress'
+    && committedCarryForwardOrigins(db.getSnapshot()).length === 0
+    && db.getSnapshot().stockMovements.length === milkMovesBeforeIntent
+    && inventoryOf('p-pack-mlt') === milkFgBefore
+    && availableBalanceG('p-pack-mlt') === milkPbBefore,
+)
+
+const day1Drafts = startFlavourSession('p-pack-mlt', 100)!
+const shortDraft = flavourResults(day1Drafts, { actualQty: 60, productionBalanceQty: 10000, shortProductionReason: 'Packaging Issue' })
+check('Step 1 can still save a true shortfall draft', db.saveProductionResult(day1Drafts.id, shortDraft) === true)
+check(
+  'Step 2 and Step 3 drafts save before Carry Forward is committed',
+  db.saveFinishedGoodsDistribution(day1Drafts.id, shortDraft) === true
+    && db.saveMaterialClosingDraft(day1Drafts.id, { acknowledged: true, inputs: plannedRemainingInputs(day1Drafts.id) }) === true,
+)
+const afterStepDrafts = db.getSnapshot().productionSessions.find((item) => item.id === day1Drafts.id)!
+check(
+  'Step 2/3 drafts do not create a Carry Forward queue',
+  afterStepDrafts.status === 'in_progress'
+    && afterStepDrafts.posted === false
+    && afterStepDrafts.items[0].shortProductionQty === 40
+    && afterStepDrafts.items[0].carryForward === false
+    && Boolean(afterStepDrafts.distributionSavedAt)
+    && Boolean(afterStepDrafts.materialClosing?.checkedAt)
+    && committedCarryForwardOrigins(db.getSnapshot()).length === 0,
+)
+const cfAfterDrafts = flavourResults(day1Drafts, { actualQty: 60, productionBalanceQty: 10000, carryForward: true })
+check('Carry Forward can be marked after Step 2/3 drafts', db.saveProductionResult(day1Drafts.id, cfAfterDrafts) === true)
+const afterCfSwitch = db.getSnapshot().productionSessions.find((item) => item.id === day1Drafts.id)!
+check(
+  'Switching to Carry Forward clears shortfall and stays unposted',
+  afterCfSwitch.items[0].carryForward === true
+    && afterCfSwitch.items[0].shortProductionQty === 0
+    && afterCfSwitch.items[0].shortProductionReason === ''
+    && afterCfSwitch.posted === false
+    && Boolean(afterCfSwitch.distributionSavedAt)
+    && Boolean(afterCfSwitch.materialClosing?.checkedAt)
+    && committedCarryForwardOrigins(db.getSnapshot()).length === 0,
+)
+
+const milkMovesBeforePost = db.getSnapshot().stockMovements.length
+const milkFgBeforePost = inventoryOf('p-pack-mlt')
+const milkPbBeforePost = availableBalanceG('p-pack-mlt')
+const postedCf = db.completeSession(day1Drafts.id, cfAfterDrafts, { acknowledged: true, inputs: plannedRemainingInputs(day1Drafts.id) })
+const originSession = db.getSnapshot().productionSessions.find((item) => item.id === day1Drafts.id)!
+const originLine = originSession.items[0]
+const cfQueue = committedCarryForwardOrigins(db.getSnapshot())
+check(
+  '60/40 Carry Forward split posts only after completeSession',
+  postedCf === true
+    && originSession.posted === true
+    && originSession.status === 'completed'
+    && originLine.originalTargetQty === 100
+    && originLine.targetQty === 100
+    && originLine.actualQty === 60
+    && remainingTargetQty(originLine) === 40
+    && originLine.productionBalanceQty === 10000
+    && originLine.carryForward === true
+    && originLine.shortProductionQty === 0
+    && Boolean(originLine.carriedForwardAt)
+    && inventoryOf('p-pack-mlt') === round2(milkFgBeforePost + 60)
+    && availableBalanceG('p-pack-mlt') === round2(milkPbBeforePost + 10000)
+    && db.getSnapshot().stockMovements.length > milkMovesBeforePost,
+)
+check('Original target remains 100 on origin', originLine.originalTargetQty === 100)
+check('Carry Forward queue only shows posted origins with remaining work', cfQueue.length === 1 && cfQueue[0].item.id === originLine.id && cfQueue[0].remaining === 40)
+check(
+  'Carry Forward is not treated as closed short production',
+  originLine.shortProductionQty === 0
+    && originLine.shortProductionReason === ''
+    && historySrc.includes('Carry Forward ·'),
+)
+
+const movesBeforeContinue = db.getSnapshot().stockMovements.length
+const continued = db.continueCarryForward(originSession.id, originLine.id)
+const continuationSession = continued ? db.getSnapshot().productionSessions.find((item) => item.id === continued.id) : undefined
+const continuationLine = continuationSession?.items.find((item) => item.carriedFromItemId === originLine.id)
+check(
+  'Continue Production creates today continuation without posting',
+  Boolean(continued)
+    && continuationSession?.id !== originSession.id
+    && continuationSession?.productionDate === systemProductionDate()
+    && originSession.status === 'completed'
+    && db.getSnapshot().productionSessions.find((item) => item.id === originSession.id)?.posted === true
+    && continuationLine?.targetQty === 40
+    && continuationLine?.originalTargetQty === 40
+    && continuationLine?.actualQty === 0
+    && continuationLine?.productionBalanceQty === 0
+    && continuationLine?.carriedFromSessionId === originSession.id
+    && continuationLine?.carriedFromItemId === originLine.id
+    && db.getSnapshot().stockMovements.length === movesBeforeContinue
+    && committedCarryForwardOrigins(db.getSnapshot()).length === 0,
+)
+check('Continuation target is remaining 40', continuationLine?.targetQty === 40 && continuationLine?.originalTargetQty === 40)
+check('10,000g Production Balance is not cloned onto continuation', continuationLine?.productionBalanceQty === 0 && originLine.productionBalanceQty === 10000)
+check(
+  'Combined job result is 100 through the origin link, not summed originals',
+  originLine.actualQty + (continuationLine?.targetQty ?? 0) === 100
+    && originLine.originalTargetQty + (continuationLine?.originalTargetQty ?? 0) === 140,
+)
+const duplicateContinue = db.continueCarryForward(originSession.id, originLine.id)
+check('Same origin cannot be resumed twice', duplicateContinue === null && continuationSession?.items.filter((item) => item.carriedFromItemId === originLine.id).length === 1)
+
+const continuationPlan = continuationSession ? buildSessionPlan(db.getSnapshot(), continuationSession) : undefined
+const continuationReq = continuationPlan?.products.find((row) => row.productId === 'p-pack-mlt')
+check(
+  'FIFO consumes existing Production Balance first',
+  continuationReq?.bulkRequiredG === required40
+    && continuationReq?.balanceUsedG === required40
+    && continuationReq?.freshBulkG === 0
+    && continuationReq?.balanceUsed.some((row) => row.qty === required40),
+)
+
+db.acceptSession(continuationSession!.id)
+db.startSession(continuationSession!.id, { recipePhoto: 'data:image/png;base64,aaa', recipePhotoName: 'sheet.jpg' })
+pickRawStore(continuationSession!.id)
+const liveContinuation = db.getSnapshot().productionSessions.find((item) => item.id === continuationSession!.id)!
+const day2Results = flavourResults(liveContinuation, { actualQty: 40 })
+check('Day 2 still uses Step 1 → Step 2 → Step 3', db.saveProductionResult(liveContinuation.id, day2Results) === true)
+check('Day 2 Step 2 distribution saves', db.saveFinishedGoodsDistribution(liveContinuation.id, day2Results) === true)
+check('Day 2 Step 3 material closing saves', db.saveMaterialClosingDraft(liveContinuation.id, { acknowledged: true, inputs: plannedRemainingInputs(liveContinuation.id) }) === true)
+const day2Posted = db.completeSession(liveContinuation.id, day2Results, { acknowledged: true, inputs: plannedRemainingInputs(liveContinuation.id) })
+const leftoverPb = availableBalanceG('p-pack-mlt')
+check(
+  'Day 2 complete consumes origin Production Balance and does not clone it',
+  day2Posted === true
+    && leftoverPb === round2(milkPbBeforePost + 10000 - required40)
+    && db.getSnapshot().productionSessions.find((item) => item.id === liveContinuation.id)?.items[0].productionBalanceQty === 0,
+)
+
+const zeroSession = startFlavourSession('p-pack-mlt', 100)!
+const zeroResults = flavourResults(zeroSession, { actualQty: 0, carryForward: true })
+check('Never-started 0/0 can be marked Carry Forward', db.saveProductionResult(zeroSession.id, zeroResults) === true)
+db.saveFinishedGoodsDistribution(zeroSession.id, zeroResults)
+db.saveMaterialClosingDraft(zeroSession.id, { acknowledged: true, inputs: plannedRemainingInputs(zeroSession.id) })
+check(
+  'Never-started 0/0 completes with remaining 100 and no finished-goods post',
+  db.completeSession(zeroSession.id, zeroResults, { acknowledged: true, inputs: plannedRemainingInputs(zeroSession.id) }) === true
+    && remainingTargetQty(db.getSnapshot().productionSessions.find((item) => item.id === zeroSession.id)!.items[0]) === 100
+    && db.getSnapshot().productionSessions.find((item) => item.id === zeroSession.id)!.items[0].actualQty === 0,
+)
+const zeroOrigin = db.getSnapshot().productionSessions.find((item) => item.id === zeroSession.id)!
+const zeroContinued = db.continueCarryForward(zeroOrigin.id, zeroOrigin.items[0].id)
+const zeroLine = zeroContinued
+  ? db.getSnapshot().productionSessions.find((item) => item.id === zeroContinued.id)?.items.find((item) => item.carriedFromItemId === zeroOrigin.items[0].id)
+  : undefined
+check(
+  'Never-started continuation target is the full remaining 100',
+  zeroLine?.targetQty === 100 && zeroLine.originalTargetQty === 100 && zeroLine.actualQty === 0 && zeroLine.productionBalanceQty === 0,
+)
+
+const shortSession = startFlavourSession('p-pack-ch', 100)!
+const shortResults = flavourResults(shortSession, { actualQty: 60, shortProductionReason: 'Material Shortage' })
+db.saveProductionResult(shortSession.id, shortResults)
+db.saveFinishedGoodsDistribution(shortSession.id, shortResults)
+db.saveMaterialClosingDraft(shortSession.id, { acknowledged: true, inputs: plannedRemainingInputs(shortSession.id) })
+const shortPosted = db.completeSession(shortSession.id, shortResults, { acknowledged: true, inputs: plannedRemainingInputs(shortSession.id) })
+const shortLine = db.getSnapshot().productionSessions.find((item) => item.id === shortSession.id)!.items[0]
+check(
+  'True shortfall remains the existing short-production workflow',
+  shortPosted === true
+    && shortLine.carryForward === false
+    && shortLine.shortProductionQty === 40
+    && shortLine.shortProductionReason === 'Material Shortage'
+    && committedCarryForwardOrigins(db.getSnapshot()).every((row) => row.item.id !== shortLine.id)
+    && db.continueCarryForward(shortSession.id, shortLine.id) === null,
+)
+
+const tinySession = startFlavourSession('p-pack-mlt', 100)!
+const tinyResults = flavourResults(tinySession, { actualQty: 60, productionBalanceQty: 100, carryForward: true })
+db.saveProductionResult(tinySession.id, tinyResults)
+db.saveFinishedGoodsDistribution(tinySession.id, tinyResults)
+db.saveMaterialClosingDraft(tinySession.id, { acknowledged: true, inputs: plannedRemainingInputs(tinySession.id) })
+db.completeSession(tinySession.id, tinyResults, { acknowledged: true, inputs: plannedRemainingInputs(tinySession.id) })
+const tinyOrigin = db.getSnapshot().productionSessions.find((item) => item.id === tinySession.id)!
+const tinyContinued = db.continueCarryForward(tinyOrigin.id, tinyOrigin.items[0].id)
+const tinyLive = tinyContinued ? db.getSnapshot().productionSessions.find((item) => item.id === tinyContinued.id) : undefined
+const tinyPlan = tinyLive ? buildSessionPlan(db.getSnapshot(), tinyLive) : undefined
+const tinyReq = tinyPlan?.products.find((row) => row.productId === 'p-pack-mlt')
+const fifoShort = allocateBalanceFifo(db.getSnapshot().productionBalances, 'p-pack-mlt', 20000)
+check(
+  'Fresh mix only when existing Production Balance is insufficient',
+  tinyReq?.balanceUsedG === 100
+    && tinyReq.freshBulkG === round2((tinyReq.bulkRequiredG ?? 0) - 100)
+    && (tinyReq.freshBulkG ?? 0) > 0
+    && fifoShort.remainingRequired > 0,
 )
 
 const failed = results.filter((row) => !row.ok)

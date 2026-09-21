@@ -6,6 +6,7 @@ import { SalesPage } from '@/features/sales/SalesPage'
 import { CategoriesPage, ProductsPage, RawMaterialsPage } from '@/features/products/ProductsPage'
 import { PRODUCT_PRICING_PATH, ProductPricingPage } from '@/features/products/ProductPricingPage'
 import { InventoryPage } from '@/features/inventory/InventoryPage'
+import { StockUsagePage, ToOrderPage } from '@/features/inventory/ToOrderPages'
 import { WarehouseMapPage } from '@/features/warehouse/WarehouseMapPage'
 import { StockAdjustmentPage, StockCountPage, StockMovementsPage, StockTransferPage } from '@/features/inventory/StockPages'
 import { NewPurchasePage, PurchasesPage } from '@/features/purchases/PurchasesPage'
@@ -24,6 +25,7 @@ import { ProductionHistoryPage, ProductionSessionDetailPage, ProductionSessionEd
 import { ManufacturingReportPage } from '@/features/manufacturing/ManufacturingReportsPages'
 import { TodaysProductionPage } from '@/features/manufacturing/TodaysProductionPage'
 import { CompleteProductionPage } from '@/features/manufacturing/CompleteProductionPage'
+import { CarryForwardPage } from '@/features/manufacturing/CarryForwardPage'
 import { PickingListPage } from '@/features/manufacturing/PickingListPage'
 
 import { QuotationsPage, QuotationEditorPage, QuotationDetailPage, QuotationPrintPage } from '@/features/documents/QuotationPages'
@@ -70,6 +72,8 @@ export default function App() {
           <Route path="/purchase-returns" element={<PurchaseReturnsPage />} />
           <Route path="/suppliers" element={<SuppliersPage />} />
           <Route path="/inventory" element={<InventoryPage />} />
+          <Route path="/inventory/stock-usage" element={<StockUsagePage />} />
+          <Route path="/inventory/to-order" element={<ToOrderPage />} />
           <Route path="/inventory/warehouse-map" element={<WarehouseMapPage />} />
           <Route path="/inventory/opening-balance/:id" element={<OpeningBalancePage />} />
           <Route path="/inventory/opening-balance" element={<OpeningBalancePage />} />
@@ -84,6 +88,7 @@ export default function App() {
           <Route path="/manufacturing" element={<ManufacturingDashboardPage />} />
           <Route path="/manufacturing/today" element={<TodaysProductionPage />} />
           <Route path="/manufacturing/today/:id" element={<TodaysProductionPage />} />
+          <Route path="/manufacturing/carry-forward" element={<CarryForwardPage />} />
           <Route path="/manufacturing/complete/:id" element={<CompleteProductionPage />} />
           <Route path="/manufacturing/complete" element={<CompleteProductionPage />} />
           <Route path="/manufacturing/bom" element={<BomListPage />} />

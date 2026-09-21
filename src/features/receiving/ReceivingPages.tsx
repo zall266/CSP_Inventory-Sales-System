@@ -1,5 +1,5 @@
-import { useMemo, useState } from 'react'
-import { Link, useNavigate, useParams } from 'react-router-dom'
+import { useEffect, useMemo, useState } from 'react'
+import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { Plus, Trash2 } from 'lucide-react'
 import { Badge, Button, Card, EmptyState, Field, FilterRow, Input, PageHeader, Select, StatusBadge } from '@/components/ui'
 import { PermissionDenied } from '@/features/documents/A4Sheet'
@@ -13,6 +13,7 @@ import {
   receivingQtyHint,
   receivingSourceLabel,
 } from '@/features/receiving/receivingModel'
+import { orderChannelToReceivingSource } from '@/features/inventory/toOrderModel'
 import { hasPermission } from '@/features/settings/permissions'
 import { useApi, useLookups, useStore } from '@/store/hooks'
 import { formatDate, formatQty } from '@/utils/format'
@@ -131,16 +132,36 @@ export function NewReceivingPage() {
   const state = useStore()
   const api = useApi()
   const navigate = useNavigate()
+  const [searchParams] = useSearchParams()
   const materials = receivableRawMaterials(state)
-  const [warehouseId, setWarehouseId] = useState(state.settings.defaultWarehouseId)
-  const [source, setSource] = useState<(typeof RECEIVING_SOURCES)[number]['id']>('supplier')
+  const orderId = searchParams.get('orderId') ?? ''
+  const order = (state.stockOrders ?? []).find((row) => row.id === orderId && row.status === 'ordered')
+  const [warehouseId, setWarehouseId] = useState(order?.warehouseId ?? state.settings.defaultWarehouseId)
+  const [source, setSource] = useState<(typeof RECEIVING_SOURCES)[number]['id']>(orderChannelToReceivingSource(order?.channel))
   const [supplierId, setSupplierId] = useState('')
-  const [supplierNote, setSupplierNote] = useState('')
-  const [notes, setNotes] = useState('')
+  const [supplierNote, setSupplierNote] = useState(order?.channel && order.channel !== 'Supplier' ? String(order.channel) : '')
+  const [notes, setNotes] = useState(order?.remark ?? '')
   const [photoUrl, setPhotoUrl] = useState('')
   const [photoName, setPhotoName] = useState('')
   const [photoError, setPhotoError] = useState('')
-  const [lines, setLines] = useState<DraftLine[]>([emptyReceivingLine(materials[0])])
+  const orderedProduct = order ? state.products.find((item) => item.id === order.productId) : undefined
+  const [lines, setLines] = useState<DraftLine[]>([emptyReceivingLine(orderedProduct ?? materials[0])])
+
+  useEffect(() => {
+    if (!order) return
+    setWarehouseId(order.warehouseId)
+    setSource(orderChannelToReceivingSource(order.channel))
+    setSupplierNote(order.channel && order.channel !== 'Supplier' ? String(order.channel) : '')
+    setNotes(order.remark ?? '')
+    const product = state.products.find((item) => item.id === order.productId)
+    setLines([emptyReceivingLine(product)])
+  }, [order?.id])
+
+  const lineProducts = useMemo(() => {
+    const list = [...materials]
+    if (orderedProduct && !list.some((item) => item.id === orderedProduct.id)) list.unshift(orderedProduct)
+    return list
+  }, [materials, orderedProduct])
 
   if (!hasPermission(state, 'receiving.create')) {
     return <PermissionDenied title="New receiving" subtitle="You do not have permission to receive raw materials." />
@@ -168,6 +189,7 @@ export function NewReceivingPage() {
       photoUrl: photoUrl || undefined,
       photoName: photoName || undefined,
       items: lines,
+      stockOrderId: order?.id,
     })
     if (created) navigate(`/receiving/${created.id}`)
   }
@@ -178,6 +200,14 @@ export function NewReceivingPage() {
         title="New receiving"
         subtitle="Confirm physical arrival. Stock increases immediately. Price is not required."
       />
+      {order && orderedProduct ? (
+        <Card className="mb-4 p-4 text-sm text-slate-600">
+          Awaiting receiving for <span className="font-medium text-slate-900">{orderedProduct.name}</span>
+          {order.channel ? ` · ordered via ${order.channel}` : ''}
+          {order.markedOrderedBy ? ` · ${order.markedOrderedBy}` : ''}
+          . Enter the actual quantity received.
+        </Card>
+      ) : null}
       <Card className="mb-4 grid gap-4 p-5 sm:grid-cols-2 lg:grid-cols-4">
         <Field label="Source">
           <Select value={source} onChange={(event) => setSource(event.target.value as typeof source)}>
@@ -205,7 +235,7 @@ export function NewReceivingPage() {
           </Field>
         )}
         <Field label="Warehouse">
-          <Select value={warehouseId} onChange={(event) => setWarehouseId(event.target.value)}>
+          <Select value={warehouseId} onChange={(event) => setWarehouseId(event.target.value)} disabled={Boolean(order)}>
             {companyWarehouses(state.warehouses).map((warehouse) => (
               <option key={warehouse.id} value={warehouse.id}>
                 {warehouse.name}
@@ -226,7 +256,7 @@ export function NewReceivingPage() {
           <Button
             size="sm"
             variant="secondary"
-            onClick={() => setLines([...lines, emptyReceivingLine(materials[0])])}
+            onClick={() => setLines([...lines, emptyReceivingLine(lineProducts[0] ?? materials[0])])}
           >
             <Plus size={14} /> Add line
           </Button>
@@ -243,7 +273,7 @@ export function NewReceivingPage() {
                       setLines(lines.map((item, i) => (i === index ? { ...item, productId: event.target.value } : item)))
                     }
                   >
-                    {materials.map((material) => (
+                    {lineProducts.map((material) => (
                       <option key={material.id} value={material.id}>
                         {material.name} · {material.sku}
                       </option>

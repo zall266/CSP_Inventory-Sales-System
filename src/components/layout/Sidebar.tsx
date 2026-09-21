@@ -19,6 +19,7 @@ import {
   PackageMinus,
   PackagePlus,
   Receipt,
+  Redo2,
   Settings,
   ShoppingBag,
   ShoppingCart,
@@ -76,6 +77,8 @@ export const navGroups: NavGroup[] = [
     label: 'INVENTORY',
     items: [
       { to: '/inventory', label: 'Inventory', icon: Warehouse },
+      { to: '/inventory/stock-usage', label: 'Stock Usage', icon: PackageMinus },
+      { to: '/inventory/to-order', label: 'To Order', icon: ShoppingBag },
       { to: '/inventory/warehouse-map', label: 'Warehouse Map', icon: MapPin },
       { to: '/inventory/opening-balance', label: 'Opening Balance', icon: Layers },
       { to: '/stock-movements', label: 'Stock Movements', icon: ClipboardList },
@@ -90,6 +93,7 @@ export const navGroups: NavGroup[] = [
     items: [
       { to: '/manufacturing', label: 'Manufacturing Dashboard', icon: Factory },
       { to: '/manufacturing/today', label: "Today's Production", icon: ClipboardList },
+      { to: '/manufacturing/carry-forward', label: 'Carry Forward', icon: Redo2 },
       { to: '/manufacturing/bom', label: 'Bill of Materials', icon: PackagePlus },
       { to: '/manufacturing/planning', label: 'Production Planning', icon: CalendarDays },
       { to: '/manufacturing/picking', label: 'Picking List', icon: FlaskConical },
@@ -165,6 +169,8 @@ function navItemVisible(state: ReturnType<typeof useStore>, item: NavItem) {
   if (item.to === '/settings/users') return canAccessUsersAndRoles(state, actorUser(state))
   if (item.to === '/inventory/warehouse-map') return hasPermission(state, 'warehouse_map.view')
   if (item.to === '/inventory/opening-balance') return hasPermission(state, 'opening_balance.view')
+  if (item.to === '/inventory/stock-usage') return hasPermission(state, 'inventory.usage')
+  if (item.to === '/inventory/to-order') return hasPermission(state, 'inventory.view')
   if (item.to === '/sales/agents') return hasPermission(state, 'agent.view') || hasPermission(state, 'agent.manage') || Boolean(currentLinkedAgent(state))
   if (item.to === '/products/pricing') return hasPermission(state, 'agent.manage')
   if (item.to === '/tasks') return hasPermission(state, 'task.view')
