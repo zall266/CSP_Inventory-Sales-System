@@ -196,8 +196,8 @@ export function DeliveryA4({ state, order }: { state: AppState; order: DeliveryO
           items={[
             { label: 'DO No', value: order.doNo },
             { label: 'DO date', value: dateLabel(order.date) },
-            { label: 'Related invoice', value: order.invoiceNo || '—' },
-            { label: 'Quotation', value: order.quotationNo || '—' },
+            ...(order.invoiceNo ? [{ label: 'Related invoice', value: order.invoiceNo }] : []),
+            ...(order.quotationNo ? [{ label: 'Quotation', value: order.quotationNo }] : []),
             { label: 'Prepared by', value: order.preparedBy },
           ]}
         />
@@ -221,7 +221,7 @@ export function DeliveryA4({ state, order }: { state: AppState; order: DeliveryO
             <th>No</th>
             <th>Product</th>
             <th>Description</th>
-            <th>Quantity</th>
+            <th className="text-right">Quantity</th>
             <th>Unit</th>
           </tr>
         </thead>
@@ -231,7 +231,7 @@ export function DeliveryA4({ state, order }: { state: AppState; order: DeliveryO
               <td>{index + 1}</td>
               <td>{state.products.find((item) => item.id === line.productId)?.sku ?? ''}</td>
               <td>{line.description}</td>
-              <td className="tabular">{qty(line.qty)}</td>
+              <td className="tabular text-right">{qty(line.qty)}</td>
               <td>{line.unit}</td>
             </tr>
           ))}
@@ -253,10 +253,6 @@ export function DeliveryA4({ state, order }: { state: AppState; order: DeliveryO
           <SignLine label="Date" />
           <SignLine label="Driver signature" />
         </div>
-      </div>
-      <div className="a4-avoid-break mt-8 flex gap-8">
-        <SignatureBox label="Prepared by" />
-        <SignatureBox label="Customer signature / stamp" />
       </div>
     </div>
   )
