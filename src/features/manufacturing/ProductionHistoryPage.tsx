@@ -5,7 +5,7 @@ import { movementLabel } from '@/components/ProductMark'
 import { useApi, useLookups, useStore } from '@/store/hooks'
 import { formatDate, formatDateTime, formatQty } from '@/utils/format'
 import { formatUnit } from '@/features/products/masterData'
-import { sessionTotals } from './sessionPlan'
+import { originSessionForLine, sessionTotals } from './sessionPlan'
 import { allocationLabel, expectedRemainingQty, usesPurchaseUnitSplit } from './materialClosing'
 import { hasPermission } from '@/features/settings/permissions'
 
@@ -167,18 +167,34 @@ export function ProductionSessionDetailPage() {
               </tr>
             </thead>
             <tbody>
-              {session.items.map((item) => (
+              {session.items.map((item) => {
+                const origin = originSessionForLine(state.productionSessions, item)
+                const originLine = origin?.items.find((row) => row.id === item.carriedFromItemId)
+                return (
                 <tr key={item.id} className="cursor-default">
-                  <td className="font-medium">{product(item.productId)?.name}</td>
+                  <td className="font-medium">
+                    {product(item.productId)?.name}
+                    {origin && (
+                      <div className="text-xs font-normal text-indigo-700">
+                        Continued from {formatDate(`${origin.productionDate}T00:00:00+08:00`)}
+                        {originLine ? ` · original ${originLine.originalTargetQty}` : ''}
+                      </div>
+                    )}
+                  </td>
                   <td className="tabular">{item.originalTargetQty}</td>
                   <td className="tabular">{item.targetQty}</td>
                   <td className="tabular">{item.actualQty || '—'}</td>
-                  <td>{item.shortProductionQty ? `${item.shortProductionQty} · ${item.shortProductionReason}` : '—'}</td>
+                  <td>
+                    {item.carryForward && session.posted
+                      ? `Carry Forward · ${Math.max(0, item.targetQty - (item.actualQty || 0))} remaining`
+                      : item.shortProductionQty ? `${item.shortProductionQty} · ${item.shortProductionReason}` : '—'}
+                  </td>
                   <td className="tabular">{item.productionBalanceQty ? `${formatQty(item.productionBalanceQty)} g` : '—'}</td>
                   <td>{item.balanceContainer || '—'}</td>
                   <td className="tabular">{item.wasteQty ? `${formatQty(item.wasteQty)} g` : '—'}</td>
                 </tr>
-              ))}
+                )
+              })}
             </tbody>
           </table>
         </div>

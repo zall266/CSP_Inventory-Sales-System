@@ -9,7 +9,7 @@ import { hasPermission } from '@/features/settings/permissions'
 import { allocationLabel, sessionAllocatedQty } from './materialClosing'
 import { formatUnit } from '@/features/products/masterData'
 import { AmendPlanModal, CancelPlanDialog, EditPlannedModal, planActionFlags } from './planAmendment'
-import { buildSessionPlan, canEditSession, currentUser, isSessionOperationalToday, systemProductionDate, todayOperationalSession } from './sessionPlan'
+import { buildSessionPlan, canEditSession, currentUser, isSessionOperationalToday, originSessionForLine, systemProductionDate, todayOperationalSession } from './sessionPlan'
 
 const SAMPLE_SHEET =
   'data:image/svg+xml;utf8,' +
@@ -145,6 +145,8 @@ function SessionWorkspace({ session }: { session: ProductionSession }) {
               {session.items.map((item) => {
                 const p = product(item.productId)
                 const lineStatus = session.status === 'completed' ? 'completed' : session.status === 'in_progress' ? 'in_progress' : session.status
+                const origin = originSessionForLine(state.productionSessions, item)
+                const originLine = origin?.items.find((row) => row.id === item.carriedFromItemId)
                 return (
                   <tr key={item.id} className="cursor-default">
                     <td>
@@ -153,6 +155,12 @@ function SessionWorkspace({ session }: { session: ProductionSession }) {
                         <div>
                           <div className="font-medium">{p?.name}</div>
                           <div className="text-xs text-slate-400">{p?.sku}</div>
+                          {origin && (
+                            <div className="text-xs text-indigo-700">
+                              Continued from {formatDate(`${origin.productionDate}T00:00:00+08:00`)}
+                              {originLine ? ` · original ${originLine.originalTargetQty} packs` : ''}
+                            </div>
+                          )}
                         </div>
                       </div>
                     </td>

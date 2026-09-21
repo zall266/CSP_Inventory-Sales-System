@@ -19,6 +19,7 @@ import {
   PackageMinus,
   PackagePlus,
   Receipt,
+  Redo2,
   Settings,
   ShoppingBag,
   ShoppingCart,
@@ -92,6 +93,7 @@ export const navGroups: NavGroup[] = [
     items: [
       { to: '/manufacturing', label: 'Manufacturing Dashboard', icon: Factory },
       { to: '/manufacturing/today', label: "Today's Production", icon: ClipboardList },
+      { to: '/manufacturing/carry-forward', label: 'Carry Forward', icon: Redo2 },
       { to: '/manufacturing/bom', label: 'Bill of Materials', icon: PackagePlus },
       { to: '/manufacturing/planning', label: 'Production Planning', icon: CalendarDays },
       { to: '/manufacturing/picking', label: 'Picking List', icon: FlaskConical },
