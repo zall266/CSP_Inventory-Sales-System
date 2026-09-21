@@ -57,7 +57,7 @@ import {
 import { clearAttachmentBlobs, deleteAttachmentBlob } from '@/store/attachmentBlobs'
 import { applyBomCosts, hydrateProducts, normalizeUnit, parseNonNegativeMoney, productHasBom, productIsSellable, productIsUsed, purchaseQtyToBaseQty, qtyToBaseUnit, resolveProductSku, skuIsUnique, validatePurchaseConversion } from '@/features/products/masterData'
 import { bomLinesForQty, consumptionCost, hasShortage, materialAvailability } from '@/features/manufacturing/helpers'
-import { buildSessionPlan, canAmendPlanStatus, canEditSession, currentUser, isRawStorePickingLine, isSessionOperationalToday, mergePicking } from '@/features/manufacturing/sessionPlan'
+import { buildSessionPlan, canAmendPlanStatus, canEditSession, canRunProduction, currentUser, isCarryForwardResumed, isRawStorePickingLine, isSessionOperationalToday, mergePicking, remainingTargetQty, systemProductionDate, todaySessions } from '@/features/manufacturing/sessionPlan'
 import { buildSessionMaterialClosing, closingLineFromInput, isSignificantVariance } from '@/features/manufacturing/materialClosing'
 import {
   defaultPermissionsForLegacy,
@@ -283,6 +283,7 @@ function hydrateData(data: AppData): AppData {
         ...item,
         displayQty: item.displayQty ?? 0,
         cartonQty: item.cartonQty ?? 0,
+        carryForward: item.carryForward ?? false,
       })),
       targetChanges: session.targetChanges ?? [],
     })),
@@ -5394,6 +5395,7 @@ export const db = {
       wasteQty: number
       shortProductionReason: string
       notes: string
+      carryForward?: boolean
     }>,
   ) {
     const session = state.productionSessions.find((item) => item.id === id)
@@ -5428,8 +5430,8 @@ export const db = {
         toast('Select a valid Storage Box', 'Production balance must use an active Warehouse Map storage box.', 'warning')
         return false
       }
-      if (result.actualQty < item.targetQty && !result.shortProductionReason) {
-        toast('Select a reason', `${productById(item.productId)?.name} is below target.`, 'warning')
+      if (result.actualQty < item.targetQty && !result.carryForward && !result.shortProductionReason) {
+        toast('Select a reason', `${productById(item.productId)?.name} is below target. Choose Carry Forward or Short Production.`, 'warning')
         return false
       }
     }
@@ -5443,6 +5445,7 @@ export const db = {
               resultSavedAt: savedAt,
               items: item.items.map((row) => {
                 const result = results.find((entry) => entry.productId === row.productId)!
+                const carryForward = Boolean(result.carryForward) && result.actualQty < row.targetQty
                 return {
                   ...row,
                   actualQty: result.actualQty,
@@ -5450,9 +5453,12 @@ export const db = {
                   balanceLocation: result.balanceLocation,
                   balanceContainer: result.balanceContainer,
                   wasteQty: result.wasteQty,
-                  shortProductionQty: Math.max(0, row.targetQty - result.actualQty),
-                  shortProductionReason: result.shortProductionReason,
+                  shortProductionQty: carryForward ? 0 : Math.max(0, row.targetQty - result.actualQty),
+                  shortProductionReason: carryForward ? '' : result.shortProductionReason,
                   notes: result.notes,
+                  carryForward,
+                  carriedForwardAt: undefined,
+                  carriedForwardBy: undefined,
                 }
               }),
             }
@@ -5605,6 +5611,7 @@ export const db = {
       notes: string
       displayQty: number
       cartonQty: number
+      carryForward?: boolean
     }>,
     closing?: {
       acknowledged: boolean
@@ -5652,8 +5659,9 @@ export const db = {
         toast('Select a valid Storage Box', 'Production balance must use an active Warehouse Map storage box.', 'warning')
         return false
       }
-      if (result.actualQty < item.targetQty && !result.shortProductionReason) {
-        toast('Select a reason', `${productById(item.productId)?.name} is below target.`, 'warning')
+      const carryForward = Boolean(result.carryForward ?? item.carryForward) && result.actualQty < item.targetQty
+      if (result.actualQty < item.targetQty && !carryForward && !result.shortProductionReason) {
+        toast('Select a reason', `${productById(item.productId)?.name} is below target. Choose Carry Forward or Short Production.`, 'warning')
         return false
       }
       const displayQty = round2(result.displayQty || 0)
@@ -5671,8 +5679,10 @@ export const db = {
         return false
       }
     }
+    const date = nowIso()
     const items = session.items.map((item) => {
       const result = results.find((row) => row.productId === item.productId)!
+      const carryForward = Boolean(result.carryForward ?? item.carryForward) && result.actualQty < item.targetQty
       return {
         ...item,
         actualQty: result.actualQty,
@@ -5680,16 +5690,18 @@ export const db = {
         balanceLocation: result.balanceLocation,
         balanceContainer: result.balanceContainer,
         wasteQty: result.wasteQty,
-        shortProductionQty: Math.max(0, item.targetQty - result.actualQty),
-        shortProductionReason: result.shortProductionReason,
+        shortProductionQty: carryForward ? 0 : Math.max(0, item.targetQty - result.actualQty),
+        shortProductionReason: carryForward ? '' : result.shortProductionReason,
         notes: result.notes,
         displayQty: round2(result.displayQty || 0),
         cartonQty: round2(result.cartonQty || 0),
+        carryForward,
+        carriedForwardAt: carryForward ? date : undefined,
+        carriedForwardBy: carryForward ? user.name : undefined,
       }
     })
     const working = { ...session, items }
     const plan = buildSessionPlan(state, working)
-    const date = nowIso()
     let inventory = state.inventory
     let movements = state.stockMovements
     let balances = state.productionBalances
@@ -5869,6 +5881,127 @@ export const db = {
     emit()
     toast('Production completed', session.reference)
     return true
+  },
+
+  continueCarryForward(originSessionId: string, originItemId: string) {
+    const user = currentUser(state)
+    if (!canRunProduction(user.role)) {
+      toast('Permission denied', 'You cannot continue production.', 'danger')
+      return null
+    }
+    const originSession = state.productionSessions.find((item) => item.id === originSessionId)
+    const origin = originSession?.items.find((item) => item.id === originItemId)
+    if (!originSession || !origin) {
+      toast('Carry Forward not found', undefined, 'warning')
+      return null
+    }
+    if (!originSession.posted || originSession.status !== 'completed' || !origin.carryForward) {
+      toast('Carry Forward is not ready', 'Finish and complete the original production first.', 'warning')
+      return null
+    }
+    const remaining = remainingTargetQty(origin)
+    if (remaining <= 0) {
+      toast('Nothing remaining to continue', undefined, 'info')
+      return null
+    }
+    if (isCarryForwardResumed(state.productionSessions, origin.id)) {
+      toast('Already continued', 'This flavour is already on a later production session.', 'warning')
+      return null
+    }
+    const today = systemProductionDate()
+    const operational = todaySessions(state.productionSessions, today).find(
+      (item) => item.status !== 'completed' && item.status !== 'cancelled',
+    )
+    const bom = state.boms.find((item) => item.productId === origin.productId && item.status === 'active')
+    const makeLine = (sessionId: string) => ({
+      id: uid('psi'),
+      sessionId,
+      productId: origin.productId,
+      bomId: bom?.id ?? origin.bomId,
+      originalTargetQty: remaining,
+      targetQty: remaining,
+      actualQty: 0,
+      shortProductionQty: 0,
+      shortProductionReason: '',
+      productionBalanceQty: 0,
+      balanceLocation: 'Main Warehouse',
+      balanceContainer: '',
+      wasteQty: 0,
+      wasteReason: '',
+      notes: '',
+      displayQty: 0,
+      cartonQty: 0,
+      carryForward: false,
+      carriedFromSessionId: originSession.id,
+      carriedFromItemId: origin.id,
+    })
+    if (!operational) {
+      const created = this.createDailySession({
+        productionDate: today,
+        items: [{ productId: origin.productId, targetQty: remaining }],
+        notes: `Continued from ${originSession.reference}`,
+      })
+      if (!created) return null
+      setData({
+        productionSessions: state.productionSessions.map((item) =>
+          item.id === created.id
+            ? {
+                ...item,
+                items: item.items.map((row) =>
+                  row.productId === origin.productId
+                    ? {
+                        ...row,
+                        originalTargetQty: remaining,
+                        targetQty: remaining,
+                        actualQty: 0,
+                        productionBalanceQty: 0,
+                        shortProductionQty: 0,
+                        shortProductionReason: '',
+                        carryForward: false,
+                        carriedFromSessionId: originSession.id,
+                        carriedFromItemId: origin.id,
+                      }
+                    : row,
+                ),
+              }
+            : item,
+        ),
+      })
+      toast('Continued on today\'s production', productById(origin.productId)?.name)
+      return state.productionSessions.find((item) => item.id === created.id) ?? created
+    }
+    if (operational.items.some((item) => item.productId === origin.productId)) {
+      toast('Already on today\'s production', productById(origin.productId)?.name, 'warning')
+      return null
+    }
+    const nextItem = makeLine(operational.id)
+    const nextItems = [...operational.items, nextItem]
+    const nextSession = { ...operational, items: nextItems }
+    const merged = operational.status === 'in_progress' ? mergePicking(operational.picking, buildSessionPlan(state, nextSession).picking) : { picking: operational.picking, excess: [] }
+    setData({
+      productionSessions: state.productionSessions.map((item) =>
+        item.id === operational.id
+          ? {
+              ...item,
+              items: nextItems,
+              picking: merged.picking,
+              excessReturns: [
+                ...item.excessReturns,
+                ...merged.excess.map((row) => ({
+                  id: uid('ex'),
+                  productId: row.productId,
+                  qty: row.qty,
+                  unit: row.unit,
+                  status: 'to_return' as const,
+                  notes: `Carry forward ${row.productId}`,
+                })),
+              ],
+            }
+          : item,
+      ),
+    })
+    toast('Continued on today\'s production', productById(origin.productId)?.name)
+    return state.productionSessions.find((item) => item.id === operational.id) ?? nextSession
   },
 
   editCompletedSession(

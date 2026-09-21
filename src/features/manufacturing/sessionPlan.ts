@@ -29,6 +29,47 @@ export function remainingTargetQty(item: Pick<ProductionSession['items'][number]
   return Math.max(0, item.targetQty - (item.actualQty || 0))
 }
 
+export function isCarryForwardResumed(sessions: ProductionSession[], originItemId: string) {
+  return sessions.some((session) => session.items.some((item) => item.carriedFromItemId === originItemId))
+}
+
+export type CarryForwardOrigin = {
+  session: ProductionSession
+  item: ProductionSession['items'][number]
+  remaining: number
+  availableBalanceG: number
+}
+
+export function committedCarryForwardOrigins(state: Pick<AppState, 'productionSessions' | 'productionBalances'>): CarryForwardOrigin[] {
+  const sessions = state.productionSessions ?? []
+  return sessions.flatMap((session) => {
+    if (!session.posted || session.status !== 'completed') return []
+    return session.items
+      .filter((item) => item.carryForward)
+      .map((item) => {
+        const remaining = remainingTargetQty(item)
+        const resumed = isCarryForwardResumed(sessions, item.id)
+        return { session, item, remaining, resumed }
+      })
+      .filter((row) => row.remaining > 0 && !row.resumed)
+      .map(({ session, item, remaining }) => ({
+        session,
+        item,
+        remaining,
+        availableBalanceG: round2(
+          (state.productionBalances ?? [])
+            .filter((row) => row.productId === item.productId && row.status === 'available' && row.quantity > 0)
+            .reduce((sum, row) => sum + row.quantity, 0),
+        ),
+      }))
+  })
+}
+
+export function originSessionForLine(sessions: ProductionSession[], item: ProductionSession['items'][number]) {
+  if (!item.carriedFromSessionId) return undefined
+  return sessions.find((session) => session.id === item.carriedFromSessionId)
+}
+
 export function roleLabel(role: UserRole) {
   if (role === 'manager') return 'Supervisor'
   if (role === 'warehouse') return 'Warehouse'

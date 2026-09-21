@@ -75,6 +75,7 @@ export function CompleteProductionPage() {
         notes: item.notes,
         displayQty,
         cartonQty: session?.distributionSavedAt ? item.cartonQty : (item.cartonQty || Math.max(0, actualQty - displayQty)),
+        carryForward: Boolean(item.carryForward) && actualQty < item.targetQty,
       }
     }),
   )
@@ -159,8 +160,8 @@ export function CompleteProductionPage() {
         api.toast('Select a valid Storage Box', 'Production balance must use an active Warehouse Map storage box.', 'warning')
         return
       }
-      if (result.actualQty < item.targetQty && !result.shortProductionReason) {
-        api.toast('Select a reason', `${product(item.productId)?.name} is below target.`, 'warning')
+      if (result.actualQty < item.targetQty && !result.carryForward && !result.shortProductionReason) {
+        api.toast('Select a reason', `${product(item.productId)?.name} is below target. Choose Carry Forward or Short Production.`, 'warning')
         return
       }
     }
@@ -316,12 +317,38 @@ export function CompleteProductionPage() {
                       <Input type="number" min={0} value={row.wasteQty} onChange={(e) => setRow({ wasteQty: Number(e.target.value) })} />
                     </Field>
                     {row.actualQty < item.targetQty && (
-                      <Field label="Reason actual below target" className="sm:col-span-2">
-                        <Select value={row.shortProductionReason} onChange={(e) => setRow({ shortProductionReason: e.target.value })}>
-                          <option value="">Select reason</option>
-                          {SHORT_REASONS.map((reason) => <option key={reason} value={reason}>{reason}</option>)}
-                        </Select>
-                      </Field>
+                      <div className="sm:col-span-2 lg:col-span-3 space-y-3">
+                        <div>
+                          <div className="text-xs font-medium text-slate-500">Below target</div>
+                          <p className="mt-1 text-xs text-slate-500">Continue this flavour on another production day, or record a closed shortfall.</p>
+                          <div className="mt-2 flex flex-wrap gap-2">
+                            <Button
+                              type="button"
+                              variant={row.carryForward ? 'primary' : 'secondary'}
+                              onClick={() => setRow({ carryForward: true, shortProductionReason: '' })}
+                            >
+                              Carry Forward
+                            </Button>
+                            <Button
+                              type="button"
+                              variant={!row.carryForward && row.shortProductionReason ? 'primary' : 'secondary'}
+                              onClick={() => setRow({ carryForward: false })}
+                            >
+                              Short Production
+                            </Button>
+                          </div>
+                        </div>
+                        {row.carryForward ? (
+                          <p className="text-sm text-indigo-800">Carry Forward — continue this flavour on another production day. Remaining packs stay open.</p>
+                        ) : (
+                          <Field label="Short production reason">
+                            <Select value={row.shortProductionReason} onChange={(e) => setRow({ carryForward: false, shortProductionReason: e.target.value })}>
+                              <option value="">Select reason</option>
+                              {SHORT_REASONS.map((reason) => <option key={reason} value={reason}>{reason}</option>)}
+                            </Select>
+                          </Field>
+                        )}
+                      </div>
                     )}
                     <Field label="Notes" className="sm:col-span-2 lg:col-span-3">
                       <Textarea rows={2} value={row.notes} onChange={(e) => setRow({ notes: e.target.value })} />

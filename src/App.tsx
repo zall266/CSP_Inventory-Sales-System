@@ -25,6 +25,7 @@ import { ProductionHistoryPage, ProductionSessionDetailPage, ProductionSessionEd
 import { ManufacturingReportPage } from '@/features/manufacturing/ManufacturingReportsPages'
 import { TodaysProductionPage } from '@/features/manufacturing/TodaysProductionPage'
 import { CompleteProductionPage } from '@/features/manufacturing/CompleteProductionPage'
+import { CarryForwardPage } from '@/features/manufacturing/CarryForwardPage'
 import { PickingListPage } from '@/features/manufacturing/PickingListPage'
 
 import { QuotationsPage, QuotationEditorPage, QuotationDetailPage, QuotationPrintPage } from '@/features/documents/QuotationPages'
@@ -87,6 +88,7 @@ export default function App() {
           <Route path="/manufacturing" element={<ManufacturingDashboardPage />} />
           <Route path="/manufacturing/today" element={<TodaysProductionPage />} />
           <Route path="/manufacturing/today/:id" element={<TodaysProductionPage />} />
+          <Route path="/manufacturing/carry-forward" element={<CarryForwardPage />} />
           <Route path="/manufacturing/complete/:id" element={<CompleteProductionPage />} />
           <Route path="/manufacturing/complete" element={<CompleteProductionPage />} />
           <Route path="/manufacturing/bom" element={<BomListPage />} />

@@ -951,6 +951,12 @@ export type ProductionSessionItem = {
   notes: string
   displayQty: number
   cartonQty: number
+  /** Intent on in_progress; committed queue only when session.posted. */
+  carryForward?: boolean
+  carriedFromSessionId?: string
+  carriedFromItemId?: string
+  carriedForwardAt?: string
+  carriedForwardBy?: string
 }
 
 export type MaterialClosingLine = {
