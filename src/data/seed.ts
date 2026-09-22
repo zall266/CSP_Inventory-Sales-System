@@ -1302,6 +1302,7 @@ export function createSeedData(): AppData {
     notifications,
     boms,
     productionOrders,
+    packingAssemblies: [],
     productionSessions,
     productionBalances,
     displayStocks: seedDisplayStocks(iso(9, 8, 16)),

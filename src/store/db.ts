@@ -57,6 +57,17 @@ import {
 import { clearAttachmentBlobs, deleteAttachmentBlob } from '@/store/attachmentBlobs'
 import { applyBomCosts, hydrateProducts, normalizeUnit, parseNonNegativeMoney, productHasBom, productIsSellable, productIsUsed, purchaseQtyToBaseQty, qtyToBaseUnit, resolveProductSku, skuIsUnique, validatePurchaseConversion } from '@/features/products/masterData'
 import { bomLinesForQty, consumptionCost, hasShortage, materialAvailability } from '@/features/manufacturing/helpers'
+import {
+  activeBomsForProduct,
+  captureBomSnapshot,
+  hydratePackingAssemblies,
+  packingBomChanged,
+  packingConsumptionsFromPreview,
+  packingHasCircularBom,
+  packingLinesFromSnapshot,
+  packingWarehouseError,
+  validatePackingQuantities,
+} from '@/features/manufacturing/packingModel'
 import { buildSessionPlan, canAmendPlanStatus, canEditSession, canRunProduction, currentUser, isCarryForwardResumed, isRawStorePickingLine, isSessionOperationalToday, mergePicking, remainingTargetQty, systemProductionDate, todaySessions } from '@/features/manufacturing/sessionPlan'
 import { buildSessionMaterialClosing, closingLineFromInput, isSignificantVariance } from '@/features/manufacturing/materialClosing'
 import {
@@ -108,6 +119,8 @@ import type {
   MovementType,
   OpeningBalance,
   OpeningBalanceInput,
+  PackingAssembly,
+  PackingInput,
   PaymentMethod,
   PermissionKey,
   ProductInput,
@@ -274,6 +287,7 @@ function hydrateData(data: AppData): AppData {
     receivings: data.receivings ?? [],
     stockOrders: data.stockOrders ?? [],
     openingBalances: data.openingBalances ?? [],
+    packingAssemblies: hydratePackingAssemblies(data.packingAssemblies),
     salesReturns: hydrateSalesReturns(data.salesReturns),
     returnSources: data.returnSources ?? defaultReturnSources(PROTOTYPE_TODAY.toISOString()),
     returnReasons: data.returnReasons ?? defaultReturnReasons(PROTOTYPE_TODAY.toISOString()),
@@ -570,9 +584,241 @@ function maybeStockAlerts(productId: string, warehouseId: string, qty: number) {
   }
 }
 
+function postConversionMovements(input: {
+  date: string
+  reference: string
+  warehouseId: string
+  components: Array<{ productId: string; qty: number }>
+  outputProductId: string
+  outputQty: number
+  inventory: InventoryRow[]
+  movements: AppState['stockMovements']
+}) {
+  let inventory = input.inventory
+  let movements = input.movements
+  for (const line of input.components) {
+    if (!(line.qty > 0)) continue
+    const applied = addMovement(movements, inventory, {
+      date: input.date,
+      reference: input.reference,
+      productId: line.productId,
+      warehouseId: input.warehouseId,
+      type: 'production_out',
+      stockIn: 0,
+      stockOut: line.qty,
+      notes: 'Packing / assembly consumption',
+    })
+    inventory = applied.inventory
+    movements = applied.movements
+  }
+  const output = addMovement(movements, inventory, {
+    date: input.date,
+    reference: input.reference,
+    productId: input.outputProductId,
+    warehouseId: input.warehouseId,
+    type: 'production_in',
+    stockIn: input.outputQty,
+    stockOut: 0,
+    notes: 'Packing / assembly output',
+  })
+  return { inventory: output.inventory, movements: output.movements }
+}
+
+function buildPackingDraft(input: PackingInput, existing?: PackingAssembly, options?: { refreshBom?: boolean }) {
+  const product = productById(input.productId)
+  if (!product) {
+    toast('Select an output product', undefined, 'warning')
+    return null
+  }
+  if (product.status !== 'active') {
+    toast('Output product is inactive.', product.name, 'warning')
+    return null
+  }
+  const warehouseError = packingWarehouseError(state, input.warehouseId)
+  if (warehouseError) {
+    toast(warehouseError, undefined, 'warning')
+    return null
+  }
+  const qtyError = validatePackingQuantities(input.plannedQty, input.actualQty, product.unit)
+  if (qtyError) {
+    toast(qtyError, undefined, 'warning')
+    return null
+  }
+  const active = activeBomsForProduct(state.boms, input.productId)
+  if (!active.length) {
+    toast('This product has no active BOM.', product.name, 'warning')
+    return null
+  }
+  if (!input.bomId) {
+    toast(active.length > 1 ? 'Select a BOM' : 'This product has no active BOM.', undefined, 'warning')
+    return null
+  }
+  if (active.length > 1 && !active.some((bom) => bom.id === input.bomId)) {
+    toast('Select a BOM', 'This product has more than one active BOM.', 'warning')
+    return null
+  }
+  const bom = state.boms.find((row) => row.id === input.bomId)
+  if (!bom || bom.productId !== input.productId) {
+    toast('Select a BOM', undefined, 'warning')
+    return null
+  }
+  if (bom.status !== 'active') {
+    toast('This product has no active BOM.', bom.name, 'warning')
+    return null
+  }
+  const capturedAt = nowIso()
+  const keepSnapshot = Boolean(
+    existing
+      && !options?.refreshBom
+      && existing.bomId === input.bomId
+      && existing.productId === input.productId
+      && existing.bomSnapshot?.items?.length,
+  )
+  const snapshot = keepSnapshot ? existing!.bomSnapshot : captureBomSnapshot(bom, state.products, capturedAt)
+  if (!snapshot.items.length) {
+    toast('This BOM has no components.', bom.name, 'warning')
+    return null
+  }
+  if (packingHasCircularBom(state.boms, input.productId, snapshot.items)) {
+    toast('Packing cannot be completed because the BOM contains a circular dependency.', undefined, 'danger')
+    return null
+  }
+  const preview = packingLinesFromSnapshot(snapshot, input.actualQty, state.products, state.inventory, input.warehouseId)
+  if (!preview.ok) {
+    toast(preview.conversionError || 'Cannot convert packing units.', undefined, 'danger')
+    return null
+  }
+  const inactiveComponent = preview.lines.find((line) => {
+    const component = productById(line.productId)
+    return !component || component.status !== 'active'
+  })
+  if (inactiveComponent) {
+    toast(`Component ${inactiveComponent.name} is inactive.`, undefined, 'warning')
+    return null
+  }
+  const user = currentUser(state)
+  const packingNo = existing?.packingNo ?? nextDocNo((state.packingAssemblies ?? []).map((row) => row.packingNo), 'PA-', 4)
+  const packing: PackingAssembly = {
+    id: existing?.id ?? uid('pak'),
+    packingNo,
+    date: existing?.date ?? capturedAt,
+    productId: input.productId,
+    bomId: bom.id,
+    warehouseId: input.warehouseId,
+    plannedQty: input.plannedQty,
+    actualQty: input.actualQty,
+    unit: product.unit,
+    status: 'draft',
+    posted: false,
+    notes: input.notes?.trim() ?? '',
+    createdBy: existing?.createdBy ?? user.name,
+    createdAt: existing?.createdAt ?? capturedAt,
+    costEstimate: preview.costEstimate,
+    bomSnapshot: snapshot,
+    consumptions: packingConsumptionsFromPreview(preview),
+  }
+  return packing
+}
+
+function postPackingAssembly(existing: PackingAssembly, options: { acceptSnapshot: boolean }) {
+  const product = productById(existing.productId)
+  if (!product) {
+    toast('Select an output product', undefined, 'warning')
+    return null
+  }
+  if (product.status !== 'active') {
+    toast('Output product is inactive.', product.name, 'warning')
+    return null
+  }
+  const warehouseError = packingWarehouseError(state, existing.warehouseId)
+  if (warehouseError) {
+    toast(warehouseError, undefined, 'warning')
+    return null
+  }
+  const qtyError = validatePackingQuantities(existing.plannedQty, existing.actualQty, product.unit)
+  if (qtyError) {
+    toast(qtyError, undefined, 'warning')
+    return null
+  }
+  const liveBom = state.boms.find((row) => row.id === existing.bomId)
+  if (!liveBom || liveBom.status !== 'active' || liveBom.productId !== existing.productId) {
+    toast('This product has no active BOM.', undefined, 'warning')
+    return null
+  }
+  if (packingBomChanged(existing.bomSnapshot, liveBom) && !options.acceptSnapshot) {
+    toast('The BOM has changed since this packing was created.', 'Refresh the BOM or confirm using the saved snapshot.', 'warning')
+    return null
+  }
+  const snapshot = existing.bomSnapshot
+  if (!snapshot.items.length) {
+    toast('This BOM has no components.', snapshot.name, 'warning')
+    return null
+  }
+  if (packingHasCircularBom(state.boms, existing.productId, snapshot.items)) {
+    toast('Packing cannot be completed because the BOM contains a circular dependency.', undefined, 'danger')
+    return null
+  }
+  const preview = packingLinesFromSnapshot(snapshot, existing.actualQty, state.products, state.inventory, existing.warehouseId)
+  if (!preview.ok) {
+    toast(preview.conversionError || 'Cannot convert packing units.', undefined, 'danger')
+    return null
+  }
+  const inactiveComponent = preview.lines.find((line) => {
+    const component = productById(line.productId)
+    return !component || component.status !== 'active'
+  })
+  if (inactiveComponent) {
+    toast(`Component ${inactiveComponent.name} is inactive.`, undefined, 'warning')
+    return null
+  }
+  if (preview.hasShortage && !state.settings.allowNegativeStock) {
+    const short = preview.lines.find((line) => line.shortage > 0)
+    toast(
+      `Insufficient stock for ${short?.name ?? 'component'}. Required: ${short?.requiredQty}. Available: ${short?.onHand}.`,
+      undefined,
+      'danger',
+    )
+    return null
+  }
+  const date = nowIso()
+  const user = currentUser(state)
+  const posted = postConversionMovements({
+    date,
+    reference: existing.packingNo,
+    warehouseId: existing.warehouseId,
+    components: preview.lines.map((line) => ({ productId: line.productId, qty: line.requiredQty })),
+    outputProductId: existing.productId,
+    outputQty: existing.actualQty,
+    inventory: state.inventory,
+    movements: state.stockMovements,
+  })
+  const packing: PackingAssembly = {
+    ...existing,
+    status: 'confirmed',
+    posted: true,
+    confirmedBy: user.name,
+    confirmedAt: date,
+    costEstimate: preview.costEstimate,
+    bomSnapshot: snapshot,
+    consumptions: packingConsumptionsFromPreview(preview),
+  }
+  setData({
+    inventory: posted.inventory,
+    stockMovements: posted.movements,
+    packingAssemblies: (state.packingAssemblies ?? []).map((row) => (row.id === existing.id ? packing : row)),
+  })
+  for (const line of preview.lines) {
+    const qty = posted.inventory.find((row) => row.productId === line.productId && row.warehouseId === existing.warehouseId)?.qty ?? 0
+    maybeStockAlerts(line.productId, existing.warehouseId, qty)
+  }
+  toast('Packing confirmed', `${packing.packingNo} · ${formatQty(existing.actualQty)} ${existing.unit}`)
+  return packing
+}
+
 let agentSaleInFlight = false
 let openingBalanceInFlight = false
 let salesReturnInFlight = false
+let packingConfirmInFlight = false
 
 function postConfirmedOpeningBalance(doc: OpeningBalance) {
   const actor = currentUser(state)
@@ -4640,6 +4886,130 @@ export const db = {
       products: applyBomCosts(state.products, boms),
     })
     toast(status === 'inactive' ? 'BOM deactivated' : 'BOM activated')
+  },
+
+  createPackingAssembly(input: PackingInput) {
+    if (!hasPermission(state, 'manufacturing.create')) {
+      toast('Permission denied', 'You cannot create packing / assembly.', 'danger')
+      return null
+    }
+    const built = buildPackingDraft(input)
+    if (!built) return null
+    setData({ packingAssemblies: [built, ...(state.packingAssemblies ?? [])] })
+    toast('Packing saved', built.packingNo)
+    return built
+  },
+
+  updatePackingAssembly(id: string, input: PackingInput, options?: { refreshBom?: boolean }) {
+    if (!hasPermission(state, 'manufacturing.edit')) {
+      toast('Permission denied', 'You cannot edit packing / assembly.', 'danger')
+      return null
+    }
+    const existing = (state.packingAssemblies ?? []).find((row) => row.id === id)
+    if (!existing) {
+      toast('Packing not found', undefined, 'warning')
+      return null
+    }
+    if (existing.posted || existing.status !== 'draft') {
+      toast('This packing can no longer be edited', undefined, 'warning')
+      return null
+    }
+    const built = buildPackingDraft(input, existing, options)
+    if (!built) return null
+    const packing: PackingAssembly = {
+      ...built,
+      id: existing.id,
+      packingNo: existing.packingNo,
+      createdBy: existing.createdBy,
+      createdAt: existing.createdAt,
+    }
+    setData({
+      packingAssemblies: (state.packingAssemblies ?? []).map((row) => (row.id === id ? packing : row)),
+    })
+    toast('Packing updated', packing.packingNo)
+    return packing
+  },
+
+  refreshPackingBom(id: string) {
+    if (!hasPermission(state, 'manufacturing.edit')) {
+      toast('Permission denied', 'You cannot edit packing / assembly.', 'danger')
+      return null
+    }
+    const existing = (state.packingAssemblies ?? []).find((row) => row.id === id)
+    if (!existing || existing.posted || existing.status !== 'draft') {
+      toast('This packing can no longer be edited', undefined, 'warning')
+      return null
+    }
+    return this.updatePackingAssembly(id, {
+      productId: existing.productId,
+      bomId: existing.bomId,
+      warehouseId: existing.warehouseId,
+      plannedQty: existing.plannedQty,
+      actualQty: existing.actualQty,
+      notes: existing.notes,
+    }, { refreshBom: true })
+  },
+
+  cancelPackingAssembly(id: string) {
+    if (!hasPermission(state, 'manufacturing.edit')) {
+      toast('Permission denied', 'You cannot cancel packing / assembly.', 'danger')
+      return false
+    }
+    const existing = (state.packingAssemblies ?? []).find((row) => row.id === id)
+    if (!existing) {
+      toast('Packing not found', undefined, 'warning')
+      return false
+    }
+    if (existing.posted || existing.status === 'confirmed') {
+      toast('Confirmed packing cannot be cancelled', undefined, 'warning')
+      return false
+    }
+    if (existing.status === 'cancelled') return true
+    setData({
+      packingAssemblies: (state.packingAssemblies ?? []).map((row) =>
+        row.id === id ? { ...row, status: 'cancelled' as const } : row,
+      ),
+    })
+    toast('Packing cancelled', existing.packingNo, 'warning')
+    return true
+  },
+
+  confirmPackingAssembly(id: string, options?: { acceptSnapshot?: boolean }) {
+    if (!hasPermission(state, 'manufacturing.complete')) {
+      toast('Permission denied', 'You cannot confirm packing / assembly.', 'danger')
+      return null
+    }
+    if (packingConfirmInFlight) {
+      toast('Already posting', 'Wait for the current packing confirmation to finish.', 'warning')
+      return null
+    }
+    const existing = (state.packingAssemblies ?? []).find((row) => row.id === id)
+    if (!existing) {
+      toast('Packing not found', undefined, 'warning')
+      return null
+    }
+    if (existing.posted || existing.status === 'confirmed') {
+      toast('This packing transaction has already been confirmed.', undefined, 'info')
+      return existing
+    }
+    if (existing.status !== 'draft') {
+      toast('Only draft packing can be confirmed', undefined, 'warning')
+      return null
+    }
+    packingConfirmInFlight = true
+    try {
+      const posted = postPackingAssembly(existing, { acceptSnapshot: options?.acceptSnapshot === true })
+      return posted
+    } finally {
+      packingConfirmInFlight = false
+    }
+  },
+
+  createAndConfirmPackingAssembly(input: PackingInput) {
+    const created = this.createPackingAssembly(input)
+    if (!created) return null
+    const confirmed = this.confirmPackingAssembly(created.id)
+    return confirmed ?? (state.packingAssemblies ?? []).find((row) => row.id === created.id) ?? created
   },
 
   createProductionOrder(input: ProductionInput) {

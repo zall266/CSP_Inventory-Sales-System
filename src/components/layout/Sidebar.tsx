@@ -29,6 +29,7 @@ import {
   Users,
   Wallet,
   Warehouse,
+  Combine,
   CalendarDays,
   ChevronDown,
   Contact,
@@ -93,6 +94,7 @@ export const navGroups: NavGroup[] = [
     items: [
       { to: '/manufacturing', label: 'Manufacturing Dashboard', icon: Factory },
       { to: '/manufacturing/today', label: "Today's Production", icon: ClipboardList },
+      { to: '/manufacturing/packing', label: 'Packing / Assembly', icon: Combine },
       { to: '/manufacturing/carry-forward', label: 'Carry Forward', icon: Redo2 },
       { to: '/manufacturing/bom', label: 'Bill of Materials', icon: PackagePlus },
       { to: '/manufacturing/planning', label: 'Production Planning', icon: CalendarDays },
@@ -159,6 +161,7 @@ function pathActive(pathname: string, to: string) {
   if (to === '/inventory') return pathname === '/inventory'
   if (to === '/products') return pathname === '/products'
   if (to === '/manufacturing/today') return pathname === '/manufacturing/today' || pathname.startsWith('/manufacturing/today/')
+  if (to === '/manufacturing/packing') return pathname === '/manufacturing/packing' || pathname.startsWith('/manufacturing/packing/')
   if (to === '/tasks') {
     return pathname === '/tasks' || (pathname.startsWith('/tasks/') && !pathname.startsWith('/tasks/manage') && !pathname.startsWith('/tasks/categories'))
   }
