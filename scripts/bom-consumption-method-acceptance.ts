@@ -30,7 +30,7 @@ import path from 'node:path'
 const { db } = await import('@/store/db')
 const { hasPermission } = await import('@/features/settings/permissions')
 const { bomConsumptionMethod, bomMaterialCost, hydrateBoms } = await import('@/features/manufacturing/helpers')
-const { packingBomChanged } = await import('@/features/manufacturing/packingModel')
+const { packingBomChanged, packingLinesFromSnapshot } = await import('@/features/manufacturing/packingModel')
 const { navGroups } = await import('@/components/layout/Sidebar')
 
 type Check = { name: string; ok: boolean; detail?: string }
@@ -237,6 +237,19 @@ check(
   '18. Packing BOM snapshot stores consumptionMethod',
   createdPack?.bomSnapshot.items.find((item) => item.productId === packAuto!.id)?.consumptionMethod === 'AUTO'
     && createdPack?.bomSnapshot.items.find((item) => item.productId === packMan!.id)?.consumptionMethod === 'MANUAL',
+)
+const previewPack = packingLinesFromSnapshot(
+  createdPack!.bomSnapshot,
+  2,
+  db.getSnapshot().products,
+  db.getSnapshot().inventory,
+  'wh-main',
+)
+const manLine = previewPack.lines.find((line) => line.productId === packMan!.id)
+check(
+  '5. MANUAL shortage does not block packing preview',
+  manLine?.consumptionMethod === 'MANUAL' && manLine.shortage === 0 && manLine.onHand === 5 && !previewPack.hasShortage,
+  JSON.stringify({ shortage: manLine?.shortage, hasShortage: previewPack.hasShortage, method: manLine?.consumptionMethod }),
 )
 
 db.updateBom(bomPack!.id, {

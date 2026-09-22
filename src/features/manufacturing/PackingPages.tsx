@@ -12,6 +12,7 @@ import { formatDateTime, formatMoney, formatQty } from '@/utils/format'
 import type { PackingAssembly, PackingInput } from '@/types'
 import {
   activeBomsForProduct,
+  captureBomSnapshot,
   packingBomChanged,
   packingLinesFromSnapshot,
   packingOutputProducts,
@@ -144,25 +145,7 @@ function PackingEditorPage({ packing }: { packing?: PackingAssembly }) {
   const snapshot = packing && packing.bomId === bomId
     ? packing.bomSnapshot
     : bom
-      ? {
-          bomId: bom.id,
-          name: bom.name,
-          outputQty: bom.outputQty,
-          outputUnit: bom.outputUnit,
-          capturedAt: packing?.bomSnapshot.capturedAt ?? '',
-          items: bom.items.map((item) => {
-            const component = state.products.find((row) => row.id === item.productId)
-            return {
-              productId: item.productId,
-              productName: component?.name ?? 'Unknown',
-              sku: component?.sku ?? '',
-              qty: item.qty,
-              unit: item.unit,
-              wastagePct: item.wastagePct,
-              notes: item.notes,
-            }
-          }),
-        }
+      ? captureBomSnapshot(bom, state.products, packing?.bomSnapshot.capturedAt ?? '')
       : null
   const preview = snapshot && actualQty > 0
     ? packingLinesFromSnapshot(snapshot, actualQty, state.products, state.inventory, warehouseId)
