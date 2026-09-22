@@ -208,7 +208,7 @@ export function NewReceivingPage() {
           . Enter the actual quantity received.
         </Card>
       ) : null}
-      <Card className="mb-4 grid gap-4 p-5 sm:grid-cols-2 lg:grid-cols-4">
+      <Card className="mb-4 grid items-end gap-4 p-5 sm:grid-cols-2 lg:grid-cols-4">
         <Field label="Source">
           <Select value={source} onChange={(event) => setSource(event.target.value as typeof source)}>
             {RECEIVING_SOURCES.map((item) => (
@@ -235,7 +235,7 @@ export function NewReceivingPage() {
           </Field>
         )}
         <Field label="Warehouse">
-          <Select value={warehouseId} onChange={(event) => setWarehouseId(event.target.value)} disabled={Boolean(order)}>
+          <Select value={warehouseId} onChange={(event) => setWarehouseId(event.target.value)}>
             {companyWarehouses(state.warehouses).map((warehouse) => (
               <option key={warehouse.id} value={warehouse.id}>
                 {warehouse.name}
