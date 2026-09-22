@@ -62,7 +62,7 @@ export function PackingListPage() {
           <EmptyState title="No packing records" hint="Create a packing / assembly to convert existing stock into another SKU." />
         ) : (
           <div className="sf-table-wrap">
-            <table>
+            <table className="min-w-[52rem]">
               <thead>
                 <tr>
                   <th>Packing No</th>
@@ -355,7 +355,7 @@ function PackingEditorPage({ packing }: { packing?: PackingAssembly }) {
             <p className="mb-4 text-sm">{product?.name} · {product?.sku} · +{formatQty(actualQty)} {formatUnit(product?.unit)}</p>
             <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-400">Consumption</div>
             <div className="sf-table-wrap rounded-xl border border-slate-100">
-              <table>
+              <table className="min-w-[40rem]">
                 <thead>
                   <tr>
                     <th>Component</th>
@@ -468,7 +468,7 @@ function PackingReadPage({ packing }: { packing: PackingAssembly }) {
           <div className="mb-2 text-sm font-semibold">BOM snapshot</div>
           <p className="mb-3 text-xs text-slate-500">{packing.bomSnapshot.name} · output {formatQty(packing.bomSnapshot.outputQty)} {formatUnit(packing.bomSnapshot.outputUnit)} · captured {formatDateTime(packing.bomSnapshot.capturedAt)}</p>
           <div className="sf-table-wrap rounded-xl border border-slate-100">
-            <table>
+            <table className="min-w-[36rem]">
               <thead>
                 <tr>
                   <th>Component</th>
@@ -501,7 +501,7 @@ function PackingReadPage({ packing }: { packing: PackingAssembly }) {
             <p className="text-sm text-slate-500">No movements found for {packing.packingNo}.</p>
           ) : (
             <div className="sf-table-wrap rounded-xl border border-slate-100">
-              <table>
+              <table className="min-w-[36rem]">
                 <thead>
                   <tr>
                     <th>Type</th>
