@@ -362,6 +362,7 @@ function PackingEditorPage({ packing }: { packing?: PackingAssembly }) {
                     <th>Base</th>
                     <th>Wastage</th>
                     <th>Total</th>
+                    <th>Consumption</th>
                     <th>On hand</th>
                     <th>After</th>
                   </tr>
@@ -377,6 +378,7 @@ function PackingEditorPage({ packing }: { packing?: PackingAssembly }) {
                       <td className="tabular">{formatQty(line.baseQty)} {formatUnit(line.unit)}</td>
                       <td className="tabular">{formatQty(line.wastagePct)}% · {formatQty(line.wastageQty)}</td>
                       <td className="tabular">{formatQty(line.requiredQty)} {formatUnit(line.unit)}</td>
+                      <td>{line.consumptionMethod}</td>
                       <td className="tabular">{formatQty(line.onHand)} {formatUnit(line.unit)}</td>
                       <td className={`tabular ${line.shortage > 0 ? 'font-semibold text-rose-600' : ''}`}>{formatQty(line.afterPosting)} {formatUnit(line.unit)}</td>
                     </tr>
@@ -476,6 +478,7 @@ function PackingReadPage({ packing }: { packing: PackingAssembly }) {
                   <th>BOM qty</th>
                   <th>Wastage</th>
                   <th>Consumed</th>
+                  <th>Consumption</th>
                 </tr>
               </thead>
               <tbody>
@@ -488,6 +491,7 @@ function PackingReadPage({ packing }: { packing: PackingAssembly }) {
                       <td className="tabular">{formatQty(snapshot?.qty ?? 0)} {formatUnit(snapshot?.unit ?? line.bomUnit)}</td>
                       <td className="tabular">{formatQty(line.wastagePct)}% · {formatQty(line.wastageQty)} {formatUnit(line.unit)}</td>
                       <td className="tabular">{formatQty(line.actualQty)} {formatUnit(line.unit)}</td>
+                      <td>{snapshot?.consumptionMethod ?? 'AUTO'}</td>
                     </tr>
                   )
                 })}

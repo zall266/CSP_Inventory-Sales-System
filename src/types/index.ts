@@ -805,6 +805,8 @@ export type Expense = {
   notes: string
 }
 
+export type BomConsumptionMethod = 'AUTO' | 'MANUAL'
+
 export type BomItem = {
   id: string
   productId: string
@@ -812,6 +814,8 @@ export type BomItem = {
   unit: string
   wastagePct: number
   notes: string
+  /** Missing value hydrates to AUTO. MANUAL skips automatic inventory OUT. */
+  consumptionMethod?: BomConsumptionMethod
 }
 
 export type Bom = {
@@ -832,6 +836,7 @@ export type ProductionConsumption = {
   actualQty: number
   unit: string
   notes: string
+  consumptionMethod?: BomConsumptionMethod
 }
 
 export type PackingAssemblyStatus = 'draft' | 'confirmed' | 'cancelled'
@@ -844,6 +849,7 @@ export type PackingBomSnapshotItem = {
   unit: string
   wastagePct: number
   notes: string
+  consumptionMethod?: BomConsumptionMethod
 }
 
 export type PackingBomSnapshot = {
@@ -1493,7 +1499,7 @@ export type BomInput = {
   outputUnit: string
   bulkYieldGrams?: number
   notes: string
-  items: Array<{ productId: string; qty: number; unit: string; wastagePct: number; notes: string }>
+  items: Array<{ productId: string; qty: number; unit: string; wastagePct: number; notes: string; consumptionMethod?: BomConsumptionMethod }>
 }
 
 export type ProductionInput = {
