@@ -834,6 +834,61 @@ export type ProductionConsumption = {
   notes: string
 }
 
+export type PackingAssemblyStatus = 'draft' | 'confirmed' | 'cancelled'
+
+export type PackingBomSnapshotItem = {
+  productId: string
+  productName: string
+  sku: string
+  qty: number
+  unit: string
+  wastagePct: number
+  notes: string
+}
+
+export type PackingBomSnapshot = {
+  bomId: string
+  name: string
+  outputQty: number
+  outputUnit: string
+  capturedAt: string
+  items: PackingBomSnapshotItem[]
+}
+
+export type PackingConsumption = {
+  productId: string
+  expectedQty: number
+  actualQty: number
+  unit: string
+  notes: string
+  baseQty: number
+  wastagePct: number
+  wastageQty: number
+  bomUnit: string
+}
+
+export type PackingAssembly = {
+  id: string
+  packingNo: string
+  date: string
+  productId: string
+  bomId: string
+  warehouseId: string
+  plannedQty: number
+  actualQty: number
+  unit: string
+  status: PackingAssemblyStatus
+  posted: boolean
+  notes: string
+  createdBy: string
+  createdAt: string
+  confirmedBy?: string
+  confirmedAt?: string
+  costEstimate: number
+  bomSnapshot: PackingBomSnapshot
+  consumptions: PackingConsumption[]
+}
+
 export type ProductionWastage = {
   id: string
   kind: WastageKind
@@ -1339,6 +1394,7 @@ export type AppData = {
   settings: Settings
   boms: Bom[]
   productionOrders: ProductionOrder[]
+  packingAssemblies: PackingAssembly[]
   productionSessions: ProductionSession[]
   productionBalances: ProductionBalance[]
   displayStocks: DisplayStock[]
@@ -1450,6 +1506,15 @@ export type ProductionInput = {
   operator: string
   notes: string
   status?: 'draft' | 'planned'
+}
+
+export type PackingInput = {
+  productId: string
+  bomId: string
+  warehouseId: string
+  plannedQty: number
+  actualQty: number
+  notes?: string
 }
 
 export type PurchaseInput = {

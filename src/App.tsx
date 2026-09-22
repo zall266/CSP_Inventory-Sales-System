@@ -27,6 +27,7 @@ import { TodaysProductionPage } from '@/features/manufacturing/TodaysProductionP
 import { CompleteProductionPage } from '@/features/manufacturing/CompleteProductionPage'
 import { CarryForwardPage } from '@/features/manufacturing/CarryForwardPage'
 import { PickingListPage } from '@/features/manufacturing/PickingListPage'
+import { NewPackingPage, PackingDetailPage, PackingListPage } from '@/features/manufacturing/PackingPages'
 
 import { QuotationsPage, QuotationEditorPage, QuotationDetailPage, QuotationPrintPage } from '@/features/documents/QuotationPages'
 import { InvoiceDetailPage, InvoicePrintPage } from '@/features/documents/InvoicePages'
@@ -88,6 +89,9 @@ export default function App() {
           <Route path="/manufacturing" element={<ManufacturingDashboardPage />} />
           <Route path="/manufacturing/today" element={<TodaysProductionPage />} />
           <Route path="/manufacturing/today/:id" element={<TodaysProductionPage />} />
+          <Route path="/manufacturing/packing" element={<PackingListPage />} />
+          <Route path="/manufacturing/packing/new" element={<NewPackingPage />} />
+          <Route path="/manufacturing/packing/:id" element={<PackingDetailPage />} />
           <Route path="/manufacturing/carry-forward" element={<CarryForwardPage />} />
           <Route path="/manufacturing/complete/:id" element={<CompleteProductionPage />} />
           <Route path="/manufacturing/complete" element={<CompleteProductionPage />} />
