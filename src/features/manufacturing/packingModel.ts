@@ -7,7 +7,7 @@ import type {
   Product,
 } from '@/types'
 import { formatUnit, normalizeUnit, purchaseConversionQty } from '@/features/products/masterData'
-import { consumptionCost } from '@/features/manufacturing/helpers'
+import { bomConsumptionMethod, consumptionCost } from '@/features/manufacturing/helpers'
 import { isCompanyWarehouseId } from '@/features/agent/agentModel'
 import { round2 } from '@/utils/format'
 
@@ -95,13 +95,14 @@ export function captureBomSnapshot(bom: Bom, products: Product[], capturedAt: st
         unit: item.unit,
         wastagePct: item.wastagePct,
         notes: item.notes,
+        consumptionMethod: bomConsumptionMethod(item),
       }
     }),
   }
 }
 
-function snapshotItemKey(item: { productId: string; qty: number; unit: string; wastagePct: number }) {
-  return `${item.productId}|${item.qty}|${normalizeUnit(item.unit)}|${item.wastagePct}`
+function snapshotItemKey(item: { productId: string; qty: number; unit: string; wastagePct: number; consumptionMethod?: string }) {
+  return `${item.productId}|${item.qty}|${normalizeUnit(item.unit)}|${item.wastagePct}|${bomConsumptionMethod(item)}`
 }
 
 export function packingBomChanged(snapshot: PackingBomSnapshot, bom: Bom | undefined) {
@@ -163,6 +164,7 @@ export type PackingLinePreview = {
   afterPosting: number
   shortage: number
   conversionError?: string
+  consumptionMethod: 'AUTO' | 'MANUAL'
 }
 
 export type PackingPreview = {
@@ -190,6 +192,7 @@ export function packingLinesFromSnapshot(
     const onHand = inventory.find((row) => row.productId === item.productId && row.warehouseId === warehouseId)?.qty ?? 0
     const baseBomQty = item.qty * factor
     const wastageBomQty = baseBomQty * ((item.wastagePct || 0) / 100)
+    const consumptionMethod = bomConsumptionMethod(item)
     if (!product) {
       return {
         productId: item.productId,
@@ -207,6 +210,7 @@ export function packingLinesFromSnapshot(
         afterPosting: round2(onHand),
         shortage: 0,
         conversionError: `Component ${name} is missing.`,
+        consumptionMethod,
       }
     }
     const convertedBase = packingQtyToInventory(baseBomQty, item.unit, product)
@@ -227,6 +231,7 @@ export function packingLinesFromSnapshot(
         afterPosting: round2(onHand),
         shortage: 0,
         conversionError: convertedBase.reason,
+        consumptionMethod,
       }
     }
     const convertedTotal = packingQtyToInventory(baseBomQty + wastageBomQty, item.unit, product)
@@ -247,12 +252,14 @@ export function packingLinesFromSnapshot(
         afterPosting: round2(onHand),
         shortage: 0,
         conversionError: convertedTotal.reason,
+        consumptionMethod,
       }
     }
     const baseQty = applyDiscreteRounding(convertedBase.qty, inventoryUnit)
     const requiredQty = applyDiscreteRounding(convertedTotal.qty, inventoryUnit)
     const wastageQty = round2(Math.max(0, requiredQty - baseQty))
-    const shortage = round2(Math.max(0, requiredQty - onHand))
+    const postsOut = consumptionMethod !== 'MANUAL'
+    const shortage = postsOut ? round2(Math.max(0, requiredQty - onHand)) : 0
     return {
       productId: item.productId,
       name,
@@ -266,8 +273,9 @@ export function packingLinesFromSnapshot(
       unit: inventoryUnit,
       notes: item.notes,
       onHand: round2(onHand),
-      afterPosting: round2(onHand - requiredQty),
+      afterPosting: postsOut ? round2(onHand - requiredQty) : round2(onHand),
       shortage,
+      consumptionMethod,
     }
   })
   const conversionError = lines.find((line) => line.conversionError)?.conversionError
@@ -295,7 +303,7 @@ export function packingConsumptionsFromPreview(preview: PackingPreview): Packing
   return preview.lines.map((line) => ({
     productId: line.productId,
     expectedQty: line.requiredQty,
-    actualQty: line.requiredQty,
+    actualQty: line.consumptionMethod === 'MANUAL' ? 0 : line.requiredQty,
     unit: line.unit,
     notes: line.notes,
     baseQty: line.baseQty,
@@ -323,18 +331,27 @@ export function packingWarehouseError(state: Pick<AppState, 'warehouses'>, wareh
 }
 
 export function hydratePackingAssemblies(rows: PackingAssembly[] | undefined): PackingAssembly[] {
-  return (rows ?? []).map((row) => ({
-    ...row,
-    notes: row.notes ?? '',
-    posted: Boolean(row.posted),
-    consumptions: row.consumptions ?? [],
-    bomSnapshot: row.bomSnapshot ?? {
+  return (rows ?? []).map((row) => {
+    const bomSnapshot = row.bomSnapshot ?? {
       bomId: row.bomId,
       name: '',
       outputQty: 1,
       outputUnit: row.unit,
       capturedAt: row.createdAt,
       items: [],
-    },
-  }))
+    }
+    return {
+      ...row,
+      notes: row.notes ?? '',
+      posted: Boolean(row.posted),
+      consumptions: row.consumptions ?? [],
+      bomSnapshot: {
+        ...bomSnapshot,
+        items: (bomSnapshot.items ?? []).map((item) => ({
+          ...item,
+          consumptionMethod: bomConsumptionMethod(item),
+        })),
+      },
+    }
+  })
 }

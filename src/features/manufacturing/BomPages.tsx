@@ -5,9 +5,10 @@ import { ProductMark } from '@/components/ProductMark'
 import { useApi, useLookups, useStore } from '@/store/hooks'
 import { formatMoney, formatQty, round2 } from '@/utils/format'
 import { bomMaterialCost, finishedProductIds, rawMaterialIds } from './helpers'
-import type { Bom, BomInput } from '@/types'
+import type { Bom, BomConsumptionMethod, BomInput } from '@/types'
+import { bomConsumptionMethod } from './helpers'
 
-type DraftLine = { productId: string; qty: number; unit: string; wastagePct: number; notes: string }
+type DraftLine = { productId: string; qty: number; unit: string; wastagePct: number; notes: string; consumptionMethod: BomConsumptionMethod }
 
 const emptyLine = (productId: string, unit = 'KG'): DraftLine => ({
   productId,
@@ -15,6 +16,7 @@ const emptyLine = (productId: string, unit = 'KG'): DraftLine => ({
   unit,
   wastagePct: 0,
   notes: '',
+  consumptionMethod: 'AUTO',
 })
 
 export function BomListPage() {
@@ -124,6 +126,7 @@ export function BomModal({ open, onClose, bom }: { open: boolean; onClose: () =>
       unit: item.unit,
       wastagePct: item.wastagePct,
       notes: item.notes,
+      consumptionMethod: bomConsumptionMethod(item),
     })) ?? [emptyLine(materialOptions[0]?.id ?? '', materialOptions[0]?.unit)],
   }))
 
@@ -142,6 +145,7 @@ export function BomModal({ open, onClose, bom }: { open: boolean; onClose: () =>
         unit: item.unit,
         wastagePct: item.wastagePct,
         notes: item.notes,
+        consumptionMethod: bomConsumptionMethod(item),
       })) ?? [emptyLine(materialOptions[0]?.id ?? '', materialOptions[0]?.unit)],
     })
   }, [open, bom?.id])
@@ -167,7 +171,7 @@ export function BomModal({ open, onClose, bom }: { open: boolean; onClose: () =>
   }
 
   return (
-    <Modal open={open} onClose={onClose} title={bom ? 'Edit BOM' : 'New BOM'} width="max-w-3xl">
+    <Modal open={open} onClose={onClose} title={bom ? 'Edit BOM' : 'New BOM'} width="max-w-4xl">
       <form className="space-y-4" onSubmit={submit}>
         <div className="grid gap-4 sm:grid-cols-2">
           <Field label="BOM name" className="sm:col-span-2">
@@ -222,10 +226,19 @@ export function BomModal({ open, onClose, bom }: { open: boolean; onClose: () =>
             </Button>
           </div>
           <div className="space-y-2">
+            <div className="hidden gap-2 px-3 text-[11px] font-semibold uppercase tracking-wide text-slate-400 lg:grid lg:grid-cols-12">
+              <span className="lg:col-span-3">Component</span>
+              <span className="lg:col-span-2">Qty</span>
+              <span className="lg:col-span-1">Unit</span>
+              <span className="lg:col-span-1">Wastage</span>
+              <span className="lg:col-span-2">Consumption</span>
+              <span className="lg:col-span-2">Notes</span>
+              <span className="lg:col-span-1" />
+            </div>
             {form.items.map((line, index) => (
               <div key={index} className="grid gap-2 rounded-xl border border-slate-100 p-3 lg:grid-cols-12">
                 <Select
-                  className="lg:col-span-4"
+                  className="lg:col-span-3"
                   value={line.productId}
                   onChange={(e) => {
                     const next = state.products.find((item) => item.id === e.target.value)
@@ -241,7 +254,18 @@ export function BomModal({ open, onClose, bom }: { open: boolean; onClose: () =>
                 </Select>
                 <Input className="lg:col-span-2" type="number" min={0} step="0.01" value={line.qty} onChange={(e) => setForm({ ...form, items: form.items.map((item, i) => i === index ? { ...item, qty: Number(e.target.value) } : item) })} />
                 <Input className="lg:col-span-1" value={line.unit} onChange={(e) => setForm({ ...form, items: form.items.map((item, i) => i === index ? { ...item, unit: e.target.value } : item) })} />
-                <Input className="lg:col-span-2" type="number" min={0} step="0.1" value={line.wastagePct} onChange={(e) => setForm({ ...form, items: form.items.map((item, i) => i === index ? { ...item, wastagePct: Number(e.target.value) } : item) })} placeholder="Wastage %" />
+                <Input className="lg:col-span-1" type="number" min={0} step="0.1" value={line.wastagePct} onChange={(e) => setForm({ ...form, items: form.items.map((item, i) => i === index ? { ...item, wastagePct: Number(e.target.value) } : item) })} placeholder="Wastage %" />
+                <Select
+                  className="lg:col-span-2"
+                  value={bomConsumptionMethod(line)}
+                  onChange={(e) => setForm({
+                    ...form,
+                    items: form.items.map((item, i) => i === index ? { ...item, consumptionMethod: e.target.value === 'MANUAL' ? 'MANUAL' : 'AUTO' } : item),
+                  })}
+                >
+                  <option value="AUTO">AUTO</option>
+                  <option value="MANUAL">MANUAL</option>
+                </Select>
                 <Input className="lg:col-span-2" value={line.notes} onChange={(e) => setForm({ ...form, items: form.items.map((item, i) => i === index ? { ...item, notes: e.target.value } : item) })} placeholder="Notes" />
                 <button
                   type="button"
@@ -253,7 +277,7 @@ export function BomModal({ open, onClose, bom }: { open: boolean; onClose: () =>
               </div>
             ))}
           </div>
-          <p className="mt-2 text-xs text-slate-400">Quantity required · Unit · Optional wastage % · Notes</p>
+          <p className="mt-2 text-xs text-slate-400">AUTO consumes this component automatically. MANUAL: staff records actual usage later.</p>
         </div>
         <Field label="Notes">
           <Textarea value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} rows={2} />
@@ -321,6 +345,7 @@ export function BomDetail({ id }: { id: string }) {
               <th>Qty required</th>
               <th>Unit</th>
               <th>Wastage %</th>
+              <th>Consumption</th>
               <th>Notes</th>
             </tr>
           </thead>
@@ -334,6 +359,7 @@ export function BomDetail({ id }: { id: string }) {
                   <td className="tabular">{formatQty(item.qty)}</td>
                   <td>{item.unit}</td>
                   <td className="tabular">{item.wastagePct ? `${item.wastagePct}%` : '—'}</td>
+                  <td>{bomConsumptionMethod(item)}</td>
                   <td>{item.notes || '—'}</td>
                 </tr>
               )

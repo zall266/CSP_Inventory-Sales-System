@@ -56,7 +56,7 @@ import {
 } from '@/features/tasks/taskModel'
 import { clearAttachmentBlobs, deleteAttachmentBlob } from '@/store/attachmentBlobs'
 import { applyBomCosts, hydrateProducts, normalizeUnit, parseNonNegativeMoney, productHasBom, productIsSellable, productIsUsed, purchaseQtyToBaseQty, qtyToBaseUnit, resolveProductSku, skuIsUnique, validatePurchaseConversion } from '@/features/products/masterData'
-import { bomLinesForQty, consumptionCost, hasShortage, materialAvailability } from '@/features/manufacturing/helpers'
+import { autoConsumptions, bomConsumptionMethod, bomLinesForQty, consumptionCost, hasShortage, hydrateBoms, materialAvailability, sessionComponentIsManual } from '@/features/manufacturing/helpers'
 import {
   activeBomsForProduct,
   captureBomSnapshot,
@@ -214,6 +214,7 @@ function persist(data: AppData) {
 function hydrateData(data: AppData): AppData {
   const seedLayout = createMainWarehouseLayout('2026-09-08T09:15:00+08:00')
   const seedOccupancy = seedWarehouseOccupancy('2026-09-08T16:15:00+08:00', 'Admin')
+  const boms = hydrateBoms(data.boms)
   const roles = data.roles ?? seed.roles
   const roleMatrix = Object.fromEntries(
     roles.map((role) => {
@@ -246,8 +247,9 @@ function hydrateData(data: AppData): AppData {
         ...product,
         agentPrice: product.agentPrice,
       })),
-      data.boms ?? [],
+      boms,
     ),
+    boms,
     sales: (data.sales ?? []).map((sale) => ({
       ...sale,
       shipping: sale.shipping ?? 0,
@@ -786,7 +788,9 @@ function postPackingAssembly(existing: PackingAssembly, options: { acceptSnapsho
     date,
     reference: existing.packingNo,
     warehouseId: existing.warehouseId,
-    components: preview.lines.map((line) => ({ productId: line.productId, qty: line.requiredQty })),
+    components: preview.lines
+      .filter((line) => line.consumptionMethod !== 'MANUAL')
+      .map((line) => ({ productId: line.productId, qty: line.requiredQty })),
     outputProductId: existing.productId,
     outputQty: existing.actualQty,
     inventory: state.inventory,
@@ -3921,7 +3925,7 @@ export const db = {
     return true
   },
 
-  recordStockUsage(input: { productId: string; warehouseId: string; qty: number; notes?: string }) {
+  recordStockUsage(input: { productId: string; warehouseId: string; qty: number; notes?: string; reason?: string; date?: string }) {
     if (!hasPermission(state, 'inventory.usage')) {
       toast('Permission denied', 'You cannot record stock usage.', 'danger')
       return null
@@ -3950,15 +3954,21 @@ export const db = {
       'USE-',
       4,
     )
+    const date = /^\d{4}-\d{2}-\d{2}$/.test(input.date ?? '')
+      ? `${input.date}T08:00:00.000+08:00`
+      : input.date && !Number.isNaN(Date.parse(input.date))
+        ? input.date
+        : nowIso()
+    const noteParts = [input.reason?.trim(), input.notes?.trim()].filter(Boolean)
     const applied = addMovement(state.stockMovements, state.inventory, {
-      date: nowIso(),
+      date,
       reference,
       productId: input.productId,
       warehouseId: input.warehouseId,
       type: 'stock_usage',
       stockIn: 0,
       stockOut: qty,
-      notes: input.notes?.trim() || undefined,
+      notes: noteParts.length ? noteParts.join(' — ') : undefined,
     })
     const nextQty = applied.inventory.find((row) => row.productId === input.productId && row.warehouseId === input.warehouseId)?.qty ?? current - qty
     setData({
@@ -4841,6 +4851,7 @@ export const db = {
         unit: item.unit,
         wastagePct: item.wastagePct,
         notes: item.notes,
+        consumptionMethod: bomConsumptionMethod(item),
       })),
     }
     setData({ boms: [bom, ...state.boms], products: applyBomCosts(state.products, [bom, ...state.boms]) })
@@ -4868,6 +4879,7 @@ export const db = {
               unit: item.unit,
               wastagePct: item.wastagePct,
               notes: item.notes,
+              consumptionMethod: bomConsumptionMethod(item),
             })),
           }
         : bom,
@@ -5093,7 +5105,11 @@ export const db = {
     const order = state.productionOrders.find((item) => item.id === id)
     if (!order || order.posted) return false
     if (order.status === 'cancelled' || order.status === 'completed') return false
-    const rows = materialAvailability(state, order.warehouseId, order.consumptions)
+    const rows = materialAvailability(
+      state,
+      order.warehouseId,
+      autoConsumptions(state.boms.find((item) => item.id === order.bomId), order.consumptions),
+    )
     if (hasShortage(rows) && !options?.ignoreShortage) {
       toast('Material shortage', 'Resolve shortages or create a purchase request before starting.', 'danger')
       return false
@@ -5220,7 +5236,7 @@ export const db = {
       return false
     }
     if (!state.settings.allowNegativeStock) {
-      for (const line of order.consumptions) {
+      for (const line of autoConsumptions(state.boms.find((item) => item.id === order.bomId), order.consumptions)) {
         const available = getQty(line.productId, order.warehouseId)
         if (line.actualQty > available) {
           const product = productById(line.productId)
@@ -5232,7 +5248,7 @@ export const db = {
     const date = nowIso()
     let inventory = state.inventory
     let movements = state.stockMovements
-    for (const line of order.consumptions) {
+    for (const line of autoConsumptions(state.boms.find((item) => item.id === order.bomId), order.consumptions)) {
       if (line.actualQty <= 0) continue
       const applied = addMovement(movements, inventory, {
         date,
@@ -5311,7 +5327,11 @@ export const db = {
   createPurchaseRequest(orderId: string) {
     const order = state.productionOrders.find((item) => item.id === orderId)
     if (!order) return
-    const rows = materialAvailability(state, order.warehouseId, order.consumptions).filter((row) => row.shortage > 0)
+    const rows = materialAvailability(
+      state,
+      order.warehouseId,
+      autoConsumptions(state.boms.find((item) => item.id === order.bomId), order.consumptions),
+    ).filter((row) => row.shortage > 0)
     if (!rows.length) {
       toast('No shortages', 'All materials are available.', 'info')
       return
@@ -6104,6 +6124,7 @@ export const db = {
     }
 
     for (const raw of plan.consolidatedRaw) {
+      if (sessionComponentIsManual(state.boms, session.items, raw.productId)) continue
       const closingLine = closingBuilt.lines.find((row) => row.productId === raw.productId)
       const outQty = closingLine ? closingLine.actualUsedQty : raw.qty
       if (outQty <= 0) continue

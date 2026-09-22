@@ -11,14 +11,16 @@ import {
 } from '@/features/inventory/toOrderModel'
 import { hasPermission } from '@/features/settings/permissions'
 import { useApi, useLookups, useStore } from '@/store/hooks'
-import { formatDate, formatQty } from '@/utils/format'
+import { formatDate, formatQty, systemDateKey } from '@/utils/format'
 
 export function StockUsagePage() {
   const state = useStore()
   const api = useApi()
+  const [date, setDate] = useState(systemDateKey())
   const [warehouseId, setWarehouseId] = useState(state.settings.defaultWarehouseId)
   const [productId, setProductId] = useState(state.products.find((product) => product.status === 'active')?.id ?? '')
   const [qty, setQty] = useState<number | ''>(1)
+  const [reason, setReason] = useState('')
   const [notes, setNotes] = useState('')
   const canUse = hasPermission(state, 'inventory.usage')
   const product = state.products.find((item) => item.id === productId)
@@ -30,8 +32,11 @@ export function StockUsagePage() {
 
   return (
     <div className="mx-auto max-w-2xl">
-      <PageHeader title="Stock Usage" subtitle="Record items that were actually used. Stock decreases immediately." />
+      <PageHeader title="Stock Usage" subtitle="Record actual usage later. AUTO components are consumed at production/packing; MANUAL components are recorded here." />
       <Card className="space-y-4 p-6">
+        <Field label="Date">
+          <Input type="date" value={date} onChange={(event) => setDate(event.target.value)} />
+        </Field>
         <Field label="Warehouse">
           <Select value={warehouseId} onChange={(event) => setWarehouseId(event.target.value)}>
             {companyWarehouses(state.warehouses).map((warehouse) => (
@@ -39,12 +44,15 @@ export function StockUsagePage() {
             ))}
           </Select>
         </Field>
-        <Field label="Product">
+        <Field label="Component / Product">
           <Select value={productId} onChange={(event) => setProductId(event.target.value)}>
             {state.products.filter((item) => item.status === 'active').map((item) => (
               <option key={item.id} value={item.id}>{item.name}</option>
             ))}
           </Select>
+        </Field>
+        <Field label="Unit">
+          <Input disabled value={product?.unit ?? ''} />
         </Field>
         <div className="grid grid-cols-3 gap-3 rounded-2xl bg-slate-50 p-4 text-center">
           <div>
@@ -69,15 +77,19 @@ export function StockUsagePage() {
             onChange={(event) => setQty(event.target.value === '' ? '' : Number(event.target.value))}
           />
         </Field>
-        <Field label="Reason / note (optional)">
-          <Input value={notes} onChange={(event) => setNotes(event.target.value)} placeholder="Office use, cleaning, sample…" />
+        <Field label="Reference / Reason">
+          <Input value={reason} onChange={(event) => setReason(event.target.value)} placeholder="Customer order, physical count…" />
+        </Field>
+        <Field label="Notes (optional)">
+          <Input value={notes} onChange={(event) => setNotes(event.target.value)} placeholder="Optional note" />
         </Field>
         <Button
           className="w-full"
           onClick={() => {
-            const recorded = api.recordStockUsage({ warehouseId, productId, qty: Number(qty), notes })
+            const recorded = api.recordStockUsage({ warehouseId, productId, qty: Number(qty), date, reason, notes })
             if (recorded) {
               setQty(1)
+              setReason('')
               setNotes('')
             }
           }}

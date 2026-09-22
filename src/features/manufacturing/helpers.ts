@@ -1,6 +1,54 @@
-import type { AppState, Bom, BomItem, ProductionConsumption, ProductionOrder } from '@/types'
+import type { AppState, Bom, BomConsumptionMethod, BomItem, ProductionConsumption, ProductionOrder } from '@/types'
 import { bomMaterialCostFromProducts, qtyToBaseUnit, baseUnitCost } from '@/features/products/masterData'
 import { round2 } from '@/utils/format'
+
+export function bomConsumptionMethod(
+  item?: { consumptionMethod?: string | BomConsumptionMethod } | null,
+): BomConsumptionMethod {
+  return item?.consumptionMethod === 'MANUAL' ? 'MANUAL' : 'AUTO'
+}
+
+export function isManualBomItem(item?: { consumptionMethod?: string | BomConsumptionMethod } | null) {
+  return bomConsumptionMethod(item) === 'MANUAL'
+}
+
+export function hydrateBomItem<T extends { consumptionMethod?: string | BomConsumptionMethod }>(item: T): T & { consumptionMethod: BomConsumptionMethod } {
+  return { ...item, consumptionMethod: bomConsumptionMethod(item) }
+}
+
+export function hydrateBoms(boms: Bom[] | undefined): Bom[] {
+  return (boms ?? []).map((bom) => ({
+    ...bom,
+    items: (bom.items ?? []).map((item) => hydrateBomItem(item)),
+  }))
+}
+
+export function bomComponentIsManual(bom: Bom | undefined, productId: string) {
+  const item = bom?.items.find((row) => row.productId === productId)
+  return Boolean(item) && isManualBomItem(item)
+}
+
+export function autoConsumptions(bom: Bom | undefined, consumptions: ProductionConsumption[]) {
+  return consumptions.filter((line) => {
+    if (isManualBomItem(line)) return false
+    return !bomComponentIsManual(bom, line.productId)
+  })
+}
+
+export function sessionComponentIsManual(
+  boms: Bom[],
+  sessionItems: Array<{ productId: string; bomId: string }>,
+  productId: string,
+) {
+  const methods: BomConsumptionMethod[] = []
+  for (const item of sessionItems) {
+    const bom = boms.find((row) => row.id === item.bomId)
+      ?? boms.find((row) => row.productId === item.productId && row.status === 'active')
+    const line = bom?.items.find((row) => row.productId === productId)
+    if (line) methods.push(bomConsumptionMethod(line))
+  }
+  return methods.length > 0 && methods.every((method) => method === 'MANUAL')
+}
 
 export function scaleFactor(bom: Bom, plannedQty: number) {
   return bom.outputQty > 0 ? plannedQty / bom.outputQty : 0
@@ -21,6 +69,7 @@ export function bomLinesForQty(bom: Bom, plannedQty: number): ProductionConsumpt
       actualQty: expectedQty,
       unit: item.unit,
       notes: item.notes,
+      consumptionMethod: bomConsumptionMethod(item),
     }
   })
 }
