@@ -1337,6 +1337,7 @@ export function createSeedData(): AppData {
     salesImportOrders: [],
     salesImportLines: [],
     salesImportMappings: [],
+    salesImportShipments: [],
     ...createMainWarehouseLayout(iso(9, 8, 9)),
     ...seedWarehouseOccupancy(iso(9, 8, 16), 'Admin'),
     settings: {

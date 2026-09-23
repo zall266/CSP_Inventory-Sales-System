@@ -57,7 +57,9 @@ import {
 import { clearAttachmentBlobs, deleteAttachmentBlob } from '@/store/attachmentBlobs'
 import { applyBomCosts, hydrateProducts, normalizeUnit, parseNonNegativeMoney, productHasBom, productIsSellable, productIsUsed, purchaseQtyToBaseQty, qtyToBaseUnit, resolveProductSku, skuIsUnique, validatePurchaseConversion } from '@/features/products/masterData'
 import { inactiveSalesComponent, salesComponentSnapshot, salesComponentsOf, validateSalesComponents } from '@/features/products/salesComponents'
+import { parseAwb } from '@/features/salesImport/parseAwb'
 import { parsePickingList, type TextItem } from '@/features/salesImport/parsePickingList'
+import { reconcileAwbLines, shipmentLinkStatus } from '@/features/salesImport/reconcileAwb'
 import { mappingIdentity, mappingKeyLabel } from '@/features/salesImport/mapping'
 import { externalLabel } from '@/features/salesImport/mapping'
 import {
@@ -315,6 +317,7 @@ function hydrateData(data: AppData): AppData {
     salesImportOrders: data.salesImportOrders ?? [],
     salesImportLines: data.salesImportLines ?? [],
     salesImportMappings: data.salesImportMappings ?? [],
+    salesImportShipments: data.salesImportShipments ?? [],
     packingAssemblies: hydratePackingAssemblies(data.packingAssemblies),
     salesReturns: hydrateSalesReturns(data.salesReturns),
     returnSources: data.returnSources ?? defaultReturnSources(PROTOTYPE_TODAY.toISOString()),
@@ -1870,6 +1873,33 @@ function rememberExactImportMappings(platform: SalesImportPlatform, accountId: s
   if (changed) setData({ salesImportMappings: mappings })
 }
 
+function refreshSalesImportShipmentLinks(platform: SalesImportPlatform, accountId: string, accountName: string, reviewOrderIds: Set<string>) {
+  const known = new Set<string>()
+  for (const order of state.salesImportOrders ?? []) {
+    const owner = (state.salesImportBatches ?? []).find((item) => item.id === order.batchId)
+    if (owner?.platform === platform && owner.accountId === accountId) known.add(order.externalOrderId)
+  }
+  const prefix = `${platform.toUpperCase()}:${accountName.trim()}:`
+  for (const sale of state.sales) {
+    if (sale.status === 'voided' || !sale.reference?.startsWith(prefix)) continue
+    known.add(sale.reference.slice(prefix.length))
+  }
+  const mine = (state.salesImportShipments ?? []).filter((shipment) => shipment.platform === platform && shipment.accountId === accountId)
+  setData({
+    salesImportShipments: (state.salesImportShipments ?? []).map((shipment) => {
+      if (shipment.platform !== platform || shipment.accountId !== accountId) return shipment
+      const linkStatus = shipmentLinkStatus({
+        externalOrderId: shipment.externalOrderId,
+        trackingNumber: shipment.trackingNumber,
+        knownOrderIds: known,
+        siblingTrackings: mine.filter((item) => item.externalOrderId === shipment.externalOrderId).map((item) => item.trackingNumber),
+        reviewOrderIds,
+      })
+      return linkStatus === shipment.linkStatus ? shipment : { ...shipment, linkStatus, updatedAt: nowIso() }
+    }),
+  })
+}
+
 function replaceOpenSalesImportOrders(batchId: string) {
   const batch = (state.salesImportBatches ?? []).find((item) => item.id === batchId)
   if (!batch) return
@@ -1912,10 +1942,28 @@ function replaceOpenSalesImportOrders(batchId: string) {
       })
     }
   })
-  setData({
-    salesImportOrders: [...(state.salesImportOrders ?? []).filter((order) => !dropIds.has(order.id)), ...orders],
-    salesImportLines: [...(state.salesImportLines ?? []).filter((line) => !dropIds.has(line.orderId)), ...lines],
+  const keptOrders = [...(state.salesImportOrders ?? []).filter((order) => !dropIds.has(order.id)), ...orders]
+  const keptLines = [...(state.salesImportLines ?? []).filter((line) => !dropIds.has(line.orderId)), ...lines]
+  const account = salesImportAccount(batch.accountId)
+  const accountOrderIds = new Set(
+    keptOrders
+      .filter((order) => {
+        const owner = (state.salesImportBatches ?? []).find((item) => item.id === order.batchId)
+        return owner?.platform === batch.platform && owner.accountId === batch.accountId
+      })
+      .map((order) => order.id),
+  )
+  const reconciled = reconcileAwbLines({
+    orders: keptOrders.filter((order) => accountOrderIds.has(order.id)),
+    lines: keptLines.filter((line) => accountOrderIds.has(line.orderId)),
+    shipments: (state.salesImportShipments ?? []).filter((shipment) => shipment.platform === batch.platform && shipment.accountId === batch.accountId),
   })
+  const reconciledLineIds = new Set(reconciled.lines.map((line) => line.id))
+  setData({
+    salesImportOrders: keptOrders,
+    salesImportLines: [...keptLines.filter((line) => !reconciledLineIds.has(line.id)), ...reconciled.lines],
+  })
+  if (account) refreshSalesImportShipmentLinks(batch.platform, batch.accountId, account.name, reconciled.reviewOrderIds)
   rememberExactImportMappings(batch.platform, batch.accountId, lines)
   const files = (state.salesImportFiles ?? []).filter((file) => file.batchId === batchId)
   const nextOrders = (state.salesImportOrders ?? []).filter((order) => order.batchId === batchId)
@@ -7740,6 +7788,112 @@ export const db = {
     replaceOpenSalesImportOrders(batchId)
     toast(parsed.error ? 'Parse error' : 'Picking list processed', parsed.error ?? input.fileName, parsed.error ? 'danger' : 'success')
     return { ok: true as const, fileId: file.id, error: parsed.error }
+  },
+
+  ingestSalesImportAwb(batchId: string, input: { fileName: string; fileHash: string; items: TextItem[] }) {
+    if (salesImportCreateDenied()) return { ok: false as const, error: 'Permission denied' }
+    const batch = (state.salesImportBatches ?? []).find((item) => item.id === batchId)
+    const account = batch ? salesImportAccount(batch.accountId) : undefined
+    if (!batch || !account) return { ok: false as const, error: 'Import batch was not found.' }
+    const fileHash = input.fileHash.trim()
+    if (!fileHash) return { ok: false as const, error: 'The file could not be read.' }
+    if ((state.salesImportFiles ?? []).some((file) => file.batchId === batchId && file.fileHash === fileHash)) {
+      toast('File not added', 'This file is already in the batch.', 'warning')
+      return { ok: false as const, error: 'This file is already in the batch.' }
+    }
+    let parsed: ReturnType<typeof parseAwb>
+    try {
+      parsed = parseAwb(input.items ?? [])
+    } catch {
+      parsed = { layout: 'unknown', identityReliable: false, shipments: [], error: 'Could not read this PDF.' }
+    }
+    const fileId = uid('sif')
+    const file = {
+      id: fileId,
+      batchId,
+      role: 'awb' as const,
+      fileName: input.fileName.trim() || 'awb.pdf',
+      fileHash,
+      detectedLayout: parsed.layout,
+      parsedAt: parsed.error ? undefined : nowIso(),
+      parseError: parsed.error,
+      detectedUsername: parsed.detectedUsername,
+      identityReliable: parsed.identityReliable,
+      warnings: [] as string[],
+    }
+    const mismatch = Boolean(parsed.identityReliable && parsed.detectedUsername && parsed.detectedUsername.trim().toLowerCase() !== account.name.trim().toLowerCase())
+    setData({ salesImportFiles: [...(state.salesImportFiles ?? []), file] })
+    if (parsed.error || mismatch) {
+      replaceOpenSalesImportOrders(batchId)
+      toast(mismatch ? 'Account mismatch' : 'Parse error', mismatch ? `${parsed.detectedUsername} does not match ${account.name}.` : parsed.error, 'danger')
+      return { ok: true as const, fileId, error: mismatch ? 'Account mismatch' : parsed.error }
+    }
+    const existing = state.salesImportShipments ?? []
+    const next = [...existing]
+    let created = 0
+    for (const shipment of parsed.shipments) {
+      const owned = next.filter((item) => item.platform === batch.platform && item.accountId === batch.accountId)
+      if (shipment.trackingNumber && owned.some((item) => item.trackingNumber === shipment.trackingNumber)) continue
+      if (!shipment.trackingNumber && owned.some((item) => item.externalOrderId === shipment.externalOrderId && !item.trackingNumber)) continue
+      const siblings = owned.filter((item) => item.externalOrderId === shipment.externalOrderId)
+      if (siblings.some((item) => item.trackingNumber !== shipment.trackingNumber)) {
+        for (const sibling of siblings) {
+          const index = next.findIndex((item) => item.id === sibling.id)
+          if (index >= 0) next[index] = { ...next[index], linkStatus: 'review', updatedAt: nowIso() }
+        }
+      }
+      next.unshift({
+        id: uid('shp'),
+        platform: batch.platform,
+        accountId: batch.accountId,
+        batchId,
+        externalOrderId: shipment.externalOrderId,
+        trackingNumber: shipment.trackingNumber,
+        courierText: shipment.courierText,
+        recipientName: shipment.recipientName,
+        recipientAddress: shipment.recipientAddress,
+        serviceText: shipment.serviceText,
+        sourceFileId: fileId,
+        linkStatus: 'pending',
+        packingLines: shipment.lines,
+        createdAt: nowIso(),
+        updatedAt: nowIso(),
+      })
+      created += 1
+    }
+    setData({ salesImportShipments: next })
+    replaceOpenSalesImportOrders(batchId)
+    const linked = (state.salesImportShipments ?? []).filter((item) => item.sourceFileId === fileId)
+    const audits = [
+      makeDocAudit({
+        action: 'sales_import_awb_imported',
+        documentType: 'sales_import',
+        documentId: batch.id,
+        documentNo: `${batch.platform}:${account.name}`,
+        newValue: input.fileName,
+      }),
+    ]
+    if (linked.some((item) => item.linkStatus === 'matched')) {
+      audits.push(makeDocAudit({
+        action: 'sales_import_shipment_linked',
+        documentType: 'sales_import',
+        documentId: batch.id,
+        documentNo: `${batch.platform}:${account.name}`,
+        newValue: String(linked.filter((item) => item.linkStatus === 'matched').length),
+      }))
+    }
+    if (linked.some((item) => item.linkStatus === 'review')) {
+      audits.push(makeDocAudit({
+        action: 'sales_import_shipment_review',
+        documentType: 'sales_import',
+        documentId: batch.id,
+        documentNo: `${batch.platform}:${account.name}`,
+        newValue: String(linked.filter((item) => item.linkStatus !== 'matched').length),
+      }))
+    }
+    setData({ documentAuditLogs: [...audits].reverse().reduce((logs, entry) => [entry, ...logs], state.documentAuditLogs ?? []) })
+    toast('AWB processed', `${created} shipment${created === 1 ? '' : 's'} from ${input.fileName}`)
+    return { ok: true as const, fileId, created }
   },
 
   acknowledgeSalesImportAccount(batchId: string) {

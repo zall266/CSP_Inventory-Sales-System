@@ -543,6 +543,9 @@ export type DocumentAuditAction =
   | 'stock_order_received'
   | 'sales_import_created'
   | 'sales_import_confirmed'
+  | 'sales_import_awb_imported'
+  | 'sales_import_shipment_linked'
+  | 'sales_import_shipment_review'
 
 export type DocumentAuditLog = {
   id: string
@@ -1437,6 +1440,7 @@ export type AppData = {
   salesImportOrders: SalesImportOrder[]
   salesImportLines: SalesImportLine[]
   salesImportMappings: SalesImportMapping[]
+  salesImportShipments: SalesImportShipment[]
 }
 
 export type SalesImportPlatform = 'shopee' | 'tiktok'
@@ -1518,11 +1522,41 @@ export type SalesImportLine = {
   parentSku?: string
   externalSku?: string
   quantity: number
-  quantitySource: 'picking'
+  quantitySource: 'picking' | 'awb'
+  pickingQuantity?: number
+  quantityReview?: boolean
   mappedProductId?: string
   mappedProductSnapshot?: SalesImportSnapshot
   unallocated?: boolean
   sharedOrderCount?: number
+}
+
+export type ShipmentLinkStatus = 'pending' | 'matched' | 'unmatched' | 'review'
+
+export type SalesImportPackingLine = {
+  externalProductName: string
+  variationText?: string
+  externalSku?: string
+  quantity: number
+  unitPrice?: number
+}
+
+export type SalesImportShipment = {
+  id: string
+  platform: SalesImportPlatform
+  accountId: string
+  batchId: string
+  externalOrderId: string
+  trackingNumber: string
+  courierText: string
+  recipientName?: string
+  recipientAddress?: string
+  serviceText?: string
+  sourceFileId: string
+  linkStatus: ShipmentLinkStatus
+  packingLines: SalesImportPackingLine[]
+  createdAt: string
+  updatedAt: string
 }
 
 export type SalesImportMapping = {
