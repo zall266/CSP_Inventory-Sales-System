@@ -7928,6 +7928,22 @@ export const db = {
     return true
   },
 
+  setSalesImportSpotCheck(batchId: string, key: string, checked: boolean) {
+    if (salesImportCreateDenied()) return false
+    const batch = (state.salesImportBatches ?? []).find((item) => item.id === batchId)
+    const sampleKey = key.trim()
+    if (!batch || !sampleKey || batch.status === 'confirmed') return false
+    const current = new Set(batch.spotCheckedKeys ?? [])
+    if (checked) current.add(sampleKey)
+    else current.delete(sampleKey)
+    setData({
+      salesImportBatches: (state.salesImportBatches ?? []).map((item) =>
+        item.id === batchId ? { ...item, spotCheckedKeys: [...current] } : item,
+      ),
+    })
+    return true
+  },
+
   saveSalesImportMapping(input: { batchId: string; keyType: 'sku' | 'text'; key: string; productId: string }) {
     if (salesImportCreateDenied()) return false
     const batch = (state.salesImportBatches ?? []).find((item) => item.id === input.batchId)

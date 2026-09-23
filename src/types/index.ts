@@ -1465,6 +1465,7 @@ export type ImportBatch = {
   accountAcknowledged?: boolean
   accountAcknowledgedBy?: string
   accountAcknowledgedAt?: string
+  spotCheckedKeys?: string[]
 }
 
 export type ImportFileRole = 'picking' | 'awb'
