@@ -3,6 +3,7 @@ import { AppLayout } from '@/components/layout/AppLayout'
 import { DashboardPage } from '@/features/dashboard/DashboardPage'
 import { PosPage } from '@/features/pos/PosPage'
 import { SalesPage } from '@/features/sales/SalesPage'
+import { SalesImportPage } from '@/features/salesImport/SalesImportPage'
 import { CategoriesPage, ProductsPage, RawMaterialsPage } from '@/features/products/ProductsPage'
 import { PRODUCT_PRICING_PATH, ProductPricingPage } from '@/features/products/ProductPricingPage'
 import { InventoryPage } from '@/features/inventory/InventoryPage'
@@ -47,6 +48,8 @@ export default function App() {
         <Route element={<AppLayout />}>
           <Route path="/" element={<DashboardPage />} />
           <Route path="/sales" element={<SalesPage />} />
+          <Route path="/sales/import" element={<SalesImportPage />} />
+          <Route path="/sales/import/:batchId" element={<SalesImportPage />} />
           <Route path="/sales/quotations" element={<QuotationsPage />} />
           <Route path="/sales/quotations/new" element={<QuotationEditorPage />} />
           <Route path="/sales/quotations/:id/edit" element={<QuotationEditorPage />} />

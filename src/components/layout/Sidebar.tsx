@@ -9,6 +9,7 @@ import {
   CreditCard,
   Factory,
   FileText,
+  FileUp,
   FlaskConical,
   History,
   Layers,
@@ -55,6 +56,7 @@ export const navGroups: NavGroup[] = [
     label: 'SALES',
     items: [
       { to: '/sales', label: 'Sales', icon: Receipt },
+      { to: '/sales/import', label: 'Sales Import', icon: FileUp },
       { to: '/sales/quotations', label: 'Quotations', icon: FileText },
       { to: '/sales/delivery-orders', label: 'Delivery Orders', icon: Truck },
       { to: '/pos', label: 'POS', icon: ShoppingCart },
@@ -181,6 +183,7 @@ function navItemVisible(state: ReturnType<typeof useStore>, item: NavItem) {
   if (item.to === '/tasks/categories') return hasPermission(state, 'task.category.manage')
   if (item.to === '/receiving') return hasPermission(state, 'receiving.view')
   if (item.to === '/sales/returns') return hasPermission(state, 'sales_return.view')
+  if (item.to === '/sales/import') return hasPermission(state, 'sales.view') || hasPermission(state, 'sales.create')
   return true
 }
 
