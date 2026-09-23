@@ -369,7 +369,11 @@ function SalesImportReview({ batchId }: { batchId: string }) {
                           <div key={line.id} className="text-sm text-slate-600">
                             {externalLabel(line)}
                             {line.unallocated && line.sharedOrderCount ? ` · shared qty ${line.quantity} across ${line.sharedOrderCount} orders` : ` · qty ${line.quantity}`}
-                            {line.mappedProductSnapshot ? ` · ${line.mappedProductSnapshot.productName}` : ''}
+                            {line.mappedProductSnapshot
+                              ? ` · ${line.mappedProductSnapshot.productName}`
+                              : line.mappedProductId
+                                ? ` · ${state.products.find((product) => product.id === line.mappedProductId)?.name ?? ''}`
+                                : ''}
                           </div>
                         ))}
                         {order.customerMessage && <div className="text-xs text-slate-400">{order.customerMessage}</div>}

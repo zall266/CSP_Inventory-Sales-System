@@ -8,8 +8,15 @@ type Pdfjs = {
 }
 
 export async function extractPdfTextItems(data: Uint8Array): Promise<TextItem[]> {
-  const pdfjs = (await import('pdfjs-dist/legacy/build/pdf.mjs')) as unknown as Pdfjs
-  const doc = await pdfjs.getDocument({ data, disableWorker: true, isEvalSupported: false }).promise
+  const pdfjs = (await import('pdfjs-dist/legacy/build/pdf.mjs')) as unknown as Pdfjs & {
+    GlobalWorkerOptions: { workerSrc: string }
+  }
+  const browser = typeof document !== 'undefined' && typeof document.createElement === 'function'
+  if (browser) {
+    const { configurePdfWorker } = await import('./pdfWorker')
+    configurePdfWorker(pdfjs)
+  }
+  const doc = await pdfjs.getDocument({ data, disableWorker: !browser, isEvalSupported: false }).promise
   const items: TextItem[] = []
   for (let page = 1; page <= doc.numPages; page += 1) {
     const pdfPage = await doc.getPage(page)
