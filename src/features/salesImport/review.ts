@@ -1,4 +1,4 @@
-import type { ImportBatch, ImportFile, Product, SalesImportAccount, SalesImportLine, SalesImportMapping, SalesImportOrder, SalesImportOrderStatus, SalesImportParsedLine } from '@/types'
+import type { ImportBatch, ImportFile, Product, SalesImportAccount, SalesImportLine, SalesImportMapping, SalesImportOrder, SalesImportOrderStatus, SalesImportParsedLine, SalesImportShipment } from '@/types'
 import { salesComponentsOf } from '@/features/products/salesComponents'
 import { externalLabel, resolveLineProduct } from '@/features/salesImport/mapping'
 import { round2 } from '@/utils/format'
@@ -293,6 +293,106 @@ function issueLabel(status: SalesImportOrderStatus, lines: SalesImportLine[]) {
     return 'Validation error'
   }
   return status
+}
+
+export type SalesImportPostingSummary = {
+  orders: number
+  ready: number
+  attention: number
+  confirmed: number
+  duplicates: number
+  unmapped: number
+  unallocated: number
+  errors: number
+  importedQty: number
+  postQty: number
+  heldQty: number
+  products: Array<{ productId: string; name: string; qty: number }>
+  reasons: Array<{ label: string; count: number }>
+  mappingOk: boolean
+  inventoryOk: boolean
+  awb: { matched: number; pending: number; unmatched: number; review: number }
+  postOrderIds: string[]
+}
+
+export function salesImportSummary(input: {
+  assessment: ImportAssessment
+  orders: SalesImportOrder[]
+  lines: SalesImportLine[]
+  products: Product[]
+  shipments: SalesImportShipment[]
+  takenOrderIds: Set<string>
+}): SalesImportPostingSummary {
+  const postOrderIds = input.assessment.canConfirm ? input.assessment.readyOrderIds : []
+  const postIds = new Set(postOrderIds)
+  const statuses = input.orders.map((order) => ({ order, status: liveOrderStatus(order, input.lines, input.takenOrderIds) }))
+  const seenImported = new Set<string>()
+  let importedQty = 0
+  for (const row of statuses) {
+    if (row.status === 'confirmed') continue
+    for (const line of input.lines.filter((item) => item.orderId === row.order.id)) {
+      const shared = Boolean(line.unallocated) && (line.sharedOrderCount ?? 0) > 1
+      const key = shared
+        ? `shared:${line.externalSku ?? ''}:${line.parentSku ?? ''}:${line.externalProductName}:${line.variationText ?? ''}:${line.quantity}:${line.sharedOrderCount}`
+        : line.id
+      if (seenImported.has(key)) continue
+      seenImported.add(key)
+      importedQty = round2(importedQty + line.quantity)
+    }
+  }
+  const postLines = input.lines.filter((line) => postIds.has(line.orderId) && !line.unallocated && line.mappedProductId && line.quantity > 0)
+  const products = new Map<string, { productId: string; name: string; qty: number }>()
+  let postQty = 0
+  for (const line of postLines) {
+    const productId = line.mappedProductId!
+    const product = input.products.find((item) => item.id === productId)
+    const current = products.get(productId) ?? { productId, name: product?.name || line.mappedProductSnapshot?.productName || 'Product', qty: 0 }
+    current.qty = round2(current.qty + line.quantity)
+    products.set(productId, current)
+    postQty = round2(postQty + line.quantity)
+  }
+  const reasons = new Map<string, number>()
+  for (const row of statuses) {
+    if (row.status === 'confirmed' || postIds.has(row.order.id)) continue
+    const label = attentionReason(row.status, input.assessment)
+    reasons.set(label, (reasons.get(label) ?? 0) + 1)
+  }
+  const pending = input.orders.filter((order) => !input.shipments.some((shipment) => shipment.externalOrderId === order.externalOrderId)).length
+  return {
+    orders: input.assessment.orderCount,
+    ready: postOrderIds.length,
+    attention: statuses.filter((row) => row.status !== 'confirmed' && !postIds.has(row.order.id)).length,
+    confirmed: statuses.filter((row) => row.status === 'confirmed').length,
+    duplicates: input.assessment.duplicates,
+    unmapped: input.assessment.unmapped,
+    unallocated: input.assessment.unallocated,
+    errors: statuses.filter((row) => row.status === 'error').length,
+    importedQty,
+    postQty,
+    heldQty: round2(importedQty - postQty),
+    products: [...products.values()],
+    reasons: [...reasons.entries()].map(([label, count]) => ({ label, count })),
+    mappingOk: input.assessment.unmapped === 0,
+    inventoryOk: input.assessment.shortages.length === 0,
+    awb: {
+      matched: input.shipments.filter((shipment) => shipment.linkStatus === 'matched').length,
+      pending,
+      unmatched: input.shipments.filter((shipment) => shipment.linkStatus === 'unmatched').length,
+      review: input.shipments.filter((shipment) => shipment.linkStatus === 'review').length,
+    },
+    postOrderIds,
+  }
+}
+
+function attentionReason(status: SalesImportOrderStatus, assessment: ImportAssessment) {
+  if (status === 'duplicate') return 'Duplicate'
+  if (status === 'unallocated') return 'Unallocated quantity'
+  if (status === 'unmapped') return 'Unmapped product'
+  if (status === 'error') return 'Quantity review'
+  if (assessment.mismatch) return 'Account mismatch'
+  if (assessment.needsAcknowledgement) return 'Acknowledgement required'
+  if (assessment.shortages.length) return 'Inventory'
+  return 'Needs attention'
 }
 
 export function batchStatusLabel(status: ImportBatch['status']) {
