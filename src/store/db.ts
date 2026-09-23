@@ -57,6 +57,18 @@ import {
 import { clearAttachmentBlobs, deleteAttachmentBlob } from '@/store/attachmentBlobs'
 import { applyBomCosts, hydrateProducts, normalizeUnit, parseNonNegativeMoney, productHasBom, productIsSellable, productIsUsed, purchaseQtyToBaseQty, qtyToBaseUnit, resolveProductSku, skuIsUnique, validatePurchaseConversion } from '@/features/products/masterData'
 import { inactiveSalesComponent, salesComponentSnapshot, salesComponentsOf, validateSalesComponents } from '@/features/products/salesComponents'
+import { parsePickingList, type TextItem } from '@/features/salesImport/parsePickingList'
+import { mappingIdentity, mappingKeyLabel } from '@/features/salesImport/mapping'
+import { externalLabel } from '@/features/salesImport/mapping'
+import {
+  SALES_IMPORT_WAREHOUSE_ID,
+  assessSalesImport,
+  deriveBatchStatus,
+  liveOrderStatus,
+  materializeOrders,
+  saleReference,
+  takenOrderIds,
+} from '@/features/salesImport/review'
 import { autoConsumptions, bomConsumptionMethod, bomLinesForQty, consumptionCost, hasShortage, hydrateBoms, materialAvailability, sessionComponentIsManual } from '@/features/manufacturing/helpers'
 import {
   activeBomsForProduct,
@@ -142,6 +154,11 @@ import type {
   Sale,
   SaleInput,
   SaleStatus,
+  SalesImportAccount,
+  SalesImportLine,
+  SalesImportMapping,
+  SalesImportOrder,
+  SalesImportPlatform,
   SalesReturn,
   SalesReturnEvidence,
   SalesReturnInput,
@@ -292,6 +309,12 @@ function hydrateData(data: AppData): AppData {
     receivings: data.receivings ?? [],
     stockOrders: data.stockOrders ?? [],
     openingBalances: data.openingBalances ?? [],
+    salesImportAccounts: data.salesImportAccounts ?? [],
+    salesImportBatches: data.salesImportBatches ?? [],
+    salesImportFiles: data.salesImportFiles ?? [],
+    salesImportOrders: data.salesImportOrders ?? [],
+    salesImportLines: data.salesImportLines ?? [],
+    salesImportMappings: data.salesImportMappings ?? [],
     packingAssemblies: hydratePackingAssemblies(data.packingAssemblies),
     salesReturns: hydrateSalesReturns(data.salesReturns),
     returnSources: data.returnSources ?? defaultReturnSources(PROTOTYPE_TODAY.toISOString()),
@@ -824,6 +847,7 @@ function postPackingAssembly(existing: PackingAssembly, options: { acceptSnapsho
 
 let agentSaleInFlight = false
 let openingBalanceInFlight = false
+let salesImportConfirmInFlight = false
 let salesReturnInFlight = false
 let packingConfirmInFlight = false
 
@@ -1800,6 +1824,113 @@ function pickingAllocationFromLine(
     createdBy: user.name,
     createdAt: at,
   }
+}
+
+function salesImportCreateDenied() {
+  if (hasPermission(state, 'sales.create')) return false
+  toast('Permission denied', 'You cannot import sales.', 'danger')
+  return true
+}
+
+function salesImportAccount(accountId: string) {
+  return (state.salesImportAccounts ?? []).find((account) => account.id === accountId && account.active)
+}
+
+function takenSalesImportOrders(platform: SalesImportPlatform, accountId: string, exceptBatchId?: string) {
+  const account = (state.salesImportAccounts ?? []).find((item) => item.id === accountId)
+  if (!account) return new Set<string>()
+  return takenOrderIds({
+    platform,
+    accountId,
+    accountName: account.name,
+    exceptBatchId,
+    orders: state.salesImportOrders ?? [],
+    batches: state.salesImportBatches ?? [],
+    sales: state.sales,
+  })
+}
+
+function rememberExactImportMappings(platform: SalesImportPlatform, accountId: string, lines: SalesImportLine[]) {
+  let mappings = state.salesImportMappings ?? []
+  let changed = false
+  for (const line of lines) {
+    if (!line.mappedProductId) continue
+    const identity = mappingIdentity(line)
+    if (identity.keyType !== 'sku') continue
+    const product = state.products.find((item) => item.id === line.mappedProductId && item.status === 'active' && item.sku.trim() === identity.key)
+    if (!product) continue
+    const exists = mappings.some((row) => row.platform === platform && row.accountId === accountId && row.keyType === 'sku' && row.key === identity.key)
+    if (exists) continue
+    mappings = [
+      { id: uid('sim'), platform, accountId, keyType: 'sku', key: identity.key, productId: product.id, createdAt: nowIso() },
+      ...mappings,
+    ]
+    changed = true
+  }
+  if (changed) setData({ salesImportMappings: mappings })
+}
+
+function replaceOpenSalesImportOrders(batchId: string) {
+  const batch = (state.salesImportBatches ?? []).find((item) => item.id === batchId)
+  if (!batch) return
+  const existing = (state.salesImportOrders ?? []).filter((order) => order.batchId === batchId)
+  const confirmed = existing.filter((order) => order.status === 'confirmed' && order.saleId)
+  const confirmedKeys = new Set(confirmed.map((order) => order.externalOrderId))
+  const dropIds = new Set(existing.filter((order) => !confirmedKeys.has(order.externalOrderId) || !order.saleId).map((order) => order.id))
+  const drafts = materializeOrders({
+    files: (state.salesImportFiles ?? []).filter((file) => file.batchId === batchId),
+    mappings: state.salesImportMappings ?? [],
+    products: state.products,
+    platform: batch.platform,
+    accountId: batch.accountId,
+    takenOrderIds: takenSalesImportOrders(batch.platform, batch.accountId, batchId),
+  }).filter((draft) => !confirmedKeys.has(draft.externalOrderId))
+  const orders: SalesImportOrder[] = drafts.map((draft) => ({
+    id: uid('sio'),
+    batchId,
+    externalOrderId: draft.externalOrderId,
+    customerMessage: draft.customerMessage,
+    status: draft.status,
+    fileId: draft.fileId,
+  }))
+  const lines: SalesImportLine[] = []
+  drafts.forEach((draft, index) => {
+    const order = orders[index]
+    for (const line of draft.lines) {
+      lines.push({
+        id: uid('sil'),
+        orderId: order.id,
+        externalProductName: line.externalProductName,
+        variationText: line.variationText,
+        parentSku: line.parentSku,
+        externalSku: line.externalSku,
+        quantity: line.quantity,
+        quantitySource: 'picking',
+        mappedProductId: line.mappedProductId,
+        unallocated: line.unallocated || undefined,
+        sharedOrderCount: line.sharedOrderCount,
+      })
+    }
+  })
+  setData({
+    salesImportOrders: [...(state.salesImportOrders ?? []).filter((order) => !dropIds.has(order.id)), ...orders],
+    salesImportLines: [...(state.salesImportLines ?? []).filter((line) => !dropIds.has(line.orderId)), ...lines],
+  })
+  rememberExactImportMappings(batch.platform, batch.accountId, lines)
+  const files = (state.salesImportFiles ?? []).filter((file) => file.batchId === batchId)
+  const nextOrders = (state.salesImportOrders ?? []).filter((order) => order.batchId === batchId)
+  const taken = takenSalesImportOrders(batch.platform, batch.accountId, batchId)
+  const refreshed = nextOrders.map((order) => {
+    if (order.status === 'confirmed' && order.saleId) return order
+    const status = liveOrderStatus(order, state.salesImportLines ?? [], taken)
+    return status === order.status ? order : { ...order, status }
+  })
+  setData({
+    salesImportOrders: (state.salesImportOrders ?? []).map((order) => refreshed.find((item) => item.id === order.id) ?? order),
+    salesImportBatches: (state.salesImportBatches ?? []).map((item) =>
+      item.id === batchId ? { ...item, status: deriveBatchStatus(refreshed, files.length) } : item,
+    ),
+  })
 }
 
 export const db = {
@@ -7515,6 +7646,299 @@ export const db = {
     toast('Task completed', task.title)
     return true
   },
+  createSalesImportAccount(platform: SalesImportPlatform, name: string) {
+    if (salesImportCreateDenied()) return null
+    const trimmed = name.trim()
+    if (!trimmed) {
+      toast('Account name is required', undefined, 'warning')
+      return null
+    }
+    if (platform !== 'shopee' && platform !== 'tiktok') {
+      toast('Choose a platform', undefined, 'warning')
+      return null
+    }
+    const existing = (state.salesImportAccounts ?? []).find(
+      (account) => account.active && account.platform === platform && account.name.trim().toLowerCase() === trimmed.toLowerCase(),
+    )
+    if (existing) return existing
+    const account: SalesImportAccount = { id: uid('sia'), platform, name: trimmed, active: true, createdAt: nowIso() }
+    setData({ salesImportAccounts: [account, ...(state.salesImportAccounts ?? [])] })
+    return account
+  },
+
+  createSalesImportBatch(platform: SalesImportPlatform, accountId: string) {
+    if (salesImportCreateDenied()) return null
+    const account = salesImportAccount(accountId)
+    if (!account || account.platform !== platform) {
+      toast('Choose an account for this platform', undefined, 'warning')
+      return null
+    }
+    const batch = {
+      id: uid('sib'),
+      platform,
+      accountId,
+      status: 'draft' as const,
+      createdBy: currentUser(state).name,
+      createdAt: nowIso(),
+    }
+    setData({
+      salesImportBatches: [batch, ...(state.salesImportBatches ?? [])],
+      documentAuditLogs: pushDocAudit(
+        makeDocAudit({
+          action: 'sales_import_created',
+          documentType: 'sales_import',
+          documentId: batch.id,
+          documentNo: `${platform}:${account.name}`,
+          newValue: account.name,
+        }),
+      ),
+    })
+    toast('Import batch created', `${platform} · ${account.name}`)
+    return batch
+  },
+
+  ingestSalesImportPicking(batchId: string, input: { fileName: string; fileHash: string; items: TextItem[] }) {
+    if (salesImportCreateDenied()) return { ok: false as const, error: 'Permission denied' }
+    const batch = (state.salesImportBatches ?? []).find((item) => item.id === batchId)
+    if (!batch) return { ok: false as const, error: 'Import batch was not found.' }
+    if (batch.status === 'confirmed') return { ok: false as const, error: 'This batch is already confirmed.' }
+    const fileHash = input.fileHash.trim()
+    if (!fileHash) return { ok: false as const, error: 'The file could not be read.' }
+    if ((state.salesImportFiles ?? []).some((file) => file.batchId === batchId && file.fileHash === fileHash)) {
+      toast('File not added', 'This file is already in the batch.', 'warning')
+      return { ok: false as const, error: 'This file is already in the batch.' }
+    }
+    let parsed: ReturnType<typeof parsePickingList>
+    try {
+      parsed = parsePickingList(input.items ?? [])
+    } catch {
+      parsed = {
+        layout: 'unknown',
+        identityReliable: false,
+        lines: [],
+        customerMessages: [],
+        warnings: [],
+        error: 'Could not read this PDF.',
+      }
+    }
+    const file = {
+      id: uid('sif'),
+      batchId,
+      role: 'picking' as const,
+      fileName: input.fileName.trim() || 'picking-list.pdf',
+      fileHash,
+      detectedLayout: parsed.layout,
+      parsedAt: parsed.error ? undefined : nowIso(),
+      parseError: parsed.error,
+      detectedUsername: parsed.detectedUsername,
+      identityReliable: parsed.identityReliable,
+      warnings: parsed.warnings,
+      customerMessages: parsed.customerMessages,
+      parsedLines: parsed.error ? [] : parsed.lines,
+    }
+    setData({ salesImportFiles: [...(state.salesImportFiles ?? []), file] })
+    replaceOpenSalesImportOrders(batchId)
+    toast(parsed.error ? 'Parse error' : 'Picking list processed', parsed.error ?? input.fileName, parsed.error ? 'danger' : 'success')
+    return { ok: true as const, fileId: file.id, error: parsed.error }
+  },
+
+  acknowledgeSalesImportAccount(batchId: string) {
+    if (salesImportCreateDenied()) return false
+    const batch = (state.salesImportBatches ?? []).find((item) => item.id === batchId)
+    const account = batch ? salesImportAccount(batch.accountId) : undefined
+    if (!batch || !account) return false
+    const files = (state.salesImportFiles ?? []).filter((file) => file.batchId === batchId)
+    const issues = assessSalesImport({
+      account,
+      batch,
+      files,
+      orders: state.salesImportOrders ?? [],
+      lines: state.salesImportLines ?? [],
+      products: state.products,
+      takenOrderIds: takenSalesImportOrders(batch.platform, batch.accountId, batchId),
+      allowNegativeStock: state.settings.allowNegativeStock,
+      availableQty: (productId) => getQty(productId, SALES_IMPORT_WAREHOUSE_ID),
+    })
+    if (issues.mismatch) {
+      toast('Account mismatch', 'Acknowledgement cannot override a different username.', 'danger')
+      return false
+    }
+    setData({
+      salesImportBatches: (state.salesImportBatches ?? []).map((item) =>
+        item.id === batchId
+          ? { ...item, accountAcknowledged: true, accountAcknowledgedBy: currentUser(state).name, accountAcknowledgedAt: nowIso() }
+          : item,
+      ),
+    })
+    toast('Account acknowledged', `${batch.platform} · ${account.name}`)
+    return true
+  },
+
+  saveSalesImportMapping(input: { batchId: string; keyType: 'sku' | 'text'; key: string; productId: string }) {
+    if (salesImportCreateDenied()) return false
+    const batch = (state.salesImportBatches ?? []).find((item) => item.id === input.batchId)
+    const product = state.products.find((item) => item.id === input.productId && item.status === 'active')
+    if (!batch || !product || !input.key.trim()) {
+      toast('Choose a CSP product', undefined, 'warning')
+      return false
+    }
+    const key = input.key.trim()
+    const mappings = state.salesImportMappings ?? []
+    const existing = mappings.find((row) => row.platform === batch.platform && row.accountId === batch.accountId && row.keyType === input.keyType && row.key === key)
+    const nextMappings: SalesImportMapping[] = existing
+      ? mappings.map((row) => (row.id === existing.id ? { ...row, productId: product.id } : row))
+      : [{ id: uid('sim'), platform: batch.platform, accountId: batch.accountId, keyType: input.keyType, key, productId: product.id, createdAt: nowIso() }, ...mappings]
+    const openOrderIds = new Set(
+      (state.salesImportOrders ?? [])
+        .filter((order) => {
+          if (order.status === 'confirmed') return false
+          const owner = (state.salesImportBatches ?? []).find((item) => item.id === order.batchId)
+          return owner?.platform === batch.platform && owner.accountId === batch.accountId
+        })
+        .map((order) => order.id),
+    )
+    const lines = (state.salesImportLines ?? []).map((line) => {
+      if (!openOrderIds.has(line.orderId) || line.mappedProductSnapshot) return line
+      const identity = mappingIdentity(line)
+      if (identity.keyType !== input.keyType || identity.key !== key) return line
+      return { ...line, mappedProductId: product.id }
+    })
+    setData({ salesImportMappings: nextMappings, salesImportLines: lines })
+    const touched = new Set(
+      (state.salesImportOrders ?? []).filter((order) => openOrderIds.has(order.id)).map((order) => order.batchId),
+    )
+    for (const id of touched) replaceOpenSalesImportOrders(id)
+    toast('Mapping saved', product.name)
+    return true
+  },
+
+  confirmSalesImport(batchId: string) {
+    if (salesImportCreateDenied()) return { ok: false as const, posted: 0, error: 'Permission denied' }
+    if (salesImportConfirmInFlight) return { ok: false as const, posted: 0, error: 'Confirm is already running.' }
+    const batch = (state.salesImportBatches ?? []).find((item) => item.id === batchId)
+    const account = batch ? salesImportAccount(batch.accountId) : undefined
+    if (!batch || !account) return { ok: false as const, posted: 0, error: 'Import batch was not found.' }
+    if (!state.warehouses.some((warehouse) => warehouse.id === SALES_IMPORT_WAREHOUSE_ID)) {
+      return { ok: false as const, posted: 0, error: 'Main Warehouse was not found.' }
+    }
+    salesImportConfirmInFlight = true
+    try {
+      const files = (state.salesImportFiles ?? []).filter((file) => file.batchId === batchId)
+      const orders = () => (state.salesImportOrders ?? []).filter((order) => order.batchId === batchId)
+      const assessment = () =>
+        assessSalesImport({
+          account,
+          batch: (state.salesImportBatches ?? []).find((item) => item.id === batchId) ?? batch,
+          files,
+          orders: state.salesImportOrders ?? [],
+          lines: state.salesImportLines ?? [],
+          products: state.products,
+          takenOrderIds: takenSalesImportOrders(batch.platform, batch.accountId, batchId),
+          allowNegativeStock: state.settings.allowNegativeStock,
+          availableQty: (productId) => getQty(productId, SALES_IMPORT_WAREHOUSE_ID),
+        })
+      const before = assessment()
+      if (before.mismatch || before.needsAcknowledgement || before.shortages.length) {
+        toast(before.mismatch ? 'Account mismatch' : before.needsAcknowledgement ? 'Acknowledgement required' : 'Insufficient stock', before.blockers[0], 'danger')
+        return { ok: false as const, posted: 0, error: before.blockers[0] ?? 'Confirm is blocked.' }
+      }
+      const ready = orders().filter((order) => liveOrderStatus(order, state.salesImportLines ?? [], takenSalesImportOrders(batch.platform, batch.accountId, batchId)) === 'new')
+      if (!ready.length) {
+        const already = orders().filter((order) => order.status === 'confirmed').length
+        if (already) return { ok: true as const, posted: 0, already }
+        toast('Nothing to confirm', 'Resolve unmapped products or unallocated quantities first.', 'warning')
+        return { ok: false as const, posted: 0, error: 'Nothing to confirm.' }
+      }
+      for (const order of ready) {
+        const lines = (state.salesImportLines ?? []).filter((line) => line.orderId === order.id && !line.unallocated)
+        for (const line of lines) {
+          const product = line.mappedProductId ? productById(line.mappedProductId) : undefined
+          if (!product || !productIsSellable(product)) {
+            toast('Sale blocked', `${externalLabel(line)} is not sellable.`, 'danger')
+            return { ok: false as const, posted: 0, error: 'A product in the confirm set is not sellable.' }
+          }
+          const inactive = inactiveSalesComponent(product, state.products)
+          if (inactive) {
+            toast('Sale blocked', `${inactive} is inactive.`, 'danger')
+            return { ok: false as const, posted: 0, error: `${inactive} is inactive.` }
+          }
+        }
+      }
+      const posted: string[] = []
+      for (const order of ready) {
+        const current = (state.salesImportOrders ?? []).find((item) => item.id === order.id)
+        if (!current || current.status === 'confirmed') continue
+        const reference = saleReference(batch.platform, account.name, current.externalOrderId)
+        const linked = state.sales.find((sale) => sale.status !== 'voided' && sale.reference === reference)
+        const lines = (state.salesImportLines ?? []).filter((line) => line.orderId === current.id && !line.unallocated && line.mappedProductId)
+        if (!lines.length) continue
+        const sale = linked ?? db.createSale({
+          customerId: state.settings.defaultCustomerId || 'c-walkin',
+          warehouseId: SALES_IMPORT_WAREHOUSE_ID,
+          items: lines.map((line) => ({
+            productId: line.mappedProductId!,
+            qty: line.quantity,
+            price: productById(line.mappedProductId!)?.sellingPrice ?? 0,
+            description: externalLabel(line),
+          })),
+          paidAmount: 0,
+          reference,
+          notes: [current.customerMessage, `Sales import ${batch.platform} ${account.name}`].filter(Boolean).join(' — '),
+        })
+        if (!sale) break
+        const snapshots = new Map(
+          lines.map((line) => {
+            const product = productById(line.mappedProductId!)
+            return [line.id, {
+              productId: product?.id ?? line.mappedProductId!,
+              productName: product?.name ?? '',
+              sku: product?.sku ?? '',
+              unit: product?.unit ?? '',
+              mappingKey: mappingKeyLabel(mappingIdentity(line)),
+            }] as const
+          }),
+        )
+        setData({
+          salesImportOrders: (state.salesImportOrders ?? []).map((item) =>
+            item.id === current.id ? { ...item, status: 'confirmed' as const, saleId: sale.id } : item,
+          ),
+          salesImportLines: (state.salesImportLines ?? []).map((line) =>
+            snapshots.has(line.id) ? { ...line, mappedProductSnapshot: snapshots.get(line.id) } : line,
+          ),
+        })
+        if (!linked) posted.push(sale.invoiceNo)
+      }
+      const filesNow = (state.salesImportFiles ?? []).filter((file) => file.batchId === batchId)
+      const refreshed = (state.salesImportOrders ?? [])
+        .filter((order) => order.batchId === batchId)
+        .map((order) => {
+          if (order.status === 'confirmed' && order.saleId) return order
+          return { ...order, status: liveOrderStatus(order, state.salesImportLines ?? [], takenSalesImportOrders(batch.platform, batch.accountId, batchId)) }
+        })
+      setData({
+        salesImportOrders: (state.salesImportOrders ?? []).map((order) => refreshed.find((item) => item.id === order.id) ?? order),
+        salesImportBatches: (state.salesImportBatches ?? []).map((item) =>
+          item.id === batchId ? { ...item, status: deriveBatchStatus(refreshed, filesNow.length) } : item,
+        ),
+        documentAuditLogs: posted.length
+          ? pushDocAudit(
+              makeDocAudit({
+                action: 'sales_import_confirmed',
+                documentType: 'sales_import',
+                documentId: batch.id,
+                documentNo: `${batch.platform}:${account.name}`,
+                newValue: posted.join(', '),
+              }),
+            )
+          : state.documentAuditLogs,
+      })
+      if (posted.length) toast('Sales import confirmed', `${posted.length} sale${posted.length === 1 ? '' : 's'} posted`)
+      return { ok: true as const, posted: posted.length }
+    } finally {
+      salesImportConfirmInFlight = false
+    }
+  },
+
   async purgeExpiredSalesReturnEvidence(now = nowIso()) {
     const result = await purgeSalesReturnEvidenceFiles(state.salesReturns ?? [], now)
     if (result.changed) setData({ salesReturns: result.returns })

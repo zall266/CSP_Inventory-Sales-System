@@ -541,11 +541,13 @@ export type DocumentAuditAction =
   | 'stock_order_marked'
   | 'stock_order_cancelled'
   | 'stock_order_received'
+  | 'sales_import_created'
+  | 'sales_import_confirmed'
 
 export type DocumentAuditLog = {
   id: string
   action: DocumentAuditAction
-  documentType: 'quotation' | 'invoice' | 'delivery' | 'agent_sale' | 'agent_withdrawal' | 'staff_task' | 'staff_task_category' | 'opening_balance' | 'sales_return' | 'customer_wholesale_price' | 'stock_order' | 'stock_usage'
+  documentType: 'quotation' | 'invoice' | 'delivery' | 'agent_sale' | 'agent_withdrawal' | 'staff_task' | 'staff_task_category' | 'opening_balance' | 'sales_return' | 'customer_wholesale_price' | 'stock_order' | 'stock_usage' | 'sales_import'
   documentId: string
   documentNo: string
   field: string
@@ -1429,6 +1431,108 @@ export type AppData = {
   staffTasks: StaffTask[]
   staffTaskOccurrences: StaffTaskOccurrence[]
   openingBalances: OpeningBalance[]
+  salesImportAccounts: SalesImportAccount[]
+  salesImportBatches: ImportBatch[]
+  salesImportFiles: ImportFile[]
+  salesImportOrders: SalesImportOrder[]
+  salesImportLines: SalesImportLine[]
+  salesImportMappings: SalesImportMapping[]
+}
+
+export type SalesImportPlatform = 'shopee' | 'tiktok'
+
+export type SalesImportAccount = {
+  id: string
+  platform: SalesImportPlatform
+  name: string
+  active: boolean
+  createdAt: string
+}
+
+export type ImportBatchStatus = 'draft' | 'ready' | 'partial' | 'confirmed'
+
+export type ImportBatch = {
+  id: string
+  platform: SalesImportPlatform
+  accountId: string
+  status: ImportBatchStatus
+  createdBy: string
+  createdAt: string
+  accountAcknowledged?: boolean
+  accountAcknowledgedBy?: string
+  accountAcknowledgedAt?: string
+}
+
+export type ImportFileRole = 'picking' | 'awb'
+
+export type ImportFile = {
+  id: string
+  batchId: string
+  role: ImportFileRole
+  fileName: string
+  fileHash: string
+  detectedLayout: string
+  parsedAt?: string
+  parseError?: string
+  detectedUsername?: string
+  identityReliable?: boolean
+  warnings?: string[]
+  customerMessages?: { orderId: string; message: string }[]
+  parsedLines?: SalesImportParsedLine[]
+}
+
+export type SalesImportParsedLine = {
+  externalProductName: string
+  variationText?: string
+  parentSku?: string
+  externalSku?: string
+  quantity: number
+  orderIds: string[]
+}
+
+export type SalesImportOrderStatus = 'new' | 'duplicate' | 'unallocated' | 'unmapped' | 'confirmed' | 'error'
+
+export type SalesImportOrder = {
+  id: string
+  batchId: string
+  externalOrderId: string
+  customerMessage?: string
+  status: SalesImportOrderStatus
+  saleId?: string
+  fileId?: string
+}
+
+export type SalesImportSnapshot = {
+  productId: string
+  productName: string
+  sku: string
+  unit: string
+  mappingKey: string
+}
+
+export type SalesImportLine = {
+  id: string
+  orderId: string
+  externalProductName: string
+  variationText?: string
+  parentSku?: string
+  externalSku?: string
+  quantity: number
+  quantitySource: 'picking'
+  mappedProductId?: string
+  mappedProductSnapshot?: SalesImportSnapshot
+  unallocated?: boolean
+  sharedOrderCount?: number
+}
+
+export type SalesImportMapping = {
+  id: string
+  platform: SalesImportPlatform
+  accountId: string
+  keyType: 'sku' | 'text'
+  key: string
+  productId: string
+  createdAt: string
 }
 
 export type AppState = AppData & {

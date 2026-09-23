@@ -343,7 +343,9 @@ function SaleDrawer({ id, onClose }: { id: string; onClose: () => void }) {
             <Mini label="Customer" value={customerName(sale.customerId)} />
             <Mini label="Date" value={formatDate(sale.date)} />
             <Mini label="Payment" value={paymentLabel(sale.paymentMethod)} />
+            {sale.reference && <Mini label="Reference" value={sale.reference} />}
           </div>
+          {sale.notes && <div className="mt-3 text-sm text-slate-500">{sale.notes}</div>}
           {customer?.phone && customer.phone !== '-' && (
             <div className="mt-2 text-sm text-slate-500">{customer.phone}</div>
           )}
