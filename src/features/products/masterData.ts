@@ -1,5 +1,6 @@
 import type { AppState, Bom, Product } from '@/types'
 import { round2 } from '@/utils/format'
+import { normalizeSalesComponents } from '@/features/products/salesComponents'
 
 export const AUTO_SKU_START = 100001
 export const AUTO_SKU_MAX = 999999
@@ -280,6 +281,7 @@ export function hydrateProduct(product: Product, boms: Bom[]): Product {
     purchaseCost,
     costSource,
     sellable: product.sellable !== false,
+    salesComponents: normalizeSalesComponents(product.salesComponents),
   }
 }
 
