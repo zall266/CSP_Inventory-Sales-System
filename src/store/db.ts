@@ -56,6 +56,7 @@ import {
 } from '@/features/tasks/taskModel'
 import { clearAttachmentBlobs, deleteAttachmentBlob } from '@/store/attachmentBlobs'
 import { applyBomCosts, hydrateProducts, normalizeUnit, parseNonNegativeMoney, productHasBom, productIsSellable, productIsUsed, purchaseQtyToBaseQty, qtyToBaseUnit, resolveProductSku, skuIsUnique, validatePurchaseConversion } from '@/features/products/masterData'
+import { inactiveSalesComponent, salesComponentSnapshot, salesComponentsOf, validateSalesComponents } from '@/features/products/salesComponents'
 import { autoConsumptions, bomConsumptionMethod, bomLinesForQty, consumptionCost, hasShortage, hydrateBoms, materialAvailability, sessionComponentIsManual } from '@/features/manufacturing/helpers'
 import {
   activeBomsForProduct,
@@ -1944,8 +1945,14 @@ export const db = {
       agentPrice = parsed.value
     }
     const costPrice = round2(purchaseCost.value / conversion.value)
+    const id = uid('prd')
+    const componentCheck = validateSalesComponents(id, input.salesComponents, state.products)
+    if (!componentCheck.ok) {
+      toast(componentCheck.reason, undefined, 'warning')
+      return null
+    }
     const product = {
-      id: uid('prd'),
+      id,
       name,
       sku: skuResult.sku,
       barcode: input.barcode?.trim() ?? '',
@@ -1965,6 +1972,7 @@ export const db = {
       trackExpiry: Boolean(input.trackExpiry),
       status: input.status ?? 'active',
       accent: '#4F46E5',
+      salesComponents: componentCheck.items,
     }
     const inventory = [
       ...state.inventory,
@@ -2066,6 +2074,15 @@ export const db = {
         costPrice = round2(purchaseCost / conversion.value)
       }
     }
+    let salesComponents = salesComponentsOf(current)
+    if (Object.prototype.hasOwnProperty.call(patch, 'salesComponents')) {
+      const checked = validateSalesComponents(id, patch.salesComponents, state.products)
+      if (!checked.ok) {
+        toast(checked.reason, undefined, 'warning')
+        return false
+      }
+      salesComponents = checked.items
+    }
     const next = {
       ...current,
       ...patch,
@@ -2086,6 +2103,7 @@ export const db = {
       trackBatch: patch.trackBatch ?? current.trackBatch,
       trackExpiry: patch.trackExpiry ?? current.trackExpiry,
       status: patch.status ?? current.status,
+      salesComponents,
     }
     setData({
       products: applyBomCosts(
@@ -3301,13 +3319,50 @@ export const db = {
         return null
       }
     }
+    for (const item of items) {
+      const product = productById(item.productId)
+      const inactive = inactiveSalesComponent(product, state.products)
+      if (inactive) {
+        toast('Sale blocked', `${inactive} is inactive.`, 'danger')
+        return null
+      }
+    }
+    const postedItems = items.map((item) => {
+      const product = productById(item.productId)
+      if (!product || !salesComponentsOf(product).length) return item
+      return {
+        ...item,
+        salesComponentsSnapshot: salesComponentSnapshot(product, state.products, item.qty),
+      }
+    })
+    const usesComponents = postedItems.some((item) => item.salesComponentsSnapshot?.length)
     if (!state.settings.allowNegativeStock) {
-      for (const item of items) {
-        const available = getQty(item.productId, warehouseId)
-        if (item.qty > available) {
-          const product = productById(item.productId)
-          toast('Insufficient stock', `${product?.name ?? 'Item'} has ${available} available.`, 'danger')
-          return null
+      if (!usesComponents) {
+        for (const item of postedItems) {
+          const available = getQty(item.productId, warehouseId)
+          if (item.qty > available) {
+            const product = productById(item.productId)
+            toast('Insufficient stock', `${product?.name ?? 'Item'} has ${available} available.`, 'danger')
+            return null
+          }
+        }
+      } else {
+        const required = new Map<string, number>()
+        for (const item of postedItems) {
+          const outs = item.salesComponentsSnapshot?.length
+            ? item.salesComponentsSnapshot.map((row) => ({ productId: row.productId, qty: row.qty }))
+            : [{ productId: item.productId, qty: item.qty }]
+          for (const row of outs) {
+            required.set(row.productId, round2((required.get(row.productId) ?? 0) + row.qty))
+          }
+        }
+        for (const [productId, qty] of required) {
+          const available = getQty(productId, warehouseId)
+          if (qty > available) {
+            const product = productById(productId)
+            toast('Insufficient stock', `${product?.name ?? 'Item'} has ${available} available. Required: ${qty}.`, 'danger')
+            return null
+          }
         }
       }
     }
@@ -3329,7 +3384,7 @@ export const db = {
       customerId: input.customerId,
       warehouseId,
       salesperson: input.salesperson ?? currentUser(state).name,
-      items,
+      items: postedItems,
       subtotal,
       discount,
       tax,
@@ -3350,18 +3405,25 @@ export const db = {
 
     let inventory = state.inventory
     let movements = state.stockMovements
-    for (const item of items) {
-      const applied = addMovement(movements, inventory, {
-        date,
-        reference: invoiceNo,
-        productId: item.productId,
-        warehouseId,
-        type: 'sale',
-        stockIn: 0,
-        stockOut: item.qty,
-      })
-      inventory = applied.inventory
-      movements = applied.movements
+    for (const item of postedItems) {
+      const outs = item.salesComponentsSnapshot?.length
+        ? item.salesComponentsSnapshot.map((row) => ({ productId: row.productId, qty: row.qty, notes: `Sales component · ${productById(item.productId)?.name ?? item.productId}` }))
+        : [{ productId: item.productId, qty: item.qty, notes: undefined as string | undefined }]
+      for (const row of outs) {
+        if (!(row.qty > 0)) continue
+        const applied = addMovement(movements, inventory, {
+          date,
+          reference: invoiceNo,
+          productId: row.productId,
+          warehouseId,
+          type: 'sale',
+          stockIn: 0,
+          stockOut: row.qty,
+          notes: row.notes,
+        })
+        inventory = applied.inventory
+        movements = applied.movements
+      }
     }
 
     const payments = [...state.payments]
@@ -3381,9 +3443,17 @@ export const db = {
     }
 
     state = { ...state, sales: [sale, ...state.sales], inventory, stockMovements: movements, payments }
-    for (const item of items) {
-      const qty = inventory.find((row) => row.productId === item.productId && row.warehouseId === warehouseId)?.qty ?? 0
-      maybeStockAlerts(item.productId, warehouseId, qty)
+    const alerted = new Set<string>()
+    for (const item of postedItems) {
+      const ids = item.salesComponentsSnapshot?.length
+        ? item.salesComponentsSnapshot.map((row) => row.productId)
+        : [item.productId]
+      for (const productId of ids) {
+        if (alerted.has(productId)) continue
+        alerted.add(productId)
+        const qty = inventory.find((row) => row.productId === productId && row.warehouseId === warehouseId)?.qty ?? 0
+        maybeStockAlerts(productId, warehouseId, qty)
+      }
     }
     emit()
     toast('Sale completed', `${invoiceNo} · ${sale.status === 'paid' ? 'Paid' : 'Recorded'}`)
@@ -3436,20 +3506,26 @@ export const db = {
     let inventory = state.inventory
     let movements = state.stockMovements
     for (const item of sale.items) {
-      const remaining = item.qty - item.returnedQty
-      if (remaining <= 0) continue
-      const applied = addMovement(movements, inventory, {
-        date: nowIso(),
-        reference: `${sale.invoiceNo}-VOID`,
-        productId: item.productId,
-        warehouseId: sale.warehouseId,
-        type: 'sales_return',
-        stockIn: remaining,
-        stockOut: 0,
-        notes: 'Voided sale',
-      })
-      inventory = applied.inventory
-      movements = applied.movements
+      const remainingRatio = item.qty > 0 ? (item.qty - item.returnedQty) / item.qty : 0
+      if (!(remainingRatio > 0)) continue
+      const restores = item.salesComponentsSnapshot?.length
+        ? item.salesComponentsSnapshot.map((row) => ({ productId: row.productId, qty: round2(row.qty * remainingRatio) }))
+        : [{ productId: item.productId, qty: round2(item.qty - item.returnedQty) }]
+      for (const row of restores) {
+        if (!(row.qty > 0)) continue
+        const applied = addMovement(movements, inventory, {
+          date: nowIso(),
+          reference: `${sale.invoiceNo}-VOID`,
+          productId: row.productId,
+          warehouseId: sale.warehouseId,
+          type: 'sales_return',
+          stockIn: row.qty,
+          stockOut: 0,
+          notes: 'Voided sale',
+        })
+        inventory = applied.inventory
+        movements = applied.movements
+      }
     }
     setData({
       sales: state.sales.map((item) => (item.id === id ? { ...item, status: 'voided', balance: 0 } : item)),

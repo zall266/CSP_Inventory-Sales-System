@@ -98,6 +98,19 @@ export type Category = {
 
 export type CostSource = 'bom' | 'manual'
 
+export type SalesComponent = {
+  productId: string
+  qty: number
+}
+
+export type SalesComponentSnapshot = {
+  productId: string
+  productName: string
+  sku: string
+  qty: number
+  unit: string
+}
+
 export type Product = {
   id: string
   name: string
@@ -119,6 +132,8 @@ export type Product = {
   trackExpiry: boolean
   status: ProductStatus
   accent: string
+  /** Direct sales consumption. Empty means the sold SKU is stocked out itself. */
+  salesComponents?: SalesComponent[]
 }
 
 export type InventoryRow = {
@@ -248,6 +263,7 @@ export type LineItem = {
   batchNo?: string
   expiry?: string
   description?: string
+  salesComponentsSnapshot?: SalesComponentSnapshot[]
 }
 
 export type Sale = {
@@ -1438,6 +1454,7 @@ export type ProductInput = {
   trackBatch?: boolean
   trackExpiry?: boolean
   status?: ProductStatus
+  salesComponents?: SalesComponent[]
 }
 
 export type SaleInput = {

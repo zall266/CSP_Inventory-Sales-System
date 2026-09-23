@@ -130,6 +130,16 @@ function ProductDrawer({ id, onClose }: { id: string; onClose: () => void }) {
                   <div><span className="text-slate-400">Base unit</span><div className="font-medium">{formatUnit(item.unit)}</div></div>
                   <div><span className="text-slate-400">Purchase unit</span><div className="font-medium">{formatUnit(item.purchaseUnit ?? item.unit)}</div></div>
                   <div><span className="text-slate-400">Conversion</span><div className="font-medium">1 {formatUnit(item.purchaseUnit ?? item.unit)} = {item.purchaseConversionQty ?? 1} {formatUnit(item.unit)}</div></div>
+                  {(item.salesComponents ?? []).length > 0 && (
+                    <div className="sm:col-span-2">
+                      <span className="text-slate-400">Sales Components</span>
+                      <div className="mt-1 space-y-1">
+                        {item.salesComponents?.map((row) => (
+                          <div key={row.productId} className="font-medium">{product(row.productId)?.name ?? row.productId} × {formatQty(row.qty)}</div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
                 </div>
               )}
             </div>
@@ -350,7 +360,12 @@ function SaleDrawer({ id, onClose }: { id: string; onClose: () => void }) {
               <tbody>
                 {sale.items.map((line) => (
                   <tr key={line.productId} className="cursor-default">
-                    <td>{productName(line.productId)}</td>
+                    <td>
+                      <div>{productName(line.productId)}</div>
+                      {line.salesComponentsSnapshot?.map((row) => (
+                        <div key={row.productId} className="text-xs text-slate-500">Consumed {row.productName || productName(row.productId)} × {formatQty(row.qty)} {row.unit}</div>
+                      ))}
+                    </td>
                     <td className="tabular">{formatQty(line.qty)}</td>
                     <td className="tabular">{formatMoney(line.price)}</td>
                     <td className="tabular font-medium">{formatMoney(line.total)}</td>

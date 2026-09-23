@@ -3,7 +3,7 @@ import { Button, Field, Input, Select, Toggle } from '@/components/ui'
 import { activeBomForProduct, baseUnitCost, baseUnitOptions, formatUnit, normalizeUnit, unitOptions, unitsEqual, validatePurchaseConversion } from '@/features/products/masterData'
 import { useStore } from '@/store/hooks'
 import { formatMoney, round2 } from '@/utils/format'
-import type { Product, ProductInput, ProductStatus } from '@/types'
+import type { Product, ProductInput, ProductStatus, SalesComponent } from '@/types'
 
 export type ProductFormValue = {
   name: string
@@ -18,6 +18,7 @@ export type ProductFormValue = {
   status: ProductStatus
   sellable: boolean
   reorderLevel: number | ''
+  salesComponents: SalesComponent[]
 }
 
 export function emptyProductForm(categoryId: string, material = false): ProductFormValue {
@@ -34,6 +35,7 @@ export function emptyProductForm(categoryId: string, material = false): ProductF
     status: 'active',
     sellable: !material,
     reorderLevel: 0,
+    salesComponents: [],
   }
 }
 
@@ -51,6 +53,7 @@ export function formFromProduct(product: Product): ProductFormValue {
     status: product.status,
     sellable: product.sellable !== false,
     reorderLevel: product.reorderLevel ?? 0,
+    salesComponents: (product.salesComponents ?? []).map((row) => ({ productId: row.productId, qty: row.qty })),
   }
 }
 
@@ -75,6 +78,7 @@ export function toProductInput(form: ProductFormValue, material: boolean, curren
     reorderLevel: Number.isFinite(reorderLevel) && reorderLevel >= 0 ? reorderLevel : current?.reorderLevel ?? 0,
     trackBatch: false,
     trackExpiry: false,
+    salesComponents: form.salesComponents,
   }
 }
 
@@ -250,6 +254,57 @@ export function ProductForm({
           <option value="inactive">Inactive</option>
         </Select>
       </Field>
+      <div className="space-y-2 sm:col-span-2">
+        <div className="flex items-center justify-between gap-2">
+          <div className="text-sm font-semibold text-slate-800">Sales Components</div>
+          <Button
+            type="button"
+            size="sm"
+            variant="secondary"
+            onClick={() => setForm({ ...form, salesComponents: [...form.salesComponents, { productId: '', qty: 1 }] })}
+          >
+            + Add Component
+          </Button>
+        </div>
+        {form.salesComponents.length > 0 && (
+          <div className="space-y-2">
+            {form.salesComponents.map((row, index) => (
+              <div key={index} className="grid grid-cols-1 gap-2 sm:grid-cols-[1fr_6rem_auto]">
+                <Select
+                  value={row.productId}
+                  onChange={(event) => setForm({
+                    ...form,
+                    salesComponents: form.salesComponents.map((item, i) => i === index ? { ...item, productId: event.target.value } : item),
+                  })}
+                >
+                  <option value="">Component product</option>
+                  {state.products.filter((item) => item.status === 'active' && item.id !== product?.id).map((item) => (
+                    <option key={item.id} value={item.id}>{item.name} ({item.sku})</option>
+                  ))}
+                </Select>
+                <Input
+                  type="number"
+                  min={0}
+                  step="any"
+                  value={row.qty}
+                  onChange={(event) => setForm({
+                    ...form,
+                    salesComponents: form.salesComponents.map((item, i) => i === index ? { ...item, qty: Number(event.target.value) } : item),
+                  })}
+                />
+                <Button
+                  type="button"
+                  variant="secondary"
+                  onClick={() => setForm({ ...form, salesComponents: form.salesComponents.filter((_, i) => i !== index) })}
+                >
+                  Remove
+                </Button>
+              </div>
+            ))}
+          </div>
+        )}
+        <p className="text-xs text-slate-400">Optional. A sale consumes these products directly instead of this SKU. Quantity is in the component&apos;s inventory unit.</p>
+      </div>
       <div className="flex justify-end gap-2 sm:col-span-2">
         <Button type="button" variant="secondary" onClick={onCancel}>Cancel</Button>
         <Button type="submit">{submitLabel}</Button>
