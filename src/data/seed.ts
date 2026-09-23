@@ -26,6 +26,7 @@ import { defaultPermissionsForLegacy } from '@/features/settings/permissions'
 import { defaultStaffTaskCategories } from '@/features/tasks/taskModel'
 import { defaultReturnReasons, defaultReturnSources } from '@/features/returns/salesReturnModel'
 import { createMainWarehouseLayout, seedDisplayStocks, seedWarehouseOccupancy } from '@/features/warehouse/warehouseModel'
+import { isUsahaoneUatProductId, usahaoneOpeningMovement, usahaoneUatProducts } from '@/data/usahaoneProductImport'
 import { PROTOTYPE_TODAY, round2, uid } from '@/utils/format'
 
 const iso = (month: number, day: number, hour = 10) =>
@@ -122,6 +123,7 @@ export function createSeedData(): AppData {
     { id: 'p-pack-st', name: 'Strawberry', sku: 'FG-ST45', barcode: '9550001000421', categoryId: 'cat-ing', unit: 'packs', costPrice: 3.9, sellingPrice: 8, wholesalePrice: 6.5, reorderLevel: 30, trackBatch: true, trackExpiry: true, status: 'active', accent: '#C45C6A' },
     { id: 'p-pack-mlt', name: 'Milk Tea', sku: 'FG-MLT45', barcode: '9550001000438', categoryId: 'cat-ing', unit: 'packs', costPrice: 3.5, sellingPrice: 7.5, wholesalePrice: 6, reorderLevel: 24, trackBatch: true, trackExpiry: true, status: 'active', accent: '#92400E' },
     { id: 'p-pack-ch', name: 'Chocolate', sku: 'FG-CH45', barcode: '9550001000445', categoryId: 'cat-ing', unit: 'packs', costPrice: 3.6, sellingPrice: 7.8, wholesalePrice: 6.2, reorderLevel: 24, trackBatch: true, trackExpiry: true, status: 'active', accent: '#5C3317' },
+    ...usahaoneUatProducts(),
   ]
 
   const byId = Object.fromEntries(products.map((p) => [p.id, p])) as Record<string, Product>
@@ -239,6 +241,22 @@ export function createSeedData(): AppData {
         qtyMap.set(keyOf(product.id, warehouseId), 0)
       }
     }
+  }
+
+  for (const product of products) {
+    if (!isUsahaoneUatProductId(product.id)) continue
+    const movement = usahaoneOpeningMovement(product, uid('mv'))
+    pushMovement(
+      movement.date,
+      movement.reference,
+      product.id,
+      movement.warehouseId,
+      movement.type,
+      movement.stockIn,
+      0,
+      movement.user,
+      movement.notes,
+    )
   }
 
   const applyLines = (

@@ -163,6 +163,7 @@ import type {
   ProductionMaterialAudit,
   ProductionMaterialAllocationSource,
 } from '@/types'
+import { mergeUsahaoneUatProducts } from '@/data/usahaoneProductImport'
 import { nextDatedDocNo, nextDocNo, PROTOTYPE_TODAY, formatMoney, formatQty, round2, stockStatus, uid } from '@/utils/format'
 
 const STORAGE_KEY = 'stockflow-prototype-v8'
@@ -213,6 +214,7 @@ function persist(data: AppData) {
 }
 
 function hydrateData(data: AppData): AppData {
+  data = mergeUsahaoneUatProducts(data)
   const seedLayout = createMainWarehouseLayout('2026-09-08T09:15:00+08:00')
   const seedOccupancy = seedWarehouseOccupancy('2026-09-08T16:15:00+08:00', 'Admin')
   const boms = hydrateBoms(data.boms)
