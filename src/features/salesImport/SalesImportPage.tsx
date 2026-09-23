@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { Upload } from 'lucide-react'
-import { Button, Card, EmptyState, Input, PageHeader, Select } from '@/components/ui'
+import { Button, Card, EmptyState, Input, Modal, PageHeader, Select } from '@/components/ui'
 import { PermissionDenied } from '@/features/documents/A4Sheet'
 import { externalLabel, mappingIdentity, suggestProduct } from '@/features/salesImport/mapping'
 import { awbQuantityFor } from '@/features/salesImport/reconcileAwb'
@@ -11,7 +11,9 @@ import {
   assessSalesImport,
   batchStatusLabel,
   liveOrderStatus,
+  salesImportSummary,
   takenOrderIds,
+  type SalesImportPostingSummary,
 } from '@/features/salesImport/review'
 import { hasPermission } from '@/features/settings/permissions'
 import { useApi, useStore } from '@/store/hooks'
@@ -153,6 +155,8 @@ function SalesImportReview({ batchId }: { batchId: string }) {
   const [productQuery, setProductQuery] = useState('')
   const [choices, setChoices] = useState<Record<string, string>>({})
   const [busy, setBusy] = useState(false)
+  const [summaryOpen, setSummaryOpen] = useState(false)
+  const [summarySort, setSummarySort] = useState<'name' | 'qty'>('name')
   const files = (state.salesImportFiles ?? []).filter((file) => file.batchId === batchId)
   const orders = (state.salesImportOrders ?? []).filter((order) => order.batchId === batchId)
   const lines = state.salesImportLines ?? []
@@ -349,6 +353,7 @@ function SalesImportReview({ batchId }: { batchId: string }) {
           </div>
         </Card>
       )}
+      <div id="sales-import-detail">
       <Card className="mb-4">
         {orders.length === 0 ? (
           <EmptyState title="No orders yet" hint="Upload a picking list to build the review." />
@@ -392,6 +397,7 @@ function SalesImportReview({ batchId }: { batchId: string }) {
           </div>
         )}
       </Card>
+      </div>
       <Card className="mb-4 p-4">
           <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
             <div>
@@ -495,6 +501,7 @@ function SalesImportReview({ batchId }: { batchId: string }) {
         </Card>
       )}
       <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+        <Button variant="secondary" onClick={() => setSummaryOpen(true)}>View Sales Summary</Button>
         <Button disabled={!canCreate || !assessment.canConfirm || busy} onClick={() => api.confirmSalesImport(batch.id)}>
           Confirm Sale
         </Button>
@@ -502,7 +509,157 @@ function SalesImportReview({ batchId }: { batchId: string }) {
           {assessment.canConfirm ? `${assessment.readyOrderIds.length} order${assessment.readyOrderIds.length === 1 ? '' : 's'} will be posted to Main Warehouse.` : 'Confirm stays off until blocking issues for the ready orders are cleared. Duplicates and missing AWB do not block valid orders.'}
         </div>
       </div>
+      <SalesSummaryModal
+        open={summaryOpen}
+        sort={summarySort}
+        onSort={setSummarySort}
+        onClose={() => setSummaryOpen(false)}
+        onDetails={() => {
+          setSummaryOpen(false)
+          document.getElementById('sales-import-detail')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+        }}
+        onConfirm={() => api.confirmSalesImport(batch.id)}
+        canConfirm={canCreate && assessment.canConfirm && !busy}
+        platform={platformLabel(batch.platform)}
+        account={account.name}
+        summary={salesImportSummary({
+          assessment,
+          orders,
+          lines,
+          products: state.products,
+          shipments,
+          takenOrderIds: taken,
+        })}
+      />
     </div>
+  )
+}
+
+function formatQty(qty: number) {
+  return Number.isInteger(qty) ? String(qty) : String(qty)
+}
+
+function SalesSummaryModal({
+  open,
+  sort,
+  onSort,
+  onClose,
+  onDetails,
+  onConfirm,
+  canConfirm,
+  platform,
+  account,
+  summary,
+}: {
+  open: boolean
+  sort: 'name' | 'qty'
+  onSort: (sort: 'name' | 'qty') => void
+  onClose: () => void
+  onDetails: () => void
+  onConfirm: () => void
+  canConfirm: boolean
+  platform: string
+  account: string
+  summary: SalesImportPostingSummary
+}) {
+  const products = [...summary.products].sort((a, b) => sort === 'qty' ? b.qty - a.qty || a.name.localeCompare(b.name) : a.name.localeCompare(b.name))
+  const awbOk = summary.awb.review === 0 && summary.awb.unmatched === 0
+  const awbClass = !awbOk ? 'text-amber-700' : summary.awb.matched === summary.orders ? 'text-emerald-700' : 'text-slate-700'
+  const awbLabel = [
+    `${summary.awb.matched} / ${summary.orders} matched`,
+    summary.awb.pending ? `${summary.awb.pending} pending` : '',
+    summary.awb.review ? `${summary.awb.review} review` : '',
+    summary.awb.unmatched ? `${summary.awb.unmatched} unmatched` : '',
+  ].filter(Boolean).join(' · ')
+  return (
+    <Modal open={open} onClose={onClose} title="Sales Summary" width="max-w-xl">
+      <div className="text-sm text-slate-500">{platform} · {account}</div>
+      <p className="mt-3 text-base font-medium text-slate-900">
+        {summary.ready === 0 ? 'No orders will be posted.' : `${summary.ready} order${summary.ready === 1 ? '' : 's'} will be posted.`}
+      </p>
+      <div className="mt-4 grid grid-cols-3 gap-2 text-center">
+        <div className="rounded-xl bg-slate-50 px-2 py-3">
+          <div className="text-xs text-slate-500">Orders</div>
+          <div className="text-xl font-semibold text-slate-900">{summary.orders}</div>
+        </div>
+        <div className="rounded-xl bg-emerald-50 px-2 py-3">
+          <div className="text-xs text-emerald-700">Ready to Confirm</div>
+          <div className="text-xl font-semibold text-emerald-800">{summary.ready}</div>
+        </div>
+        <div className={summary.attention ? 'rounded-xl bg-amber-50 px-2 py-3' : 'rounded-xl bg-slate-50 px-2 py-3'}>
+          <div className={summary.attention ? 'text-xs text-amber-700' : 'text-xs text-slate-500'}>Need Attention</div>
+          <div className={summary.attention ? 'text-xl font-semibold text-amber-800' : 'text-xl font-semibold text-slate-900'}>{summary.attention}</div>
+        </div>
+      </div>
+      <div className="mt-3 grid grid-cols-1 gap-2 text-sm sm:grid-cols-3">
+        <div className="rounded-xl border border-slate-200 px-3 py-2">
+          <div className="text-xs uppercase tracking-wide text-slate-400">Imported</div>
+          <div className="font-medium text-slate-800">{formatQty(summary.importedQty)} units</div>
+        </div>
+        <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2">
+          <div className="text-xs uppercase tracking-wide text-emerald-700">Will be posted</div>
+          <div className="font-semibold text-emerald-900">{formatQty(summary.postQty)} units</div>
+        </div>
+        <div className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2">
+          <div className="text-xs uppercase tracking-wide text-amber-700">Not posted</div>
+          <div className="font-semibold text-amber-900">{formatQty(summary.heldQty)} units</div>
+        </div>
+      </div>
+      <div className="mt-5 flex items-center justify-between gap-3">
+        <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Will be posted</div>
+        {products.length > 1 && (
+          <div className="flex gap-2 text-xs">
+            <button type="button" className={sort === 'name' ? 'font-semibold text-indigo-700' : 'text-slate-500'} onClick={() => onSort('name')}>Name</button>
+            <button type="button" className={sort === 'qty' ? 'font-semibold text-indigo-700' : 'text-slate-500'} onClick={() => onSort('qty')}>Quantity</button>
+          </div>
+        )}
+      </div>
+      {products.length === 0 ? (
+        <p className="mt-2 text-sm text-slate-500">Nothing in this batch will be sent to a sale.</p>
+      ) : (
+        <div className="mt-1 max-h-52 overflow-y-auto">
+          {products.map((product) => (
+            <div key={product.productId} className="border-b border-slate-100 py-2 sm:flex sm:items-baseline sm:justify-between sm:gap-4">
+              <div className="text-sm text-slate-800">{product.name}</div>
+              <div className="text-sm font-semibold text-slate-900">{formatQty(product.qty)}</div>
+            </div>
+          ))}
+          <div className="flex items-baseline justify-between py-2 text-sm font-semibold text-slate-900">
+            <span>Total quantity</span>
+            <span>{formatQty(summary.postQty)}</span>
+          </div>
+        </div>
+      )}
+      {summary.attention > 0 && (
+        <div className="mt-4 rounded-xl border border-amber-200 bg-amber-50 px-3 py-3 text-sm text-amber-950">
+          <div className="font-medium">{summary.attention} order{summary.attention === 1 ? '' : 's'} will not be posted.</div>
+          <ul className="mt-2 space-y-1">
+            {summary.reasons.map((reason) => (
+              <li key={reason.label}>{reason.count} {reason.label}</li>
+            ))}
+          </ul>
+        </div>
+      )}
+      <div className="mt-4 grid grid-cols-1 gap-1 text-sm text-slate-700 sm:grid-cols-2 sm:gap-x-4">
+        <div className="flex justify-between gap-3"><span>Ready to Confirm</span><span className="font-medium">{summary.ready}</span></div>
+        <div className="flex justify-between gap-3"><span>Duplicates</span><span className="font-medium">{summary.duplicates}</span></div>
+        <div className="flex justify-between gap-3"><span>Unmapped</span><span className="font-medium">{summary.unmapped}</span></div>
+        <div className="flex justify-between gap-3"><span>Unallocated</span><span className="font-medium">{summary.unallocated}</span></div>
+        <div className="flex justify-between gap-3"><span>Other errors</span><span className="font-medium">{summary.errors}</span></div>
+        <div className="flex justify-between gap-3"><span>Already confirmed</span><span className="font-medium">{summary.confirmed}</span></div>
+      </div>
+      <div className="mt-4 space-y-2 text-sm">
+        <div className="flex justify-between gap-3"><span>Mapping</span><span className={summary.mappingOk ? 'text-emerald-700' : 'text-amber-700'}>{summary.mappingOk ? 'Complete' : `${summary.unmapped} unmapped`}</span></div>
+        <div className="flex justify-between gap-3"><span>Inventory</span><span className={summary.inventoryOk ? 'text-emerald-700' : 'text-amber-700'}>{summary.inventoryOk ? 'OK' : 'Attention'}</span></div>
+        <div className="flex justify-between gap-3"><span>Duplicates</span><span className={summary.duplicates ? 'text-amber-700' : 'text-emerald-700'}>{summary.duplicates ? `${summary.duplicates} already imported` : 'None'}</span></div>
+        <div className="flex justify-between gap-3"><span>AWB</span><span className={awbClass}>{awbLabel}</span></div>
+      </div>
+      <p className="mt-3 text-xs text-slate-500">Pending AWB is not an error. Missing shipments do not block confirmation.</p>
+      <div className="mt-5 flex flex-col gap-2 sm:flex-row sm:justify-end">
+        <Button variant="secondary" onClick={onDetails}>View Details</Button>
+        <Button disabled={!canConfirm} onClick={onConfirm}>Confirm Sale</Button>
+      </div>
+    </Modal>
   )
 }
 
