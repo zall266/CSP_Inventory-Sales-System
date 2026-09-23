@@ -7705,6 +7705,7 @@ export const db = {
     const fileHash = input.fileHash.trim()
     if (!fileHash) return { ok: false as const, error: 'The file could not be read.' }
     if ((state.salesImportFiles ?? []).some((file) => file.batchId === batchId && file.fileHash === fileHash)) {
+      toast('File not added', 'This file is already in the batch.', 'warning')
       return { ok: false as const, error: 'This file is already in the batch.' }
     }
     let parsed: ReturnType<typeof parsePickingList>
