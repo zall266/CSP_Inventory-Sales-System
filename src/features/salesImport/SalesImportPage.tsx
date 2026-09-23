@@ -4,6 +4,7 @@ import { Upload } from 'lucide-react'
 import { Button, Card, EmptyState, Input, PageHeader, Select } from '@/components/ui'
 import { PermissionDenied } from '@/features/documents/A4Sheet'
 import { externalLabel, mappingIdentity, suggestProduct } from '@/features/salesImport/mapping'
+import { awbQuantityFor } from '@/features/salesImport/reconcileAwb'
 import { hashBytes, extractPdfTextItems } from '@/features/salesImport/pdfText'
 import {
   SALES_IMPORT_WAREHOUSE_ID,
@@ -203,7 +204,7 @@ function SalesImportReview({ batchId }: { batchId: string }) {
     }
   }
 
-  const upload = async (list: FileList | null) => {
+  const upload = async (list: FileList | null, role: 'picking' | 'awb') => {
     if (!list?.length) return
     setBusy(true)
     try {
@@ -216,12 +217,16 @@ function SalesImportReview({ batchId }: { batchId: string }) {
         } catch {
           items = []
         }
-        api.ingestSalesImportPicking(batch.id, { fileName: file.name, fileHash: hash, items })
+        if (role === 'awb') api.ingestSalesImportAwb(batch.id, { fileName: file.name, fileHash: hash, items })
+        else api.ingestSalesImportPicking(batch.id, { fileName: file.name, fileHash: hash, items })
       }
     } finally {
       setBusy(false)
     }
   }
+  const shipments = (state.salesImportShipments ?? []).filter((shipment) => shipment.batchId === batch.id)
+  const shipmentFor = (orderId: string) => shipments.find((shipment) => shipment.externalOrderId === orderId)
+  const pendingShipments = orders.filter((order) => !shipments.some((shipment) => shipment.externalOrderId === order.externalOrderId)).length
 
   return (
     <div>
@@ -236,6 +241,7 @@ function SalesImportReview({ batchId }: { batchId: string }) {
           <Summary label="Account" value={account.name} />
           <Summary label="Files" value={String(assessment.fileCount)} />
           <Summary label="Orders" value={String(assessment.orderCount)} />
+          <Summary label="Sales" value={String(orders.filter((order) => order.status === 'confirmed' && order.saleId).length)} />
           <Summary label="New" value={String(assessment.newOrders)} />
           <Summary label="Duplicate" value={String(assessment.duplicates)} />
           <Summary label="Unmapped" value={String(assessment.unmapped)} />
@@ -246,7 +252,7 @@ function SalesImportReview({ batchId }: { batchId: string }) {
       </Card>
       {assessment.mismatch && (
         <div className="mb-4 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-800">
-          Account mismatch. A picking list username ({assessment.mismatchNames.join(', ')}) does not match {account.name}. Confirmation is blocked.
+          Account mismatch. A file username ({assessment.mismatchNames.join(', ')}) does not match {account.name}. Confirmation is blocked.
         </div>
       )}
       {!assessment.needsAcknowledgement && batch.accountAcknowledged && files.some((file) => !file.parseError && !file.identityReliable) && (
@@ -286,7 +292,7 @@ function SalesImportReview({ batchId }: { batchId: string }) {
                 multiple
                 disabled={busy}
                 onChange={(event) => {
-                  void upload(event.target.files)
+                  void upload(event.target.files, 'picking')
                   event.target.value = ''
                 }}
               />
@@ -386,6 +392,98 @@ function SalesImportReview({ batchId }: { batchId: string }) {
           </div>
         )}
       </Card>
+      <Card className="mb-4 p-4">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <div className="text-sm font-medium text-slate-800">AWB / shipments</div>
+              <div className="text-sm text-slate-500">Upload before or after confirmation. AWB links shipments and does not create another sale.</div>
+            </div>
+            {canCreate && (
+            <label className="inline-flex cursor-pointer items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700">
+              <Upload size={16} />
+              {busy ? 'Processing…' : 'Upload AWB'}
+              <input
+                className="sr-only"
+                type="file"
+                accept="application/pdf,.pdf"
+                multiple
+                disabled={busy}
+                onChange={(event) => {
+                  void upload(event.target.files, 'awb')
+                  event.target.value = ''
+                }}
+              />
+            </label>
+            )}
+          </div>
+          <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+            <Summary label="Shipments" value={String(shipments.length)} />
+            <Summary label="Matched" value={String(shipments.filter((shipment) => shipment.linkStatus === 'matched').length)} />
+            <Summary label="Unmatched" value={String(shipments.filter((shipment) => shipment.linkStatus === 'unmatched').length)} />
+            <Summary label="Review" value={String(shipments.filter((shipment) => shipment.linkStatus === 'review').length)} />
+            <Summary label="Pending" value={String(pendingShipments)} />
+          </div>
+          {pendingShipments > 0 && shipments.length === 0 && (
+            <div className="mt-3 text-sm text-slate-500">AWB: {pendingShipments} pending. Pending is not an error.</div>
+          )}
+        </Card>
+      {shipments.length > 0 && (
+        <Card className="mb-4">
+          <div className="sf-table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Order ID</th>
+                  <th>Product</th>
+                  <th>Picking Qty</th>
+                  <th>AWB Qty</th>
+                  <th>Difference</th>
+                  <th>Tracking</th>
+                  <th>Courier</th>
+                  <th>Status</th>
+                </tr>
+              </thead>
+              <tbody>
+                {orders.map((order) => {
+                  const own = lines.filter((line) => line.orderId === order.id)
+                  const shipment = shipmentFor(order.externalOrderId)
+                  const rows = own.length ? own : [undefined]
+                  return rows.map((line, index) => {
+                    const awbQty = line ? awbQuantityFor(line, order.externalOrderId, shipments) : undefined
+                    const shownAwb = line?.quantitySource === 'awb' ? line.quantity : awbQty
+                    const pickingQty = line?.quantitySource === 'awb' ? line.quantity : line?.unallocated ? undefined : line?.quantity
+                    const difference = pickingQty !== undefined && shownAwb !== undefined ? shownAwb - pickingQty : undefined
+                    return (
+                      <tr key={`${order.id}-${line?.id ?? index}`}>
+                        <td className="align-top font-medium">{index === 0 ? order.externalOrderId : ''}</td>
+                        <td className="align-top">{line ? externalLabel(line) : '—'}</td>
+                        <td className="align-top">{line?.unallocated ? `shared ${line.quantity}` : pickingQty ?? '—'}</td>
+                        <td className="align-top">{shownAwb ?? '—'}</td>
+                        <td className="align-top">{difference === undefined ? '—' : String(difference)}</td>
+                        <td className="align-top">{index === 0 ? shipment?.trackingNumber || '—' : ''}</td>
+                        <td className="align-top">{index === 0 ? shipment?.courierText || '—' : ''}</td>
+                        <td className="align-top">{index === 0 ? (shipment ? shipment.linkStatus[0].toUpperCase() + shipment.linkStatus.slice(1) : 'Pending') : ''}</td>
+                      </tr>
+                    )
+                  })
+                })}
+                {shipments.filter((shipment) => !orders.some((order) => order.externalOrderId === shipment.externalOrderId)).map((shipment) => (
+                  <tr key={shipment.id}>
+                    <td className="font-medium">{shipment.externalOrderId}</td>
+                    <td>{shipment.packingLines.map((line) => line.externalProductName).join(', ') || '—'}</td>
+                    <td>—</td>
+                    <td>{shipment.packingLines.reduce((sum, line) => sum + line.quantity, 0) || '—'}</td>
+                    <td>—</td>
+                    <td>{shipment.trackingNumber || '—'}</td>
+                    <td>{shipment.courierText || '—'}</td>
+                    <td>{shipment.linkStatus[0].toUpperCase() + shipment.linkStatus.slice(1)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </Card>
+      )}
       {assessment.issues.length > 0 && (
         <Card className="mb-4 p-4">
           <div className="mb-2 text-sm font-medium text-slate-800">Needs attention</div>

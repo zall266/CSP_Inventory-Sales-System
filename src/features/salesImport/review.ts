@@ -43,6 +43,7 @@ export type DraftLine = {
   externalSku?: string
   quantity: number
   unallocated: boolean
+  quantityReview?: boolean
   sharedOrderCount?: number
   mappedProductId?: string
   suggestionId?: string
@@ -120,6 +121,7 @@ function draftStatus(externalOrderId: string, lines: DraftLine[], taken: Set<str
   if (taken.has(externalOrderId)) return 'duplicate'
   if (!lines.length || lines.some((line) => !(line.quantity > 0))) return 'error'
   if (lines.some((line) => line.unallocated)) return 'unallocated'
+  if (lines.some((line) => line.quantityReview)) return 'error'
   if (lines.some((line) => !line.mappedProductId)) return 'unmapped'
   return 'new'
 }
@@ -129,7 +131,14 @@ export function accountIssues(accountName: string, files: ImportFile[], acknowle
   const mismatchNames = new Set<string>()
   let unknown = false
   for (const file of files) {
-    if (file.role !== 'picking' || file.parseError || !file.parsedLines?.length) continue
+    if (file.parseError) continue
+    if (file.role === 'awb') {
+      if (file.identityReliable && file.detectedUsername?.trim() && file.detectedUsername.trim().toLowerCase() !== expected) {
+        mismatchNames.add(file.detectedUsername.trim())
+      }
+      continue
+    }
+    if (file.role !== 'picking' || !file.parsedLines?.length) continue
     if (file.identityReliable && file.detectedUsername?.trim()) {
       if (file.detectedUsername.trim().toLowerCase() !== expected) mismatchNames.add(file.detectedUsername.trim())
     } else unknown = true
@@ -151,6 +160,7 @@ export function liveOrderStatus(order: SalesImportOrder, lines: SalesImportLine[
     externalSku: line.externalSku,
     quantity: line.quantity,
     unallocated: Boolean(line.unallocated),
+    quantityReview: Boolean(line.quantityReview),
     sharedOrderCount: line.sharedOrderCount,
     mappedProductId: line.mappedProductId,
   })), takenOrderIds)
@@ -213,6 +223,7 @@ export function assessSalesImport(input: {
   availableQty: (productId: string) => number
 }): ImportAssessment {
   const files = input.files.filter((file) => file.batchId === input.batch.id)
+  const pickingFiles = files.filter((file) => file.role !== 'awb')
   const orders = input.orders.filter((order) => order.batchId === input.batch.id)
   const account = accountIssues(input.account.name, files, input.batch.accountAcknowledged)
   const statuses = orders.map((order) => ({ order, status: liveOrderStatus(order, input.lines, input.takenOrderIds) }))
@@ -248,7 +259,7 @@ export function assessSalesImport(input: {
   }
   const canConfirm = blockers.length === 0 && ready.length > 0
   return {
-    fileCount: files.length,
+    fileCount: pickingFiles.length,
     orderCount: orders.length,
     newOrders: statuses.filter((row) => row.status === 'new').length,
     duplicates: statuses.filter((row) => row.status === 'duplicate').length,
@@ -277,7 +288,10 @@ function issueLabel(status: SalesImportOrderStatus, lines: SalesImportLine[]) {
     const missing = lines.find((line) => !line.mappedProductId && !line.unallocated)
     return missing ? `Unmapped: ${externalLabel(missing)}` : 'Unmapped'
   }
-  if (status === 'error') return 'Validation error'
+  if (status === 'error') {
+    if (lines.some((line) => line.quantityReview)) return 'Quantity review. Picking and AWB quantities differ.'
+    return 'Validation error'
+  }
   return status
 }
 
