@@ -61,7 +61,7 @@ function BmrDocumentView({ record }: { record: BmrDocument }) {
       <Letterhead />
       <ProductionHeader record={record} />
       {record.materials.length > 0 && <MaterialTable rows={record.materials} />}
-      <ProcessTable rows={record.process} note={record.processNote} />
+      <ProcessTable rows={record.process} />
       <PackagingTable rows={record.packaging} />
       <DeviationTable rows={record.deviations} />
       <div className="bmr-keep">
@@ -141,11 +141,10 @@ function MaterialTable({ rows }: { rows: BmrMaterialRow[] }) {
   )
 }
 
-function ProcessTable({ rows, note }: { rows: BmrProcessRow[]; note: string }) {
+function ProcessTable({ rows }: { rows: BmrProcessRow[] }) {
   return (
     <>
-      <div className="bmr-section">Process</div>
-      <p className="bmr-note">{note}</p>
+      <div className="bmr-section">2. Process</div>
       <table className="bmr-grid">
         <thead>
           <tr>

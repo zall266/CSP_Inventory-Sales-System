@@ -235,7 +235,7 @@ check('process steps are numbered 1 to 5', doc?.process.map((row) => row.step).j
 check('process names match the template', doc?.process.map((row) => row.description).join('|') === BMR_PROCESS_STEPS.join('|'))
 check('operators stay blank', doc?.process.every((row) => row.operatorName === '') === true)
 check('one material line weighs for 30 minutes', doc?.process[0].timeStart === '1:00 PM' && doc.process[0].timeEnd === '1:30 PM')
-check('estimate note is shown when times are calculated', doc?.processNote === BMR_PROCESS_NOTE)
+check('estimate note stays off the printed form', !readFileSync(new URL('../src/features/manufacturing/BmrPrintPage.tsx', import.meta.url), 'utf8').includes(BMR_PROCESS_NOTE) && !readFileSync(new URL('../src/features/manufacturing/BmrPrintPage.tsx', import.meta.url), 'utf8').includes('system-calculated estimates'))
 const startedBefore = one.startedAt
 const completedBefore = one.completedAt
 check('schedule does not modify the production session', one.startedAt === startedBefore && one.completedAt === completedBefore)
@@ -315,6 +315,7 @@ const multiSchedule = buildBmr(session({
   },
 }), source({ products: [...source().products, ...Array.from({ length: 7 }, (_, index) => product({ id: `p-line-${index}`, name: `Line ${index}`, unit: 'KG', categoryId: 'cat-ing' }))] }))
 check('multi-product filling uses total packs', multiSchedule?.process[2].timeStart === '9:45 AM' && multiSchedule.process[2].timeEnd === '10:45 AM')
+check('process heading is numbered', pageSource.includes('2. Process') && !pageSource.includes('>Process<'))
 check('print page is one flowing sheet', pageSource.includes('BmrDocumentView') && !pageSource.includes('continued') && !pageSource.includes('page-break-before'))
 check('page count is a print counter, not a fixed total', css.includes('counter(page)') && css.includes('counter(pages)') && !css.includes('page-break-after: always'))
 check('print page is A4 portrait', css.includes('size: A4 portrait'))

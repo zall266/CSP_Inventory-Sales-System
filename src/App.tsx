@@ -25,6 +25,7 @@ import { ProductionPlanningPage } from '@/features/manufacturing/ProductionPlann
 import { FinishedGoodsPage, MaterialConsumptionPage } from '@/features/manufacturing/SessionRecordPages'
 import { ProductionHistoryPage, ProductionSessionDetailPage, ProductionSessionEditPage } from '@/features/manufacturing/ProductionHistoryPage'
 import { BmrPrintPage } from '@/features/manufacturing/BmrPrintPage'
+import { BmrRecordsPage } from '@/features/manufacturing/BmrRecordsPage'
 import { ManufacturingReportPage } from '@/features/manufacturing/ManufacturingReportsPages'
 import { TodaysProductionPage } from '@/features/manufacturing/TodaysProductionPage'
 import { CompleteProductionPage } from '@/features/manufacturing/CompleteProductionPage'
@@ -84,6 +85,7 @@ export default function App() {
           <Route path="/purchase-returns" element={<PurchaseReturnsPage />} />
           <Route path="/suppliers" element={<SuppliersPage />} />
           <Route path="/compliance/halal" element={<HalalCompliancePage />} />
+          <Route path="/compliance/bmr" element={<BmrRecordsPage />} />
           <Route path="/inventory" element={<InventoryPage />} />
           <Route path="/inventory/stock-usage" element={<StockUsagePage />} />
           <Route path="/inventory/to-order" element={<ToOrderPage />} />

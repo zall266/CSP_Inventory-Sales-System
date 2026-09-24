@@ -152,6 +152,90 @@ export function canPrintBmr(session: Pick<ProductionSession, 'status' | 'posted'
   return Boolean(session && session.status === 'completed' && session.posted)
 }
 
+export type BmrRecordRange = 'all' | 'today' | 'week' | 'month' | 'custom'
+
+export type BmrRecordListItem = {
+  sessionId: string
+  productionDate: string
+  dateLabel: string
+  batchNo: string
+  productName: string
+  warehouseId: string
+  warehouseName: string
+  reference: string
+  status: 'Completed'
+  completedAt: string
+  printPath: string
+  viewPath: string
+}
+
+export function listBmrRecords(
+  sessions: ProductionSession[],
+  products: Product[],
+  warehouses: Array<{ id: string; name: string }>,
+): BmrRecordListItem[] {
+  return sessions
+    .filter((session) => canPrintBmr(session))
+    .map((session) => ({
+      sessionId: session.id,
+      productionDate: session.productionDate,
+      dateLabel: bmrDateLabel(session.productionDate),
+      batchNo: bmrBatchNo(session.productionDate),
+      productName: session.items.map((item) => productOf(products, item.productId)?.name ?? 'Unknown product').join(', '),
+      warehouseId: session.warehouseId,
+      warehouseName: warehouses.find((item) => item.id === session.warehouseId)?.name ?? '',
+      reference: session.reference,
+      status: 'Completed' as const,
+      completedAt: session.completedAt || '',
+      printPath: `/manufacturing/bmr/${session.id}`,
+      viewPath: `/manufacturing/history/${session.id}`,
+    }))
+    .sort((a, b) => b.productionDate.localeCompare(a.productionDate) || b.completedAt.localeCompare(a.completedAt) || b.sessionId.localeCompare(a.sessionId))
+}
+
+function dateKeyFromUtc(date: Date) {
+  const year = date.getUTCFullYear()
+  const month = String(date.getUTCMonth() + 1).padStart(2, '0')
+  const day = String(date.getUTCDate()).padStart(2, '0')
+  return `${year}-${month}-${day}`
+}
+
+export function bmrWeekBounds(today: string) {
+  if (!isDateKey(today)) return { from: '', to: '' }
+  const [year, month, day] = today.split('-').map(Number)
+  const date = new Date(Date.UTC(year, month - 1, day))
+  const weekday = date.getUTCDay()
+  const mondayOffset = weekday === 0 ? -6 : 1 - weekday
+  const start = new Date(date)
+  start.setUTCDate(date.getUTCDate() + mondayOffset)
+  const end = new Date(start)
+  end.setUTCDate(start.getUTCDate() + 6)
+  return { from: dateKeyFromUtc(start), to: dateKeyFromUtc(end) }
+}
+
+export function filterBmrRecords(
+  rows: BmrRecordListItem[],
+  input: { query?: string; range?: BmrRecordRange; from?: string; to?: string; warehouseId?: string; today?: string },
+) {
+  const today = input.today && isDateKey(input.today) ? input.today : ''
+  const range = input.range ?? 'all'
+  const week = today ? bmrWeekBounds(today) : { from: '', to: '' }
+  const month = today.slice(0, 7)
+  const needle = (input.query ?? '').trim().toLowerCase()
+  return rows.filter((row) => {
+    if (input.warehouseId && input.warehouseId !== 'all' && row.warehouseId !== input.warehouseId) return false
+    if (range === 'today' && row.productionDate !== today) return false
+    if (range === 'week' && (row.productionDate < week.from || row.productionDate > week.to)) return false
+    if (range === 'month' && !row.productionDate.startsWith(month)) return false
+    if (range === 'custom') {
+      if (input.from && row.productionDate < input.from) return false
+      if (input.to && row.productionDate > input.to) return false
+    }
+    if (!needle) return true
+    return [row.batchNo, row.productName, row.reference].some((value) => value.toLowerCase().includes(needle))
+  })
+}
+
 export function weightToGrams(qty: number, unit: string | undefined) {
   if (!Number.isFinite(qty)) return null
   const code = normalizeUnit(unit)
