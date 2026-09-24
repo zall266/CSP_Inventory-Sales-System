@@ -44,11 +44,25 @@ export type BmrMaterialRow = {
   remarks: string
 }
 
+export const BMR_PROCESS_RULES = {
+  weighingUpTo5: 30,
+  weighingUpTo10: 45,
+  weighingAbove10: 60,
+  mixing: 60,
+  fillingPacks: 45,
+  fillingMinutes: 30,
+  grinding: 45,
+  cleaning: 60,
+} as const
+
+export const BMR_PROCESS_NOTE = 'Process times are system-calculated estimates; verify actual time before signing.'
+export const BMR_PROCESS_UNAVAILABLE_NOTE = 'Process times were not calculated. A start time, material closing, and released packs are required.'
+
 export type BmrProcessRow = {
   step: number
   description: string
-  timeStart: ''
-  timeEnd: ''
+  timeStart: string
+  timeEnd: string
   operatorName: ''
 }
 
@@ -78,7 +92,8 @@ export type BmrApprovalRow = {
 
 export type BmrPage = {
   materials: BmrMaterialRow[]
-  showDocumentHeader: boolean
+  pageLabel: string
+  showProductionHeader: boolean
   showProcess: boolean
   showPackaging: boolean
   showDeviations: boolean
@@ -99,6 +114,7 @@ export type BmrDocument = {
   packaging: BmrPackagingRow[]
   deviations: BmrDeviationRow[]
   approval: BmrApprovalRow[]
+  processNote: string
   pages: BmrPage[]
 }
 
@@ -230,7 +246,7 @@ function packagingRow(item: ProductionSessionItem, source: BmrSource): BmrPackag
   }
 }
 
-export function bmrProcessRows(): BmrProcessRow[] {
+export function blankProcessRows(): BmrProcessRow[] {
   return BMR_PROCESS_STEPS.map((description, index) => ({
     step: index + 1,
     description,
@@ -238,6 +254,67 @@ export function bmrProcessRows(): BmrProcessRow[] {
     timeEnd: '',
     operatorName: '',
   }))
+}
+
+export function weighingMinutes(materialLines: number) {
+  if (materialLines <= 0) return null
+  if (materialLines <= 5) return BMR_PROCESS_RULES.weighingUpTo5
+  if (materialLines <= 10) return BMR_PROCESS_RULES.weighingUpTo10
+  return BMR_PROCESS_RULES.weighingAbove10
+}
+
+export function fillingMinutes(totalPacks: number) {
+  if (!Number.isFinite(totalPacks) || totalPacks <= 0) return null
+  return Math.ceil(totalPacks / BMR_PROCESS_RULES.fillingPacks) * BMR_PROCESS_RULES.fillingMinutes
+}
+
+export function formatProcessClock(date: Date) {
+  return new Intl.DateTimeFormat('en-US', {
+    hour: 'numeric',
+    minute: '2-digit',
+    hour12: true,
+    timeZone: 'Asia/Kuala_Lumpur',
+  }).format(date)
+}
+
+function countableMaterialLines(session: ProductionSession, source: BmrSource) {
+  return (session.materialClosing?.lines ?? []).filter((line) => {
+    const product = productOf(source.products, line.productId)
+    return !isPackagingMaterial(product, source.categories)
+  }).length
+}
+
+export function buildProcessSchedule(input: {
+  startedAt: string
+  materialLines: number
+  totalPacks: number
+}): { rows: BmrProcessRow[]; note: string } {
+  const start = new Date(input.startedAt)
+  const weighing = weighingMinutes(input.materialLines)
+  const filling = fillingMinutes(input.totalPacks)
+  if (!input.startedAt || Number.isNaN(start.getTime()) || weighing == null || filling == null) {
+    return { rows: blankProcessRows(), note: BMR_PROCESS_UNAVAILABLE_NOTE }
+  }
+  const durations = [
+    weighing,
+    BMR_PROCESS_RULES.mixing,
+    filling,
+    BMR_PROCESS_RULES.grinding,
+    BMR_PROCESS_RULES.cleaning,
+  ]
+  let cursor = start.getTime()
+  const rows = BMR_PROCESS_STEPS.map((description, index) => {
+    const timeStart = formatProcessClock(new Date(cursor))
+    cursor += durations[index] * 60_000
+    return {
+      step: index + 1,
+      description,
+      timeStart,
+      timeEnd: formatProcessClock(new Date(cursor)),
+      operatorName: '' as const,
+    }
+  })
+  return { rows, note: BMR_PROCESS_NOTE }
 }
 
 export function bmrDeviationRows(): BmrDeviationRow[] {
@@ -268,7 +345,8 @@ export function paginateBmr(
   }
   const materialPages: BmrPage[] = chunks.map((rows, index) => ({
     materials: rows,
-    showDocumentHeader: index === 0,
+    pageLabel: '',
+    showProductionHeader: index === 0,
     showProcess: false,
     showPackaging: false,
     showDeviations: false,
@@ -280,7 +358,8 @@ export function paginateBmr(
   else {
     materialPages.push({
       materials: [],
-      showDocumentHeader: false,
+      pageLabel: '',
+      showProductionHeader: false,
       showProcess: true,
       showPackaging: false,
       showDeviations: false,
@@ -289,13 +368,15 @@ export function paginateBmr(
   }
   materialPages.push({
     materials: [],
-    showDocumentHeader: false,
+    pageLabel: '',
+    showProductionHeader: false,
     showProcess: false,
     showPackaging: true,
     showDeviations: true,
     showApproval: true,
   })
-  return materialPages
+  const total = materialPages.length
+  return materialPages.map((page, index) => ({ ...page, pageLabel: `${index + 1} of ${total}` }))
 }
 
 export function buildBmr(session: ProductionSession | undefined, source: BmrSource): BmrDocument | null {
@@ -303,6 +384,11 @@ export function buildBmr(session: ProductionSession | undefined, source: BmrSour
   const expiryDate = bmrExpiryDate(session.productionDate)
   const materials = materialRows(session, source)
   const names = session.items.map((item) => productOf(source.products, item.productId)?.name ?? 'Unknown product')
+  const schedule = buildProcessSchedule({
+    startedAt: session.startedAt,
+    materialLines: countableMaterialLines(session, source),
+    totalPacks: session.items.reduce((sum, item) => sum + Math.max(0, item.actualQty || 0), 0),
+  })
   return {
     sessionId: session.id,
     productName: names.join(', '),
@@ -313,10 +399,11 @@ export function buildBmr(session: ProductionSession | undefined, source: BmrSour
     expiryDateLabel: bmrDateLabel(expiryDate),
     approvedBy: '',
     materials,
-    process: bmrProcessRows(),
+    process: schedule.rows,
     packaging: packagingRows(session, source),
     deviations: bmrDeviationRows(),
     approval: bmrApprovalRows(session),
+    processNote: schedule.note,
     pages: paginateBmr(materials),
   }
 }

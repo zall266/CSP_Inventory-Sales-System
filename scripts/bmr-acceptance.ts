@@ -2,7 +2,13 @@ import { readFileSync } from 'node:fs'
 import {
   BMR_EFFECTIVE_DATE,
   BMR_MULTIPLE_HALAL_REMARK,
+  BMR_PROCESS_NOTE,
+  BMR_PROCESS_RULES,
   BMR_PROCESS_STEPS,
+  BMR_PROCESS_UNAVAILABLE_NOTE,
+  buildProcessSchedule,
+  fillingMinutes,
+  weighingMinutes,
   addCalendarYears,
   bmrBatchNo,
   bmrExpiryDate,
@@ -229,7 +235,12 @@ const serialized = JSON.stringify(doc)
 check('certificate file is not embedded', !serialized.includes('file-should-not-print') && !serialized.includes('halal.pdf') && !serialized.includes('hidden-cert'))
 check('process steps are numbered 1 to 5', doc?.process.map((row) => row.step).join(',') === '1,2,3,4,5')
 check('process names match the template', doc?.process.map((row) => row.description).join('|') === BMR_PROCESS_STEPS.join('|'))
-check('process times and operators stay blank', doc?.process.every((row) => row.timeStart === '' && row.timeEnd === '' && row.operatorName === '') === true)
+check('operators stay blank', doc?.process.every((row) => row.operatorName === '') === true)
+check('one material line weighs for 30 minutes', doc?.process[0].timeStart === '1:00 PM' && doc.process[0].timeEnd === '1:30 PM')
+check('estimate note is shown when times are calculated', doc?.processNote === BMR_PROCESS_NOTE)
+const startedBefore = one.startedAt
+const completedBefore = one.completedAt
+check('schedule does not modify the production session', one.startedAt === startedBefore && one.completedAt === completedBefore)
 check('packaging row count matches session items', doc?.packaging.length === 1)
 check('size is grams per pack', doc?.packaging[0].sizeWeightG === '980')
 check('released packs equal actual qty', doc?.packaging[0].quantityReleasedPack === '408')
@@ -289,7 +300,41 @@ const css = readFileSync(new URL('../src/features/manufacturing/bmr.css', import
 const pageSource = readFileSync(new URL('../src/features/manufacturing/BmrPrintPage.tsx', import.meta.url), 'utf8')
 const historySource = readFileSync(new URL('../src/features/manufacturing/ProductionHistoryPage.tsx', import.meta.url), 'utf8')
 const appSource = readFileSync(new URL('../src/App.tsx', import.meta.url), 'utf8')
+check('weighing bands', weighingMinutes(1) === 30 && weighingMinutes(5) === 30 && weighingMinutes(6) === 45 && weighingMinutes(10) === 45 && weighingMinutes(11) === 60 && weighingMinutes(0) === null)
+check('filling packs', fillingMinutes(45) === 30 && fillingMinutes(90) === 60 && fillingMinutes(87) === 60 && fillingMinutes(0) === null)
+check('mixing grinding cleaning constants', BMR_PROCESS_RULES.mixing === 60 && BMR_PROCESS_RULES.grinding === 45 && BMR_PROCESS_RULES.cleaning === 60)
+const example = buildProcessSchedule({ startedAt: '2026-09-24T00:00:00.000Z', materialLines: 7, totalPacks: 87 })
+check(
+  'example schedule is sequential',
+  example.rows.map((row) => `${row.timeStart}-${row.timeEnd}`).join('|') === '8:00 AM-8:45 AM|8:45 AM-9:45 AM|9:45 AM-10:45 AM|10:45 AM-11:30 AM|11:30 AM-12:30 PM',
+  example.rows.map((row) => `${row.timeStart}-${row.timeEnd}`).join('|'),
+)
+check('example operators stay blank', example.rows.every((row) => row.operatorName === ''))
+const missingStart = buildProcessSchedule({ startedAt: '', materialLines: 7, totalPacks: 87 })
+check('missing start leaves times blank', missingStart.rows.every((row) => row.timeStart === '' && row.timeEnd === '') && missingStart.note === BMR_PROCESS_UNAVAILABLE_NOTE)
+const noLines = buildBmr(session({ ...one, materialClosing: undefined }), source())
+check('no material closing leaves process times blank', noLines?.process.every((row) => row.timeStart === '') === true)
+const noPacks = buildBmr(session({ ...one, items: [item({ productId: waffle.id, bomId: waffleBom.id, actualQty: 0 })] }), source())
+check('no released packs leaves process times blank', noPacks?.process.every((row) => row.timeStart === '') === true)
+const multiSchedule = buildBmr(session({
+  productionDate: '2026-09-24',
+  startedAt: '2026-09-24T00:00:00.000Z',
+  items: [
+    item({ productId: waffle.id, bomId: waffleBom.id, actualQty: 44 }),
+    item({ productId: creamer.id, bomId: creamerBom.id, actualQty: 43 }),
+  ],
+  materialClosing: {
+    checkedAt: '',
+    checkedBy: '',
+    acknowledged: true,
+    significantVariance: false,
+    lines: Array.from({ length: 7 }, (_, index) => closing(`p-line-${index}`, 1, 1)),
+  },
+}), source({ products: [...source().products, ...Array.from({ length: 7 }, (_, index) => product({ id: `p-line-${index}`, name: `Line ${index}`, unit: 'KG', categoryId: 'cat-ing' }))] }))
+check('multi-product filling uses total packs', multiSchedule?.process[2].timeStart === '9:45 AM' && multiSchedule.process[2].timeEnd === '10:45 AM')
+check('page labels are n of N', doc?.pages.map((page) => page.pageLabel).join(', ') === '1 of 2, 2 of 2')
 check('print page is A4 portrait', css.includes('size: A4 portrait'))
+check('header is a two-column letterhead', pageSource.includes('bmr-head') && pageSource.includes('bmr-control') && pageSource.includes('pageLabel'))
 check('material table header repeats on print', css.includes('display: table-header-group'))
 check('effective date is on the print page path', pageSource.includes('BMR_EFFECTIVE_DATE') && BMR_EFFECTIVE_DATE === '01st JUNE 2026')
 check('print route is outside the layout import', appSource.includes('/manufacturing/bmr/:sessionId'))

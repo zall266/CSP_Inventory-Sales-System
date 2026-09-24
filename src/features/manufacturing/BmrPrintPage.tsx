@@ -61,9 +61,10 @@ export function BmrPrintPage() {
 function BmrSheet({ record, page }: { record: BmrDocument; page: BmrPage }) {
   return (
     <section className="bmr-sheet">
-      {page.showDocumentHeader ? <DocumentHeader record={record} /> : <div className="bmr-continued">{BMR_TITLE} — continued</div>}
+      <Letterhead pageLabel={page.pageLabel} />
+      {page.showProductionHeader ? <ProductionHeader record={record} /> : <div className="bmr-continued">{BMR_TITLE} — continued</div>}
       {page.materials.length > 0 && <MaterialTable rows={page.materials} />}
-      {page.showProcess && <ProcessTable rows={record.process} />}
+      {page.showProcess && <ProcessTable rows={record.process} note={record.processNote} />}
       {page.showPackaging && <PackagingTable rows={record.packaging} />}
       {page.showDeviations && <DeviationTable rows={record.deviations} />}
       {page.showApproval && <ApprovalTable rows={record.approval} />}
@@ -71,12 +72,29 @@ function BmrSheet({ record, page }: { record: BmrDocument; page: BmrPage }) {
   )
 }
 
-function DocumentHeader({ record }: { record: BmrDocument }) {
+function Letterhead({ pageLabel }: { pageLabel: string }) {
+  return (
+    <header className="bmr-head">
+      <div>
+        <div className="bmr-company">{BMR_COMPANY}</div>
+        <div className="bmr-doc">{BMR_DOCUMENT}</div>
+        <div className="bmr-effective">Effective Date: {BMR_EFFECTIVE_DATE}</div>
+      </div>
+      <table className="bmr-control">
+        <tbody>
+          <tr><th>Document</th><td>BMR</td></tr>
+          <tr><th>Effective Date</th><td>{BMR_EFFECTIVE_DATE}</td></tr>
+          <tr><th>Version</th><td>1</td></tr>
+          <tr><th>Page</th><td>{pageLabel}</td></tr>
+        </tbody>
+      </table>
+    </header>
+  )
+}
+
+function ProductionHeader({ record }: { record: BmrDocument }) {
   return (
     <>
-      <div className="bmr-company">{BMR_COMPANY}</div>
-      <div className="bmr-doc">{BMR_DOCUMENT}</div>
-      <div className="bmr-effective">Effective Date: {BMR_EFFECTIVE_DATE}</div>
       <div className="bmr-title">{BMR_TITLE}</div>
       <table className="bmr-meta">
         <tbody>
@@ -84,7 +102,7 @@ function DocumentHeader({ record }: { record: BmrDocument }) {
           <tr><th>Batch No.</th><td>{record.batchNo}</td></tr>
           <tr><th>Production Date</th><td>{record.productionDateLabel}</td></tr>
           <tr><th>Expiry Date</th><td>{record.expiryDateLabel}</td></tr>
-          <tr><th>Approved By</th><td>{record.approvedBy}</td></tr>
+          <tr className="bmr-write"><th>Approved By</th><td>{record.approvedBy}</td></tr>
         </tbody>
       </table>
     </>
@@ -125,10 +143,11 @@ function MaterialTable({ rows }: { rows: BmrMaterialRow[] }) {
   )
 }
 
-function ProcessTable({ rows }: { rows: BmrProcessRow[] }) {
+function ProcessTable({ rows, note }: { rows: BmrProcessRow[]; note: string }) {
   return (
     <>
       <div className="bmr-section">Process</div>
+      <p className="bmr-note">{note}</p>
       <table className="bmr-grid">
         <thead>
           <tr>

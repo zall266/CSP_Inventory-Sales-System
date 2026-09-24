@@ -15,6 +15,13 @@
   font-family: Arial, Helvetica, sans-serif;
 }
 
+.bmr-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
 .bmr-company {
   font-size: 16px;
   font-weight: 700;
@@ -26,6 +33,36 @@
   margin-top: 2px;
   font-size: 12px;
   font-weight: 700;
+}
+
+.bmr-control {
+  width: 62mm;
+  flex: 0 0 62mm;
+  border-collapse: collapse;
+  font-size: 11px;
+}
+
+.bmr-control th,
+.bmr-control td {
+  border: 1px solid #000;
+  padding: 3px 6px;
+  text-align: left;
+  vertical-align: middle;
+}
+
+.bmr-control th {
+  width: 46%;
+  font-weight: 600;
+}
+
+.bmr-note {
+  margin: 4px 0 0;
+  font-size: 9px;
+  font-style: italic;
+}
+
+.bmr-write td {
+  height: 28px;
 }
 
 .bmr-title {
