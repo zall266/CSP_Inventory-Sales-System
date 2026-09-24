@@ -86,6 +86,9 @@ function SalesImportList() {
               >
                 Add account
               </Button>
+              <Button variant="secondary" onClick={() => navigate('/sales/import/mappings')}>
+                Manage Mappings
+              </Button>
               <Button
                 onClick={() => {
                   const batch = api.createSalesImportBatch(platform, accountId)

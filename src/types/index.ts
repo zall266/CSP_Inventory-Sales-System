@@ -1568,6 +1568,8 @@ export type SalesImportMapping = {
   key: string
   productId: string
   createdAt: string
+  /** Missing means active. Inactive rows stay stored and are skipped by future lookup. */
+  active?: boolean
 }
 
 export type AppState = AppData & {

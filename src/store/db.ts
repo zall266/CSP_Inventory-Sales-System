@@ -60,7 +60,7 @@ import { inactiveSalesComponent, salesComponentSnapshot, salesComponentsOf, vali
 import { parseAwb } from '@/features/salesImport/parseAwb'
 import { parsePickingList, type TextItem } from '@/features/salesImport/parsePickingList'
 import { reconcileAwbLines, shipmentLinkStatus } from '@/features/salesImport/reconcileAwb'
-import { mappingIdentity, mappingKeyLabel } from '@/features/salesImport/mapping'
+import { mappingIdentity, mappingIsActive, mappingKeyLabel } from '@/features/salesImport/mapping'
 import { externalLabel } from '@/features/salesImport/mapping'
 import {
   SALES_IMPORT_WAREHOUSE_ID,
@@ -7956,7 +7956,7 @@ export const db = {
     const mappings = state.salesImportMappings ?? []
     const existing = mappings.find((row) => row.platform === batch.platform && row.accountId === batch.accountId && row.keyType === input.keyType && row.key === key)
     const nextMappings: SalesImportMapping[] = existing
-      ? mappings.map((row) => (row.id === existing.id ? { ...row, productId: product.id } : row))
+      ? mappings.map((row) => (row.id === existing.id ? { ...row, productId: product.id, active: true } : row))
       : [{ id: uid('sim'), platform: batch.platform, accountId: batch.accountId, keyType: input.keyType, key, productId: product.id, createdAt: nowIso() }, ...mappings]
     const openOrderIds = new Set(
       (state.salesImportOrders ?? [])
@@ -7979,6 +7979,61 @@ export const db = {
     )
     for (const id of touched) replaceOpenSalesImportOrders(id)
     toast('Mapping saved', product.name)
+    return true
+  },
+
+  updateSalesImportMapping(input: { id: string; productId: string }) {
+    if (salesImportCreateDenied()) return false
+    const mappings = state.salesImportMappings ?? []
+    const current = mappings.find((row) => row.id === input.id)
+    const product = state.products.find((item) => item.id === input.productId && item.status === 'active')
+    if (!current || !product) {
+      toast('Choose a CSP product', undefined, 'warning')
+      return false
+    }
+    const duplicate = mappings.some(
+      (row) =>
+        row.id !== current.id &&
+        row.platform === current.platform &&
+        row.accountId === current.accountId &&
+        row.keyType === current.keyType &&
+        row.key === current.key,
+    )
+    if (duplicate) {
+      toast('Mapping already exists', 'This platform, account, and SKU already has a mapping.', 'warning')
+      return false
+    }
+    setData({
+      salesImportMappings: mappings.map((row) => (row.id === current.id ? { ...row, productId: product.id } : row)),
+    })
+    toast('Mapping updated.')
+    return true
+  },
+
+  setSalesImportMappingActive(input: { id: string; active: boolean }) {
+    if (salesImportCreateDenied()) return false
+    const mappings = state.salesImportMappings ?? []
+    const current = mappings.find((row) => row.id === input.id)
+    if (!current) return false
+    if (input.active) {
+      const duplicate = mappings.some(
+        (row) =>
+          row.id !== current.id &&
+          mappingIsActive(row) &&
+          row.platform === current.platform &&
+          row.accountId === current.accountId &&
+          row.keyType === current.keyType &&
+          row.key === current.key,
+      )
+      if (duplicate) {
+        toast('Mapping already exists', 'An active mapping already uses this platform, account, and SKU.', 'warning')
+        return false
+      }
+    }
+    setData({
+      salesImportMappings: mappings.map((row) => (row.id === current.id ? { ...row, active: input.active } : row)),
+    })
+    toast(input.active ? 'Mapping activated.' : 'Mapping deactivated.')
     return true
   },
 
