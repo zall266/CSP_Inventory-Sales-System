@@ -43,7 +43,6 @@ import {
 import {
   RECEIVING_PERMISSION_KEYS,
   buildReceivingLines,
-  isReceivableRawMaterial,
   parseReceivingPhoto,
 } from '@/features/receiving/receivingModel'
 import { INVENTORY_USAGE_PERMISSION_KEYS, activeStockOrder } from '@/features/inventory/toOrderModel'
@@ -8301,8 +8300,8 @@ export const db = {
       return null
     }
     const product = state.products.find((item) => item.id === input.productId)
-    if (!isReceivableRawMaterial(state, product)) {
-      toast('Select a raw material', 'Choose an existing raw material product.', 'danger')
+    if (!product || product.status !== 'active') {
+      toast('Select a product', 'Choose an active product.', 'danger')
       return null
     }
     const manufacturer = (state.manufacturers ?? []).find((item) => item.id === input.manufacturerId)
@@ -8321,12 +8320,9 @@ export const db = {
       toast('Manufacturer is inactive', 'Choose an active manufacturer.', 'danger')
       return null
     }
-    const certificateNo = input.certificateNo.trim()
+    const suppliedCertificateNo = input.certificateNo.trim()
+    const certificateNo = suppliedCertificateNo || uid('hcertno')
     const issuingAuthority = input.issuingAuthority.trim() || 'JAKIM'
-    if (!certificateNo) {
-      toast('Certificate number is required', undefined, 'danger')
-      return null
-    }
     if (!isDateKey(input.expiryDate)) {
       toast('Expiry date is invalid', undefined, 'danger')
       return null
@@ -8355,10 +8351,17 @@ export const db = {
     const currentCertificate = existingCompliance
       ? (state.halalCertificates ?? []).find((item) => item.id === existingCompliance.certificateId)
       : undefined
+    const renewing = Boolean(existingCompliance && input.document)
     const period = { certificateNo, issuingAuthority, issueDate, expiryDate: input.expiryDate }
-    const matched = currentCertificate && certificatePeriodMatches(currentCertificate, period)
-      ? currentCertificate
-      : findCertificateByPeriod(state.halalCertificates ?? [], period)
+    const matched = renewing
+      ? undefined
+      : currentCertificate && certificatePeriodMatches(currentCertificate, period)
+        ? currentCertificate
+        : findCertificateByPeriod(state.halalCertificates ?? [], period)
+    if (!input.document && !matched?.documentFileId && !currentCertificate?.documentFileId) {
+      toast('Certificate is required', 'Upload the halal certificate.', 'danger')
+      return null
+    }
 
     const actor = currentUser(state).name
     const now = nowIso()
@@ -8368,9 +8371,9 @@ export const db = {
       audits = [makeDocAudit(log), ...audits]
     }
 
-    let documentFileId = matched?.documentFileId
-    let documentName = matched?.documentName
-    let documentMime = matched?.documentMime
+    let documentFileId = matched?.documentFileId ?? (input.document ? undefined : currentCertificate?.documentFileId)
+    let documentName = matched?.documentName ?? (input.document ? undefined : currentCertificate?.documentName)
+    let documentMime = matched?.documentMime ?? (input.document ? undefined : currentCertificate?.documentMime)
     if (input.document) {
       documentFileId = uid('hdoc')
       documentName = input.document.fileName
