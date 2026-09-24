@@ -111,6 +111,55 @@ check('J. AWB pending does not block a ready order', ready.assessment.canConfirm
 check('F. Stock shortage blocks confirm for the ready set', stocked.assessment.canConfirm === false && stocked.actions.categories.some((item) => item.id === 'stock'))
 check('M. Spot check incomplete keeps confirm off', confirmSaleEnabled({ canCreate: true, systemCanConfirm: true, samples: [{ key: 'a', name: 'A', productName: 'A', quantity: 1, mappingStatus: 'Mapped', orderIds: [], categoryName: '' }], checkedKeys: [], reconciliationOk: true }) === false)
 
+const apple = product('p-apple', 'AB Green Apple')
+const summaryOrders = [
+  order('a1o', '260922H0000001'),
+  order('b1o', '260922H0000002'),
+  order('c1o', '260922H0000003'),
+  order('w1o', '260922H0000004'),
+  order('g1o', '260922H0000005'),
+]
+const marketplace = '[READY STOCK] Tepung Waffle Crispy Premium'
+const unmappedSummary = [
+  line('a1l', 'a1o', 6, undefined, { externalProductName: 'Product A' }),
+  line('b1l', 'b1o', 2, undefined, { externalProductName: 'Product B' }),
+  line('c1l', 'c1o', 1, undefined, { externalProductName: 'Product C' }),
+  line('w1l', 'w1o', 6, undefined, { externalProductName: marketplace }),
+  line('g1l', 'g1o', 3, 'p-apple', { externalProductName: 'AB Green Apple Marketplace' }),
+]
+const beforeMap = run(summaryOrders, unmappedSummary, [yam, waffle, apple])
+const beforeNames = beforeMap.review.products.map((row) => row.name)
+check('A. An unmapped product stays at the top', beforeNames[0] === 'Product A' && beforeMap.review.products[0].mapped === false, beforeNames.join(' | '))
+check('B. Every unmapped product appears before mapped products', beforeMap.review.products.findIndex((row) => row.mapped) === 4 && beforeNames.slice(0, 4).join('|') === 'Product A|Product B|Product C|' + marketplace, beforeNames.join(' | '))
+const beforeMapCount = beforeMap.actions.categories.find((item) => item.id === 'map')?.count ?? 0
+const mappedSummary = unmappedSummary.map((item) => item.id === 'w1l' ? { ...item, mappedProductId: 'p-waffle' } : item)
+const afterMap = run(summaryOrders, mappedSummary, [yam, waffle, apple])
+const afterNames = afterMap.review.products.map((row) => `${row.mapped ? 'mapped' : 'open'}:${row.name}`)
+const waffleRow = afterMap.review.products.find((row) => row.name === 'Tepung Waffle')
+check('C. Mapping one product decreases the map count', (afterMap.actions.categories.find((item) => item.id === 'map')?.count ?? 0) === beforeMapCount - 1, `${beforeMapCount} -> ${afterMap.actions.categories.find((item) => item.id === 'map')?.count}`)
+check('D. The mapped row shows the CSP name and Mapped', waffleRow?.mapped === true && waffleRow.name === 'Tepung Waffle' && !afterMap.review.products.some((row) => row.name === marketplace), afterNames.join(' | '))
+check('E. The mapped row moves below the remaining unmapped rows', afterNames.join('|') === 'open:Product A|open:Product B|open:Product C|mapped:Tepung Waffle|mapped:AB Green Apple', afterNames.join(' | '))
+const allMapped = mappedSummary.map((item) => item.mappedProductId ? item : { ...item, mappedProductId: 'p-yam' })
+const done = run(summaryOrders, allMapped, [yam, waffle, apple])
+check('F. Mapping every product removes the Needs mapping group and the Map Products action', done.review.products.every((row) => row.mapped) && !done.actions.categories.some((item) => item.id === 'map'), done.review.products.map((row) => row.name).join(' | '))
+const held = run(summaryOrders, mappedSummary, [yam, waffle, apple], { 'p-waffle': 0, 'p-apple': 0, 'p-yam': 0 })
+const heldWaffle = held.review.products.find((row) => row.name === 'Tepung Waffle')
+check('G. Will Post and Need Review stay on the existing assessment', waffleRow?.imported === 6 && waffleRow.willPost === 6 && waffleRow.needReview === 0 && heldWaffle?.mapped === true && heldWaffle.willPost === 0 && heldWaffle.needReview === 6 && held.assessment.canConfirm === false, `ready ${waffleRow?.willPost}/${waffleRow?.needReview} held ${heldWaffle?.willPost}/${heldWaffle?.needReview}`)
+const reversed = run(
+  [summaryOrders[2], summaryOrders[0], summaryOrders[1], summaryOrders[4], summaryOrders[3]],
+  [unmappedSummary[2], unmappedSummary[0], unmappedSummary[1], unmappedSummary[4], unmappedSummary[3]],
+  [yam, waffle, apple],
+)
+check('H. Order inside each group stays stable', reversed.review.products.map((row) => row.name).join('|') === 'Product C|Product A|Product B|' + marketplace + '|AB Green Apple')
+check('I. Mapping does not create a duplicate product row', afterMap.review.products.length === beforeMap.review.products.length && new Set(afterMap.review.products.map((row) => row.key)).size === afterMap.review.products.length)
+const blocked = run(
+  summaryOrders,
+  mappedSummary.map((item) => item.id === 'w1l' ? { ...item, quantityReview: true, pickingQuantity: 6 } : item),
+  [yam, waffle, apple],
+)
+const blockedWaffle = blocked.review.products.find((row) => row.name === 'Tepung Waffle')
+check('J. A mapped product can still need review when another blocker remains', blockedWaffle?.mapped === true && blockedWaffle.willPost === 0 && blockedWaffle.needReview === 6 && blockedWaffle.imported === 6, `post ${blockedWaffle?.willPost} review ${blockedWaffle?.needReview}`)
+
 const failed = results.filter((item) => !item.ok)
 console.log(`\n${results.length - failed.length}/${results.length} passed`)
 if (failed.length) process.exit(1)

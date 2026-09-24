@@ -426,6 +426,10 @@ function productKey(line: SalesImportLine) {
   return `unmapped:${(line.externalSku ?? '').trim()}|${line.externalProductName}|${line.variationText ?? ''}`
 }
 
+function stableProductOrder(rows: ProductReviewRow[]) {
+  return [...rows.filter((row) => !row.mapped), ...rows.filter((row) => row.mapped)]
+}
+
 function productName(line: SalesImportLine, products: Product[]) {
   if (line.mappedProductId) {
     return products.find((item) => item.id === line.mappedProductId)?.name || line.mappedProductSnapshot?.productName || 'Product'
@@ -469,7 +473,7 @@ export function salesImportProductReview(input: {
     totals.imported = round2(totals.imported + group.qty)
     const bucket: AccountBucket = group.buckets.size === 1 ? [...group.buckets][0] : 'unaccounted'
     totals[bucket] = round2(totals[bucket] + group.qty)
-    const line = group.lines[0]
+    const line = group.lines.find((item) => item.mappedProductId) ?? group.lines[0]
     const key = productKey(line)
     const row = products.get(key) ?? { key, name: productName(line, input.products), mapped: Boolean(line.mappedProductId), imported: 0, willPost: 0, needReview: 0 }
     row.imported = round2(row.imported + group.qty)
@@ -532,7 +536,7 @@ export function salesImportProductReview(input: {
     alreadyConfirmed: totals.confirmed,
     unaccounted,
     ok: unaccounted === 0,
-    products: [...products.values()].sort((a, b) => a.name.localeCompare(b.name)),
+    products: stableProductOrder([...products.values()]),
     attention,
   }
 }
