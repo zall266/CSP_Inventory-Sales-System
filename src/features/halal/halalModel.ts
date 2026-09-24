@@ -1,4 +1,3 @@
-import { receivableRawMaterials } from '@/features/receiving/receivingModel'
 import type { AppState, HalalCertificate, HalalVerificationStatus, Manufacturer, RawMaterialHalalCompliance } from '@/types'
 import { systemDateKey } from '@/utils/format'
 
@@ -17,6 +16,8 @@ export type HalalRow = {
   productId: string
   productName: string
   sku: string
+  categoryId: string
+  categoryName: string
   complianceId?: string
   manufacturerId?: string
   manufacturerName: string
@@ -134,6 +135,10 @@ function productOf(state: Pick<AppState, 'products'>, productId: string) {
   return state.products.find((product) => product.id === productId)
 }
 
+function categoryNameOf(state: Pick<AppState, 'categories'>, categoryId: string) {
+  return state.categories.find((category) => category.id === categoryId)?.name ?? '—'
+}
+
 function manufacturerOf(state: Pick<AppState, 'manufacturers'>, manufacturerId: string) {
   return (state.manufacturers ?? []).find((item) => item.id === manufacturerId)
 }
@@ -142,8 +147,12 @@ function certificateOf(state: Pick<AppState, 'halalCertificates'>, certificateId
   return (state.halalCertificates ?? []).find((item) => item.id === certificateId)
 }
 
+export function activeHalalProducts(state: Pick<AppState, 'products'>) {
+  return state.products.filter((product) => product.status === 'active')
+}
+
 export function complianceToRow(
-  state: Pick<AppState, 'products' | 'manufacturers' | 'halalCertificates'>,
+  state: Pick<AppState, 'products' | 'categories' | 'manufacturers' | 'halalCertificates'>,
   compliance: RawMaterialHalalCompliance,
   today = halalBusinessDate(),
 ): HalalRow {
@@ -155,6 +164,8 @@ export function complianceToRow(
     productId: compliance.productId,
     productName: product?.name ?? 'Unknown material',
     sku: product?.sku ?? '',
+    categoryId: product?.categoryId ?? '',
+    categoryName: product ? categoryNameOf(state, product.categoryId) : '—',
     complianceId: compliance.id,
     manufacturerId: compliance.manufacturerId,
     manufacturerName: manufacturer?.name ?? '—',
@@ -172,17 +183,19 @@ export function complianceToRow(
   }
 }
 
-export function buildHalalRows(state: Pick<AppState, 'products' | 'boms' | 'manufacturers' | 'halalCertificates' | 'halalCompliances'>, today = halalBusinessDate()) {
+export function buildHalalRows(state: Pick<AppState, 'products' | 'categories' | 'manufacturers' | 'halalCertificates' | 'halalCompliances'>, today = halalBusinessDate()) {
   const compliances = state.halalCompliances ?? []
   const registeredIds = new Set(compliances.map((row) => row.productId))
   const registered = compliances.map((row) => complianceToRow(state, row, today))
-  const missing = receivableRawMaterials(state)
+  const missing = activeHalalProducts(state)
     .filter((product) => !registeredIds.has(product.id))
     .map((product): HalalRow => ({
       key: `missing:${product.id}`,
       productId: product.id,
       productName: product.name,
       sku: product.sku,
+      categoryId: product.categoryId,
+      categoryName: categoryNameOf(state, product.categoryId),
       manufacturerName: '—',
       certificateNo: '—',
       status: 'not_registered',
@@ -190,11 +203,12 @@ export function buildHalalRows(state: Pick<AppState, 'products' | 'boms' | 'manu
   return [...registered, ...missing].sort((a, b) => a.productName.localeCompare(b.productName) || a.manufacturerName.localeCompare(b.manufacturerName))
 }
 
-export function filterHalalRows(rows: HalalRow[], query: string, status: HalalStatusFilter) {
+export function filterHalalRows(rows: HalalRow[], query: string, status: HalalStatusFilter, categoryId = 'all') {
   const needle = query.trim().toLowerCase()
   return rows.filter((row) => {
+    if (categoryId !== 'all' && row.categoryId !== categoryId) return false
     if (status !== 'all' && row.status !== status) return false
     if (!needle) return true
-    return [row.productName, row.sku, row.manufacturerName, row.certificateNo].some((value) => value.toLowerCase().includes(needle))
+    return [row.productName, row.sku, row.manufacturerName].some((value) => value.toLowerCase().includes(needle))
   })
 }

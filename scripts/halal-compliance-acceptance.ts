@@ -134,6 +134,7 @@ const expiring = await db.saveHalalCompliance({
   issuingAuthority: 'JAKIM',
   expiryDate: expiringExpiry,
   verificationStatus: 'verified',
+  document: { fileName: 'exp.pdf', mimeType: 'application/pdf', blob: pdf },
 })
 const expiringCert = (db.getSnapshot().halalCertificates ?? []).find((item) => item.id === expiring?.certificateId)
 check('9 expiring soon status', deriveHalalStatus(expiringCert) === 'expiring')
@@ -145,6 +146,7 @@ const expired = await db.saveHalalCompliance({
   issuingAuthority: 'JAKIM',
   expiryDate: expiredExpiry,
   verificationStatus: 'pending',
+  document: { fileName: 'old.pdf', mimeType: 'application/pdf', blob: pdf },
 })
 const expiredCert = (db.getSnapshot().halalCertificates ?? []).find((item) => item.id === expired?.certificateId)
 check('10 expired status', deriveHalalStatus(expiredCert) === 'expired')
@@ -153,7 +155,18 @@ const rows = buildHalalRows(db.getSnapshot())
 check('11 not registered status', rows.some((row) => row.productId === extra[2].id && row.status === 'not_registered' && !row.complianceId))
 check('12 search raw material', filterHalalRows(rows, 'sugar', 'all').some((row) => row.productId === 'p-sugar'))
 check('13 search manufacturer', filterHalalRows(rows, 'abc food', 'all').length >= 2)
-check('14 search certificate', filterHalalRows(rows, 'jakim-12345', 'all').length === 2)
+check('14 search sku', filterHalalRows(rows, 'rw-sg001', 'all').some((row) => row.productId === 'p-sugar'))
+check('category filter', filterHalalRows(rows, '', 'all', 'cat-ing').every((row) => row.categoryId === 'cat-ing') && filterHalalRows(rows, '', 'all', 'cat-ing').some((row) => row.productId === 'p-sugar'))
+check('category and search', filterHalalRows(rows, 'milk', 'all', 'cat-ing').some((row) => row.productId === 'p-milkpw') && filterHalalRows(rows, 'milk', 'all', 'cat-pack').every((row) => row.categoryId === 'cat-pack'))
+const missingUpload = await db.saveHalalCompliance({
+  productId: extra[2].id,
+  manufacturerId: created!.id,
+  certificateNo: '',
+  issuingAuthority: '',
+  expiryDate: activeExpiry,
+  verificationStatus: 'verified',
+})
+check('register requires certificate upload', missingUpload === null)
 check('15 status filter', filterHalalRows(rows, '', 'expired').every((row) => row.status === 'expired') && filterHalalRows(rows, '', 'active').some((row) => row.productId === 'p-sugar'))
 
 const renewed = await db.saveHalalCompliance({

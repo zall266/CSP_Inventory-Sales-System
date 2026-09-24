@@ -1,9 +1,7 @@
-import { useMemo, useState, type ReactNode } from 'react'
+import { useMemo, useState } from 'react'
 import { PermissionDenied } from '@/features/documents/A4Sheet'
 import { hasPermission } from '@/features/settings/permissions'
-import { receivableRawMaterials } from '@/features/receiving/receivingModel'
 import {
-  HALAL_AUTHORITIES,
   buildHalalRows,
   filterHalalRows,
   halalStatusLabel,
@@ -17,11 +15,10 @@ import {
 import { getAttachmentObjectUrl } from '@/store/attachmentBlobs'
 import { useApi, useStore } from '@/store/hooks'
 import { Button, Card, Drawer, EmptyState, Field, Input, Modal, PageHeader, Select } from '@/components/ui'
-import type { HalalVerificationStatus } from '@/types'
-import { formatDate, formatDateTime } from '@/utils/format'
+import { formatDate } from '@/utils/format'
 
 const FILTERS: Array<{ id: HalalStatusFilter; label: string }> = [
-  { id: 'all', label: 'All' },
+  { id: 'all', label: 'All Status' },
   { id: 'active', label: 'Active' },
   { id: 'expiring', label: 'Expiring Soon' },
   { id: 'expired', label: 'Expired' },
@@ -29,18 +26,7 @@ const FILTERS: Array<{ id: HalalStatusFilter; label: string }> = [
   { id: 'not_registered', label: 'Not Registered' },
 ]
 
-type DrawerMode = 'closed' | 'register' | 'view' | 'edit'
-
-const emptyForm = {
-  productId: '',
-  manufacturerId: '',
-  certificateNo: '',
-  issuingAuthority: 'JAKIM',
-  issueDate: '',
-  expiryDate: '',
-  verificationStatus: 'pending' as HalalVerificationStatus,
-  notes: '',
-}
+type DrawerMode = 'closed' | 'register' | 'edit'
 
 export function HalalCompliancePage() {
   const state = useStore()
@@ -49,76 +35,69 @@ export function HalalCompliancePage() {
   const canManage = hasPermission(state, 'halal.manage')
   const [query, setQuery] = useState('')
   const [status, setStatus] = useState<HalalStatusFilter>('all')
+  const [categoryId, setCategoryId] = useState('all')
   const [mode, setMode] = useState<DrawerMode>('closed')
   const [row, setRow] = useState<HalalRow | null>(null)
   const [showHistory, setShowHistory] = useState(false)
-  const [form, setForm] = useState(emptyForm)
+  const [manufacturerId, setManufacturerId] = useState('')
+  const [expiryDate, setExpiryDate] = useState('')
   const [file, setFile] = useState<File | null>(null)
   const [fileError, setFileError] = useState('')
   const [manufacturerOpen, setManufacturerOpen] = useState(false)
-  const [manufacturerForm, setManufacturerForm] = useState({
-    name: '',
-    registrationNo: '',
-    address: '',
-    contact: '',
-    notes: '',
-    active: true,
-  })
+  const [manufacturerName, setManufacturerName] = useState('')
 
   const rows = useMemo(() => buildHalalRows(state), [state])
   const summary = useMemo(() => halalSummary(rows), [rows])
-  const visible = useMemo(() => filterHalalRows(rows, query, status), [rows, query, status])
-  const materials = useMemo(() => receivableRawMaterials(state), [state])
-  const manufacturers = (state.manufacturers ?? []).filter((item) => item.active || item.id === form.manufacturerId)
+  const visible = useMemo(() => filterHalalRows(rows, query, status, categoryId), [rows, query, status, categoryId])
+  const categories = useMemo(() => {
+    const used = new Set(rows.map((item) => item.categoryId).filter(Boolean))
+    return state.categories.filter((category) => used.has(category.id))
+  }, [rows, state.categories])
+  const manufacturers = (state.manufacturers ?? []).filter((item) => item.active || item.id === manufacturerId)
   const certificates = state.halalCertificates ?? []
 
   if (!canView) return <PermissionDenied title="Halal Compliance" subtitle="You do not have permission to view Halal Compliance." />
 
-  function openRegister(productId = '') {
-    setRow(null)
-    setShowHistory(false)
-    setFile(null)
-    setFileError('')
-    setForm({ ...emptyForm, productId })
-    setMode('register')
-  }
-
-  function openView(next: HalalRow) {
+  function openRegister(next: HalalRow) {
     setRow(next)
     setShowHistory(false)
-    setMode('view')
+    setManufacturerId('')
+    setExpiryDate('')
+    setFile(null)
+    setFileError('')
+    setMode('register')
   }
 
   function openEdit(next: HalalRow) {
     setRow(next)
     setShowHistory(false)
+    setManufacturerId(next.manufacturerId ?? '')
+    setExpiryDate(next.expiryDate ?? '')
     setFile(null)
     setFileError('')
-    setForm({
-      productId: next.productId,
-      manufacturerId: next.manufacturerId ?? '',
-      certificateNo: next.certificateNo === '—' ? '' : next.certificateNo,
-      issuingAuthority: certificates.find((item) => item.id === next.certificateId)?.issuingAuthority ?? 'JAKIM',
-      issueDate: next.issueDate ?? '',
-      expiryDate: next.expiryDate ?? '',
-      verificationStatus: next.verificationStatus ?? 'pending',
-      notes: next.notes ?? '',
-    })
     setMode('edit')
   }
 
   async function saveCompliance() {
+    if (!row) return
+    if (!file && !row.documentFileId) {
+      setFileError('Upload the halal certificate.')
+      return
+    }
+    if (!expiryDate) {
+      setFileError('Expiry date is required.')
+      return
+    }
     const document = file ? { fileName: file.name, mimeType: file.type || 'application/octet-stream', blob: file } : null
     const saved = await api.saveHalalCompliance({
-      complianceId: mode === 'edit' ? row?.complianceId : undefined,
-      productId: form.productId,
-      manufacturerId: form.manufacturerId,
-      certificateNo: form.certificateNo,
-      issuingAuthority: form.issuingAuthority,
-      issueDate: form.issueDate,
-      expiryDate: form.expiryDate,
-      verificationStatus: form.verificationStatus,
-      notes: form.notes,
+      complianceId: mode === 'edit' ? row.complianceId : undefined,
+      productId: row.productId,
+      manufacturerId,
+      certificateNo: mode === 'edit' && !file && row.certificateNo !== '—' ? row.certificateNo : '',
+      issuingAuthority: mode === 'edit' ? certificates.find((item) => item.id === row.certificateId)?.issuingAuthority ?? '' : '',
+      issueDate: mode === 'edit' && !file ? row.issueDate : undefined,
+      expiryDate,
+      verificationStatus: 'verified',
       document,
     })
     if (!saved) return
@@ -126,11 +105,11 @@ export function HalalCompliancePage() {
   }
 
   function saveManufacturer() {
-    const saved = api.createManufacturer(manufacturerForm)
+    const saved = api.createManufacturer({ name: manufacturerName, active: true })
     if (!saved) return
-    setForm((current) => ({ ...current, manufacturerId: saved.id }))
+    setManufacturerId(saved.id)
     setManufacturerOpen(false)
-    setManufacturerForm({ name: '', registrationNo: '', address: '', contact: '', notes: '', active: true })
+    setManufacturerName('')
   }
 
   async function viewDocument(fileId?: string) {
@@ -141,16 +120,10 @@ export function HalalCompliancePage() {
 
   const compliance = row?.complianceId ? (state.halalCompliances ?? []).find((item) => item.id === row.complianceId) : undefined
   const historyIds = compliance ? [...compliance.previousCertificateIds].reverse() : []
-  const editing = mode === 'register' || mode === 'edit'
-  const nothingStored = (state.halalCompliances ?? []).length === 0 && materials.length === 0
 
   return (
     <div className="overflow-x-hidden">
-      <PageHeader
-        title="Halal Compliance"
-        subtitle="Raw Material Halal Status & Certificate Monitoring"
-        actions={canManage ? <Button onClick={() => openRegister()}>+ Register Raw Material</Button> : undefined}
-      />
+      <PageHeader title="Halal Compliance" subtitle="Raw Material Halal Status & Certificate Monitoring" />
 
       <div className="mb-4 grid grid-cols-2 gap-3 lg:grid-cols-4">
         <SummaryCard label="Active" value={summary.active} active={status === 'active'} onClick={() => setStatus('active')} />
@@ -160,13 +133,19 @@ export function HalalCompliancePage() {
       </div>
 
       <div className="mb-4 flex flex-col gap-3 sm:flex-row">
+        <Select className="sm:w-52" aria-label="Category" value={categoryId} onChange={(event) => setCategoryId(event.target.value)}>
+          <option value="all">All Categories</option>
+          {categories.map((category) => (
+            <option key={category.id} value={category.id}>{category.name}</option>
+          ))}
+        </Select>
         <Input
           value={query}
           onChange={(event) => setQuery(event.target.value)}
-          placeholder="Search raw material, manufacturer or certificate..."
-          aria-label="Search raw material, manufacturer or certificate"
+          placeholder="Search material..."
+          aria-label="Search material"
         />
-        <Select className="sm:w-56" value={status} aria-label="Status" onChange={(event) => setStatus(event.target.value as HalalStatusFilter)}>
+        <Select className="sm:w-52" value={status} aria-label="Status" onChange={(event) => setStatus(event.target.value as HalalStatusFilter)}>
           {FILTERS.map((item) => (
             <option key={item.id} value={item.id}>{item.label}</option>
           ))}
@@ -175,19 +154,17 @@ export function HalalCompliancePage() {
 
       <Card className="overflow-hidden">
         {visible.length === 0 ? (
-          <EmptyState
-            title={nothingStored || (status === 'all' && !query) ? 'No halal compliance records yet.' : 'No matching records'}
-            hint={canManage && (nothingStored || (status === 'all' && !query)) ? undefined : undefined}
-          />
+          <EmptyState title="No matching records" />
         ) : (
           <>
             <div className="hidden sm:block">
               <table className="w-full text-left text-sm">
                 <thead className="border-b border-slate-100 text-xs uppercase tracking-wide text-slate-400">
                   <tr>
-                    <th className="px-4 py-3 font-medium">Raw Material</th>
-                    <th className="px-4 py-3 font-medium">Manufacturer / Kilang</th>
-                    <th className="px-4 py-3 font-medium">Halal Certificate</th>
+                    <th className="px-4 py-3 font-medium">Product</th>
+                    <th className="px-4 py-3 font-medium">Category</th>
+                    <th className="px-4 py-3 font-medium">Manufacturer</th>
+                    <th className="px-4 py-3 font-medium">Certificate</th>
                     <th className="px-4 py-3 font-medium">Expiry</th>
                     <th className="px-4 py-3 font-medium">Status</th>
                     <th className="px-4 py-3 font-medium">Action</th>
@@ -200,15 +177,20 @@ export function HalalCompliancePage() {
                         <div className="font-medium text-slate-900">{item.productName}</div>
                         {item.sku && <div className="text-xs text-slate-400">{item.sku}</div>}
                       </td>
+                      <td className="px-4 py-3 text-slate-700">{item.categoryName}</td>
                       <td className="px-4 py-3 text-slate-700">{item.manufacturerName}</td>
-                      <td className="px-4 py-3 text-slate-700">{item.certificateNo}</td>
+                      <td className="px-4 py-3">
+                        {item.documentFileId ? (
+                          <button type="button" className="text-indigo-600" onClick={() => void viewDocument(item.documentFileId)}>View Certificate</button>
+                        ) : '—'}
+                      </td>
                       <td className="px-4 py-3 text-slate-700">{item.expiryDate ? formatDate(item.expiryDate) : '—'}</td>
                       <td className="px-4 py-3"><StatusText status={item.status} /></td>
                       <td className="px-4 py-3">
                         {item.status === 'not_registered' ? (
-                          canManage ? <Button variant="secondary" onClick={() => openRegister(item.productId)}>Register</Button> : '—'
+                          canManage ? <Button variant="secondary" onClick={() => openRegister(item)}>Register</Button> : '—'
                         ) : (
-                          <Button variant="secondary" onClick={() => openView(item)}>View / Edit</Button>
+                          canManage ? <Button variant="secondary" onClick={() => openEdit(item)}>Edit</Button> : '—'
                         )}
                       </td>
                     </tr>
@@ -221,15 +203,18 @@ export function HalalCompliancePage() {
                 <div key={item.key} className="rounded-xl border border-slate-100 p-3">
                   <div className="font-medium text-slate-900">{item.productName}</div>
                   {item.sku && <div className="text-xs text-slate-400">{item.sku}</div>}
-                  <div className="mt-2 text-sm text-slate-600">{item.manufacturerName}</div>
-                  <div className="text-sm text-slate-600">{item.certificateNo}</div>
+                  <div className="mt-2 text-sm text-slate-600">{item.categoryName}</div>
+                  <div className="text-sm text-slate-600">{item.manufacturerName}</div>
                   <div className="text-sm text-slate-600">{item.expiryDate ? formatDate(item.expiryDate) : '—'}</div>
                   <div className="mt-2"><StatusText status={item.status} /></div>
-                  <div className="mt-3">
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    {item.documentFileId && (
+                      <Button variant="secondary" onClick={() => void viewDocument(item.documentFileId)}>View Certificate</Button>
+                    )}
                     {item.status === 'not_registered' ? (
-                      canManage ? <Button variant="secondary" onClick={() => openRegister(item.productId)}>Register</Button> : null
+                      canManage ? <Button variant="secondary" onClick={() => openRegister(item)}>Register</Button> : null
                     ) : (
-                      <Button variant="secondary" onClick={() => openView(item)}>View / Edit</Button>
+                      canManage ? <Button variant="secondary" onClick={() => openEdit(item)}>Edit</Button> : null
                     )}
                   </div>
                 </div>
@@ -237,111 +222,31 @@ export function HalalCompliancePage() {
             </div>
           </>
         )}
-        {visible.length === 0 && canManage && (nothingStored || (status === 'all' && !query)) && (
-          <div className="pb-8 text-center">
-            <Button onClick={() => openRegister()}>+ Register Raw Material</Button>
-          </div>
-        )}
       </Card>
 
       <Drawer
         open={mode !== 'closed'}
         onClose={() => setMode('closed')}
-        title={editing ? (mode === 'edit' ? 'Edit Halal Compliance' : 'Register Halal Compliance') : 'Halal Compliance'}
-        subtitle={mode === 'view' ? row?.productName : undefined}
+        title={mode === 'edit' ? 'Edit Halal Compliance' : 'Register Halal Compliance'}
+        subtitle={row?.productName}
       >
-        {mode === 'view' && row && (
-          <div className="space-y-4 text-sm">
-            <Detail label="Raw Material" value={`${row.productName}${row.sku ? ` · ${row.sku}` : ''}`} />
-            <Detail label="Manufacturer" value={row.manufacturerName} />
-            <Detail label="Halal Certificate" value={row.certificateNo} />
-            <Detail label="Issue Date" value={row.issueDate ? formatDate(row.issueDate) : '—'} />
-            <Detail label="Expiry Date" value={row.expiryDate ? formatDate(row.expiryDate) : '—'} />
-            <Detail label="Status" value={<StatusText status={row.status} />} />
-            <Detail
-              label="Verification"
-              value={row.verificationStatus === 'verified'
-                ? `Verified${row.verifiedBy ? ` · By: ${row.verifiedBy}` : ''}${row.verifiedAt ? ` · ${formatDateTime(row.verifiedAt)}` : ''}`
-                : 'Pending Verification'}
-            />
-            <Detail
-              label="Certificate"
-              value={row.documentFileId ? (
-                <button type="button" className="text-indigo-600" onClick={() => void viewDocument(row.documentFileId)}>View Document</button>
-              ) : '—'}
-            />
-            <Detail label="Notes" value={row.notes || '—'} />
-            <div className="flex flex-wrap gap-2 pt-2">
-              {canManage && <Button onClick={() => openEdit(row)}>Edit</Button>}
-              <Button variant="secondary" onClick={() => setShowHistory((value) => !value)}>View History</Button>
-            </div>
-            {showHistory && (
-              <div className="space-y-2 rounded-xl border border-slate-100 p-3">
-                {historyIds.length === 0 && <div className="text-slate-500">No earlier certificates.</div>}
-                {historyIds.map((id) => {
-                  const certificate = certificates.find((item) => item.id === id)
-                  if (!certificate) return null
-                  return (
-                    <div key={id} className="border-b border-slate-50 pb-2 last:border-0">
-                      <div className="font-medium">{certificate.certificateNo}</div>
-                      <div className="text-slate-500">Issue {certificate.issueDate ? formatDate(certificate.issueDate) : '—'}</div>
-                      <div className="text-slate-500">Expiry {formatDate(certificate.expiryDate)}</div>
-                      <div className="text-slate-500">{certificate.verificationStatus === 'verified' ? `Verified${certificate.verifiedBy ? ` by ${certificate.verifiedBy}` : ''}` : 'Pending Verification'}</div>
-                    </div>
-                  )
-                })}
-              </div>
-            )}
-          </div>
-        )}
-
-        {editing && (
+        {row && (
           <div className="space-y-4">
-            <Field label="Raw Material">
-              <Select value={form.productId} disabled={mode === 'edit'} onChange={(event) => setForm({ ...form, productId: event.target.value })}>
-                <option value="">Select Product</option>
-                {materials.map((product) => (
-                  <option key={product.id} value={product.id}>{product.name} · {product.sku}</option>
-                ))}
-              </Select>
+            <Field label="Product">
+              <Input value={`${row.productName}${row.sku ? ` · ${row.sku}` : ''}`} readOnly />
             </Field>
-            <Field label="Manufacturer / Kilang">
-              <Select value={form.manufacturerId} onChange={(event) => setForm({ ...form, manufacturerId: event.target.value })}>
+            <Field label="Manufacturer / Factory">
+              <Select aria-label="Manufacturer" value={manufacturerId} onChange={(event) => setManufacturerId(event.target.value)}>
                 <option value="">Select Manufacturer</option>
                 {manufacturers.map((item) => (
                   <option key={item.id} value={item.id}>{item.name}</option>
                 ))}
               </Select>
             </Field>
-            {canManage && (
-              <Button variant="secondary" onClick={() => setManufacturerOpen(true)}>+ Add Manufacturer</Button>
-            )}
-            <Field label="Certificate No.">
-              <Input value={form.certificateNo} onChange={(event) => setForm({ ...form, certificateNo: event.target.value })} />
-            </Field>
-            <Field label="Issuing Authority">
-              <Select value={form.issuingAuthority} onChange={(event) => setForm({ ...form, issuingAuthority: event.target.value })}>
-                {HALAL_AUTHORITIES.map((authority) => (
-                  <option key={authority} value={authority}>{authority}</option>
-                ))}
-              </Select>
-            </Field>
-            <div className="grid gap-3 sm:grid-cols-2">
-              <Field label="Issue Date">
-                <Input type="date" value={form.issueDate} onChange={(event) => setForm({ ...form, issueDate: event.target.value })} />
-              </Field>
-              <Field label="Expiry Date">
-                <Input type="date" value={form.expiryDate} onChange={(event) => setForm({ ...form, expiryDate: event.target.value })} />
-              </Field>
-            </div>
-            <Field label="Verification Status">
-              <Select value={form.verificationStatus} onChange={(event) => setForm({ ...form, verificationStatus: event.target.value as HalalVerificationStatus })}>
-                <option value="pending">Pending Verification</option>
-                <option value="verified">Verified</option>
-              </Select>
-            </Field>
-            <Field label="Certificate Document" hint={fileError || 'PDF, JPG, or PNG'}>
+            {canManage && <Button variant="secondary" onClick={() => setManufacturerOpen(true)}>+ Add Manufacturer</Button>}
+            <Field label="Halal Certificate" hint={fileError || 'PDF, JPG, or PNG'}>
               <Input
+                aria-label="Upload Certificate"
                 type="file"
                 accept="application/pdf,image/jpeg,image/png,.pdf,.jpg,.jpeg,.png"
                 onChange={(event) => {
@@ -352,10 +257,39 @@ export function HalalCompliancePage() {
                 }}
               />
             </Field>
-            {mode === 'edit' && row?.documentName && <div className="text-xs text-slate-500">Current document: {row.documentName}</div>}
-            <Field label="Notes">
-              <Input value={form.notes} onChange={(event) => setForm({ ...form, notes: event.target.value })} />
+            {(file || row.documentName) && (
+              <div className="flex items-center gap-3 text-sm text-slate-700">
+                <span>📄 {file?.name || row.documentName}</span>
+                {row.documentFileId && !file && (
+                  <button type="button" className="text-indigo-600" onClick={() => void viewDocument(row.documentFileId)}>View</button>
+                )}
+              </div>
+            )}
+            <Field label="Expiry Date">
+              <Input aria-label="Expiry Date" type="date" value={expiryDate} onChange={(event) => setExpiryDate(event.target.value)} />
             </Field>
+            {mode === 'edit' && (
+              <Button variant="secondary" onClick={() => setShowHistory((value) => !value)}>View History</Button>
+            )}
+            {showHistory && (
+              <div className="space-y-2 rounded-xl border border-slate-100 p-3 text-sm">
+                {historyIds.length === 0 && <div className="text-slate-500">No earlier certificates.</div>}
+                {historyIds.map((id) => {
+                  const certificate = certificates.find((item) => item.id === id)
+                  if (!certificate) return null
+                  return (
+                    <div key={id} className="border-b border-slate-50 pb-2 last:border-0">
+                      <div className="font-medium">{certificate.documentName || 'Certificate'}</div>
+                      <div className="text-slate-500">Expiry {formatDate(certificate.expiryDate)}</div>
+                      <div className="text-slate-500">{certificate.verificationStatus === 'verified' ? `Verified${certificate.verifiedBy ? ` by ${certificate.verifiedBy}` : ''}` : 'Pending Verification'}</div>
+                      {certificate.documentFileId && (
+                        <button type="button" className="text-indigo-600" onClick={() => void viewDocument(certificate.documentFileId)}>View Certificate</button>
+                      )}
+                    </div>
+                  )
+                })}
+              </div>
+            )}
             <div className="flex justify-end gap-2">
               <Button variant="secondary" onClick={() => setMode('closed')}>Cancel</Button>
               <Button onClick={() => void saveCompliance()} disabled={!canManage}>Save</Button>
@@ -367,25 +301,7 @@ export function HalalCompliancePage() {
       <Modal open={manufacturerOpen} onClose={() => setManufacturerOpen(false)} title="Add Manufacturer" layer="z-[80]">
         <div className="space-y-3">
           <Field label="Manufacturer Name">
-            <Input value={manufacturerForm.name} onChange={(event) => setManufacturerForm({ ...manufacturerForm, name: event.target.value })} />
-          </Field>
-          <Field label="Company Registration No.">
-            <Input value={manufacturerForm.registrationNo} onChange={(event) => setManufacturerForm({ ...manufacturerForm, registrationNo: event.target.value })} />
-          </Field>
-          <Field label="Address">
-            <Input value={manufacturerForm.address} onChange={(event) => setManufacturerForm({ ...manufacturerForm, address: event.target.value })} />
-          </Field>
-          <Field label="Contact">
-            <Input value={manufacturerForm.contact} onChange={(event) => setManufacturerForm({ ...manufacturerForm, contact: event.target.value })} />
-          </Field>
-          <Field label="Notes">
-            <Input value={manufacturerForm.notes} onChange={(event) => setManufacturerForm({ ...manufacturerForm, notes: event.target.value })} />
-          </Field>
-          <Field label="Status">
-            <Select value={manufacturerForm.active ? 'active' : 'inactive'} onChange={(event) => setManufacturerForm({ ...manufacturerForm, active: event.target.value === 'active' })}>
-              <option value="active">Active</option>
-              <option value="inactive">Inactive</option>
-            </Select>
+            <Input value={manufacturerName} onChange={(event) => setManufacturerName(event.target.value)} />
           </Field>
           <div className="flex justify-end gap-2">
             <Button variant="secondary" onClick={() => setManufacturerOpen(false)}>Cancel</Button>
@@ -410,13 +326,4 @@ function SummaryCard({ label, value, active, onClick }: { label: string; value: 
 
 function StatusText({ status }: { status: HalalStatus }) {
   return <span>{halalStatusMark(status)} {halalStatusLabel(status)}</span>
-}
-
-function Detail({ label, value }: { label: string; value: ReactNode }) {
-  return (
-    <div>
-      <div className="text-xs font-medium uppercase tracking-wide text-slate-400">{label}</div>
-      <div className="mt-1 text-slate-800">{value}</div>
-    </div>
-  )
 }
