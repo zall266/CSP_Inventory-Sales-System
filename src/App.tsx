@@ -24,6 +24,7 @@ import { NewProductionOrderPage, ProductionOrderDetailPage, ProductionOrdersPage
 import { ProductionPlanningPage } from '@/features/manufacturing/ProductionPlanningPage'
 import { FinishedGoodsPage, MaterialConsumptionPage } from '@/features/manufacturing/SessionRecordPages'
 import { ProductionHistoryPage, ProductionSessionDetailPage, ProductionSessionEditPage } from '@/features/manufacturing/ProductionHistoryPage'
+import { BmrPrintPage } from '@/features/manufacturing/BmrPrintPage'
 import { ManufacturingReportPage } from '@/features/manufacturing/ManufacturingReportsPages'
 import { TodaysProductionPage } from '@/features/manufacturing/TodaysProductionPage'
 import { CompleteProductionPage } from '@/features/manufacturing/CompleteProductionPage'
@@ -49,6 +50,7 @@ export default function App() {
         <Route path="/print/invoice/:id" element={<InvoicePrintPage />} />
         <Route path="/print/delivery/:id" element={<DeliveryPrintPage />} />
         <Route path="/pjkm/5.1.1" element={<Pjkm511PreviewPage />} />
+        <Route path="/manufacturing/bmr/:sessionId" element={<BmrPrintPage />} />
         <Route element={<AppLayout />}>
           <Route path="/" element={<DashboardPage />} />
           <Route path="/sales" element={<SalesPage />} />
