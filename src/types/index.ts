@@ -605,6 +605,8 @@ export type StockOrder = {
   receivedQty?: number
 }
 
+export type ReceivingCondition = 'Baik' | 'Tidak Baik' | 'Perlu Pemeriksaan'
+
 export type ReceivingLine = {
   productId: string
   qty: number
@@ -613,6 +615,8 @@ export type ReceivingLine = {
   batchNo?: string
   expiry?: string
   notes?: string
+  /** Absent on records created before PJKM 5.1.1. Never defaulted. */
+  condition?: ReceivingCondition
 }
 
 export type Receiving = {
@@ -1714,6 +1718,7 @@ export type ReceivingInput = {
     batchNo?: string
     expiry?: string
     notes?: string
+    condition?: string
   }>
   photoUrl?: string
   photoName?: string

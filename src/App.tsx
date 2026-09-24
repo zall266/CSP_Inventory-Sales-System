@@ -37,6 +37,7 @@ import { DeliveryOrdersPage, DeliveryEditorPage, DeliveryDetailPage, DeliveryPri
 import { AgentDetailPage, AgentsPage } from '@/features/agent/AgentPages'
 import { MyTasksPage, TaskCategoriesPage, TaskDetailPage, TaskEditorPage, TaskManagePage } from '@/features/tasks/TaskPages'
 import { NewReceivingPage, ReceivingDetailPage, ReceivingListPage } from '@/features/receiving/ReceivingPages'
+import { Pjkm511PreviewPage, PjkmRecordsPage } from '@/features/pjkm/PjkmPages'
 import { OpeningBalancePage } from '@/features/openingBalance/OpeningBalancePages'
 
 export default function App() {
@@ -46,6 +47,7 @@ export default function App() {
         <Route path="/print/quotation/:id" element={<QuotationPrintPage />} />
         <Route path="/print/invoice/:id" element={<InvoicePrintPage />} />
         <Route path="/print/delivery/:id" element={<DeliveryPrintPage />} />
+        <Route path="/pjkm/5.1.1" element={<Pjkm511PreviewPage />} />
         <Route element={<AppLayout />}>
           <Route path="/" element={<DashboardPage />} />
           <Route path="/sales" element={<SalesPage />} />
@@ -72,6 +74,7 @@ export default function App() {
           <Route path="/customers" element={<CustomersPage />} />
           <Route path="/purchases" element={<PurchasesPage />} />
           <Route path="/purchases/new" element={<NewPurchasePage />} />
+          <Route path="/pjkm" element={<PjkmRecordsPage />} />
           <Route path="/receiving" element={<ReceivingListPage />} />
           <Route path="/receiving/new" element={<NewReceivingPage />} />
           <Route path="/receiving/:id" element={<ReceivingDetailPage />} />

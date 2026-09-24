@@ -82,7 +82,7 @@ const shopee = db.createReceiving({
   warehouseId: 'wh-main',
   source: 'shopee',
   supplierNote: 'Shopee order 240911',
-  items: [{ productId: 'p-sugar', qty: 12, batchNo: 'SG-2409', expiry: '' }],
+  items: [{ productId: 'p-sugar', qty: 12, batchNo: 'SG-2409', expiry: '', condition: 'Baik' }],
   photoUrl: TINY_JPG,
   photoName: 'do.jpg',
 })
@@ -108,14 +108,14 @@ const milkBefore = inventoryOf('p-milkpw')
 const milk = db.createReceiving({
   warehouseId: 'wh-main',
   source: 'direct',
-  items: [{ productId: 'p-milkpw', qty: 2, expiry: '2027-03-01' }],
+  items: [{ productId: 'p-milkpw', qty: 2, expiry: '2027-03-01', condition: 'Baik' }],
 })
 check('Direct receiving without purchase still stocks in', Boolean(milk?.id) && inventoryOf('p-milkpw') === milkBefore + 2)
 
 const fg = db.createReceiving({
   warehouseId: 'wh-main',
   source: 'other',
-  items: [{ productId: 'p-pack-mt', qty: 1, expiry: '2027-01-01' }],
+  items: [{ productId: 'p-pack-mt', qty: 1, expiry: '2027-01-01', condition: 'Baik' }],
 })
 check('Finished goods cannot be received as raw material', fg === null)
 
@@ -138,7 +138,7 @@ const bagRecv = db.createReceiving({
   warehouseId: 'wh-main',
   source: 'supplier',
   supplierId: db.getSnapshot().suppliers[0]?.id,
-  items: [{ productId: bag!.id, qty: 2 }],
+  items: [{ productId: bag!.id, qty: 2, condition: 'Baik' }],
 })
 const expectedBase = purchaseQtyToBaseQty(2, bag!)
 check(
@@ -151,7 +151,7 @@ db.switchUser('u-mei')
 const asStaffBag = db.createReceiving({
   warehouseId: 'wh-main',
   source: 'direct',
-  items: [{ productId: bag!.id, qty: 1 }],
+  items: [{ productId: bag!.id, qty: 1, condition: 'Baik' }],
 })
 check('Staff can receive conversion material after admin created it', Boolean(asStaffBag?.id))
 
