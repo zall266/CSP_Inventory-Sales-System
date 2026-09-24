@@ -1,8 +1,11 @@
 .pjkm-sheet {
+  box-sizing: border-box;
   width: 8.5in;
-  min-height: 11in;
-  margin: 0 auto 24px;
-  padding: 0.35in 0.4in;
+  height: 10.85in;
+  min-height: 10.85in;
+  margin: 0 auto 16px;
+  padding: 0.32in 0.4in;
+  overflow: hidden;
   background: #fff;
   color: #000;
   box-shadow: 0 8px 24px rgba(15, 23, 42, 0.12);
@@ -104,20 +107,32 @@
   margin: 0;
 }
 
+@media (max-width: 800px) {
+  .pjkm-sheet {
+    zoom: 0.42;
+    margin-bottom: 12px;
+  }
+}
+
 @media print {
   .pjkm-root {
     page: pjkm;
+    min-height: 0 !important;
     background: #fff !important;
+  }
+  .pjkm-root,
+  .pjkm-root > div {
+    margin: 0 !important;
+    padding: 0 !important;
+    min-height: 0 !important;
   }
   .pjkm-sheet {
     width: 8.5in;
-    min-height: 11in;
+    height: 10.85in;
+    min-height: 0;
     margin: 0;
+    zoom: 1;
     box-shadow: none;
-    break-after: page;
-    page-break-after: always;
-  }
-  .pjkm-sheet:last-child {
     break-after: auto;
     page-break-after: auto;
   }

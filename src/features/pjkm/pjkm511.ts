@@ -13,7 +13,7 @@ export const PJKM_511 = {
   title: 'REKOD 5.1.1 : PENERIMAAN BAHAN MENTAH',
 } as const
 
-export const PJKM_ROW_BUDGET = 16
+export const PJKM_ROW_BUDGET = 12
 
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
 
