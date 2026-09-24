@@ -12,7 +12,6 @@ import {
   type BmrDocument,
   type BmrMaterialRow,
   type BmrPackagingRow,
-  type BmrPage,
   type BmrProcessRow,
 } from '@/features/manufacturing/bmrModel'
 import './bmr.css'
@@ -49,33 +48,33 @@ export function BmrPrintPage() {
         </div>
       ) : (
         <div className="py-6 print:py-0">
-          {record.pages.map((page, index) => (
-            <BmrSheet key={index} record={record} page={page} />
-          ))}
+          <BmrDocumentView record={record} />
         </div>
       )}
     </div>
   )
 }
 
-function BmrSheet({ record, page }: { record: BmrDocument; page: BmrPage }) {
+function BmrDocumentView({ record }: { record: BmrDocument }) {
   return (
     <section className="bmr-sheet">
-      <Letterhead pageLabel={page.pageLabel} />
-      {page.showProductionHeader ? <ProductionHeader record={record} /> : <div className="bmr-continued">{BMR_TITLE} — continued</div>}
-      {page.materials.length > 0 && <MaterialTable rows={page.materials} />}
-      {page.showProcess && <ProcessTable rows={record.process} note={record.processNote} />}
-      {page.showPackaging && <PackagingTable rows={record.packaging} />}
-      {page.showDeviations && <DeviationTable rows={record.deviations} />}
-      {page.showApproval && <ApprovalTable rows={record.approval} />}
+      <Letterhead />
+      <ProductionHeader record={record} />
+      {record.materials.length > 0 && <MaterialTable rows={record.materials} />}
+      <ProcessTable rows={record.process} note={record.processNote} />
+      <PackagingTable rows={record.packaging} />
+      <DeviationTable rows={record.deviations} />
+      <div className="bmr-keep">
+        <ApprovalTable rows={record.approval} />
+      </div>
     </section>
   )
 }
 
-function Letterhead({ pageLabel }: { pageLabel: string }) {
+function Letterhead() {
   return (
     <header className="bmr-head">
-      <div>
+      <div className="bmr-identity">
         <div className="bmr-company">{BMR_COMPANY}</div>
         <div className="bmr-doc">{BMR_DOCUMENT}</div>
         <div className="bmr-effective">Effective Date: {BMR_EFFECTIVE_DATE}</div>
@@ -85,7 +84,7 @@ function Letterhead({ pageLabel }: { pageLabel: string }) {
           <tr><th>Document</th><td>BMR</td></tr>
           <tr><th>Effective Date</th><td>{BMR_EFFECTIVE_DATE}</td></tr>
           <tr><th>Version</th><td>1</td></tr>
-          <tr><th>Page</th><td>{pageLabel}</td></tr>
+          <tr><th>Page</th><td className="bmr-page-no" /></tr>
         </tbody>
       </table>
     </header>

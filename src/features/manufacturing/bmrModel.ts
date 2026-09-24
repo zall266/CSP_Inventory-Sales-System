@@ -19,10 +19,6 @@ export const BMR_EFFECTIVE_DATE = '01st JUNE 2026'
 export const BMR_TITLE = 'Batch Manufacturing Report (BMR)'
 export const BMR_MULTIPLE_HALAL_REMARK = 'Multiple Halal records — confirm manually'
 
-/** First page also carries the document header and, when the list fits, the process block. */
-export const BMR_FIRST_PAGE_MATERIALS = 8
-export const BMR_NEXT_PAGE_MATERIALS = 16
-
 export const BMR_PROCESS_STEPS = [
   'Weighing of ingredients',
   'Mixing',
@@ -90,16 +86,6 @@ export type BmrApprovalRow = {
   date: string
 }
 
-export type BmrPage = {
-  materials: BmrMaterialRow[]
-  pageLabel: string
-  showProductionHeader: boolean
-  showProcess: boolean
-  showPackaging: boolean
-  showDeviations: boolean
-  showApproval: boolean
-}
-
 export type BmrDocument = {
   sessionId: string
   productName: string
@@ -115,7 +101,6 @@ export type BmrDocument = {
   deviations: BmrDeviationRow[]
   approval: BmrApprovalRow[]
   processNote: string
-  pages: BmrPage[]
 }
 
 export type BmrSource = {
@@ -329,56 +314,6 @@ export function bmrApprovalRows(session: ProductionSession): BmrApprovalRow[] {
   ]
 }
 
-export function paginateBmr(
-  materials: BmrMaterialRow[],
-  budgets: { first: number; next: number } = { first: BMR_FIRST_PAGE_MATERIALS, next: BMR_NEXT_PAGE_MATERIALS },
-): BmrPage[] {
-  const firstBudget = Math.max(1, budgets.first)
-  const nextBudget = Math.max(1, budgets.next)
-  const chunks: BmrMaterialRow[][] = []
-  if (materials.length === 0) chunks.push([])
-  else {
-    chunks.push(materials.slice(0, firstBudget))
-    for (let index = firstBudget; index < materials.length; index += nextBudget) {
-      chunks.push(materials.slice(index, index + nextBudget))
-    }
-  }
-  const materialPages: BmrPage[] = chunks.map((rows, index) => ({
-    materials: rows,
-    pageLabel: '',
-    showProductionHeader: index === 0,
-    showProcess: false,
-    showPackaging: false,
-    showDeviations: false,
-    showApproval: false,
-  }))
-  const last = materialPages[materialPages.length - 1]
-  const processFits = materials.length <= firstBudget
-  if (processFits) last.showProcess = true
-  else {
-    materialPages.push({
-      materials: [],
-      pageLabel: '',
-      showProductionHeader: false,
-      showProcess: true,
-      showPackaging: false,
-      showDeviations: false,
-      showApproval: false,
-    })
-  }
-  materialPages.push({
-    materials: [],
-    pageLabel: '',
-    showProductionHeader: false,
-    showProcess: false,
-    showPackaging: true,
-    showDeviations: true,
-    showApproval: true,
-  })
-  const total = materialPages.length
-  return materialPages.map((page, index) => ({ ...page, pageLabel: `${index + 1} of ${total}` }))
-}
-
 export function buildBmr(session: ProductionSession | undefined, source: BmrSource): BmrDocument | null {
   if (!session || !canPrintBmr(session)) return null
   const expiryDate = bmrExpiryDate(session.productionDate)
@@ -404,6 +339,5 @@ export function buildBmr(session: ProductionSession | undefined, source: BmrSour
     deviations: bmrDeviationRows(),
     approval: bmrApprovalRows(session),
     processNote: schedule.note,
-    pages: paginateBmr(materials),
   }
 }

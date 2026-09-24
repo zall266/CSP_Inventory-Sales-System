@@ -14,9 +14,7 @@ import {
   bmrExpiryDate,
   buildBmr,
   canPrintBmr,
-  paginateBmr,
   weightToGrams,
-  type BmrMaterialRow,
   type BmrSource,
 } from '../src/features/manufacturing/bmrModel'
 import type {
@@ -281,21 +279,6 @@ const unposted = buildBmr(session({ ...one, posted: false }), source())
 check('incomplete production does not build a BMR', open == null && unposted == null)
 check('print gate requires completed and posted', canPrintBmr(one) === true && canPrintBmr({ status: 'in_progress', posted: false }) === false && canPrintBmr({ status: 'completed', posted: false }) === false)
 
-const longMaterials: BmrMaterialRow[] = Array.from({ length: 20 }, (_, index) => ({
-  material: `Material ${index + 1}`,
-  manufacturer: '',
-  warehouseStockG: '',
-  quantityUsedG: '1',
-  expiryDate: '',
-  halalStatus: '',
-  remarks: '',
-}))
-const pages = paginateBmr(longMaterials)
-check('long material list spans more than one material page', pages.filter((page) => page.materials.length > 0).length > 1)
-check('material pages repeat by each carrying their own rows', pages.filter((page) => page.materials.length > 0).every((page) => page.materials.length > 0))
-check('final approval is only on the last page', pages.at(-1)?.showApproval === true && pages.slice(0, -1).every((page) => !page.showApproval))
-check('packaging and deviations share the final page', pages.at(-1)?.showPackaging === true && pages.at(-1)?.showDeviations === true)
-
 const css = readFileSync(new URL('../src/features/manufacturing/bmr.css', import.meta.url), 'utf8')
 const pageSource = readFileSync(new URL('../src/features/manufacturing/BmrPrintPage.tsx', import.meta.url), 'utf8')
 const historySource = readFileSync(new URL('../src/features/manufacturing/ProductionHistoryPage.tsx', import.meta.url), 'utf8')
@@ -332,10 +315,12 @@ const multiSchedule = buildBmr(session({
   },
 }), source({ products: [...source().products, ...Array.from({ length: 7 }, (_, index) => product({ id: `p-line-${index}`, name: `Line ${index}`, unit: 'KG', categoryId: 'cat-ing' }))] }))
 check('multi-product filling uses total packs', multiSchedule?.process[2].timeStart === '9:45 AM' && multiSchedule.process[2].timeEnd === '10:45 AM')
-check('page labels are n of N', doc?.pages.map((page) => page.pageLabel).join(', ') === '1 of 2, 2 of 2')
+check('print page is one flowing sheet', pageSource.includes('BmrDocumentView') && !pageSource.includes('continued') && !pageSource.includes('page-break-before'))
+check('page count is a print counter, not a fixed total', css.includes('counter(page)') && css.includes('counter(pages)') && !css.includes('page-break-after: always'))
 check('print page is A4 portrait', css.includes('size: A4 portrait'))
-check('header is a two-column letterhead', pageSource.includes('bmr-head') && pageSource.includes('bmr-control') && pageSource.includes('pageLabel'))
+check('header is a two-column letterhead', pageSource.includes('bmr-head') && pageSource.includes('bmr-control') && pageSource.includes('bmr-page-no'))
 check('material table header repeats on print', css.includes('display: table-header-group'))
+check('final approval stays together', css.includes('.bmr-keep') && pageSource.includes('bmr-keep'))
 check('effective date is on the print page path', pageSource.includes('BMR_EFFECTIVE_DATE') && BMR_EFFECTIVE_DATE === '01st JUNE 2026')
 check('print route is outside the layout import', appSource.includes('/manufacturing/bmr/:sessionId'))
 check('history shows Print BMR through the completed gate', historySource.includes('canPrintBmr(session)') && historySource.includes('Print BMR'))
