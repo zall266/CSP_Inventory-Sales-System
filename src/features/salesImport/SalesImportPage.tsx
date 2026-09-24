@@ -545,6 +545,7 @@ function SalesImportReview({ batchId }: { batchId: string }) {
         onClose={() => setActionOpen(null)}
         onViewOrder={() => { setActionOpen(null); setDetailsOpen(true); document.getElementById('sales-import-detail')?.scrollIntoView({ behavior: 'smooth', block: 'start' }) }}
         mapIndex={mapIndex}
+        onPickMap={setMapIndex}
         productQuery={productQuery}
         onProductQuery={setProductQuery}
         choices={choices}
@@ -741,6 +742,7 @@ function ActionPanel({
   onClose,
   onViewOrder,
   mapIndex,
+  onPickMap,
   productQuery,
   onProductQuery,
   choices,
@@ -756,6 +758,7 @@ function ActionPanel({
   onClose: () => void
   onViewOrder: () => void
   mapIndex: number
+  onPickMap: (index: number) => void
   productQuery: string
   onProductQuery: (value: string) => void
   choices: Record<string, string>
@@ -773,6 +776,13 @@ function ActionPanel({
       {!category ? null : category.id === 'map' ? (
         <div>
           <p className="text-sm text-slate-600">{unmapped.length} product{unmapped.length === 1 ? '' : 's'} need mapping</p>
+          {unmapped.length > 1 && (
+            <div className="mt-2 flex max-h-24 flex-wrap gap-1 overflow-y-auto">
+              {unmapped.map(([id, row], index) => (
+                <button key={id} type="button" className={`rounded-full px-2 py-1 text-xs ${index === mapIndex ? 'bg-indigo-600 text-white' : 'bg-slate-100 text-slate-700'}`} onClick={() => onPickMap(index)}>{row.label}</button>
+              ))}
+            </div>
+          )}
           {currentMap ? (
             <div className="mt-3 rounded-xl border border-slate-200 p-3">
               <div className="break-words text-sm font-medium text-slate-900">{currentMap[1].label}</div>
