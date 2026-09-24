@@ -1,6 +1,7 @@
 import { NavLink, useLocation } from 'react-router-dom'
 import {
   ArrowLeftRight,
+  BadgeCheck,
   BadgePercent,
   BarChart3,
   Boxes,
@@ -75,6 +76,11 @@ export const navGroups: NavGroup[] = [
       { to: '/purchase-returns', label: 'Purchase Returns', icon: PackagePlus },
       { to: '/suppliers', label: 'Suppliers', icon: Truck },
     ],
+  },
+  {
+    id: 'compliance',
+    label: 'COMPLIANCE',
+    items: [{ to: '/compliance/halal', label: 'Halal Compliance', icon: BadgeCheck }],
   },
   {
     id: 'inventory',
@@ -183,6 +189,7 @@ function navItemVisible(state: ReturnType<typeof useStore>, item: NavItem) {
   if (item.to === '/tasks/manage') return hasPermission(state, 'task.create') || hasPermission(state, 'task.edit') || hasPermission(state, 'task.assign')
   if (item.to === '/tasks/categories') return hasPermission(state, 'task.category.manage')
   if (item.to === '/receiving' || item.to === '/pjkm') return hasPermission(state, 'receiving.view')
+  if (item.to === '/compliance/halal') return hasPermission(state, 'halal.view')
   if (item.to === '/sales/returns') return hasPermission(state, 'sales_return.view')
   if (item.to === '/sales/import') return hasPermission(state, 'sales.view') || hasPermission(state, 'sales.create')
   return true

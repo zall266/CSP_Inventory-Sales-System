@@ -43,9 +43,18 @@ import {
 import {
   RECEIVING_PERMISSION_KEYS,
   buildReceivingLines,
+  isReceivableRawMaterial,
   parseReceivingPhoto,
 } from '@/features/receiving/receivingModel'
 import { INVENTORY_USAGE_PERMISSION_KEYS, activeStockOrder } from '@/features/inventory/toOrderModel'
+import {
+  HALAL_CERTIFICATE_KIND,
+  certificatePeriodMatches,
+  findCertificateByPeriod,
+  findManufacturerByName,
+  isDateKey,
+  validateHalalDocument,
+} from '@/features/halal/halalModel'
 import {
   TASK_PERMISSION_KEYS,
   defaultStaffTaskCategories,
@@ -54,7 +63,7 @@ import {
   parseTaskTime,
   resolveTaskReference,
 } from '@/features/tasks/taskModel'
-import { clearAttachmentBlobs, deleteAttachmentBlob } from '@/store/attachmentBlobs'
+import { clearAttachmentBlobs, deleteAttachmentBlob, putAttachmentBlob } from '@/store/attachmentBlobs'
 import { applyBomCosts, hydrateProducts, normalizeUnit, parseNonNegativeMoney, productHasBom, productIsSellable, productIsUsed, purchaseQtyToBaseQty, qtyToBaseUnit, resolveProductSku, skuIsUnique, validatePurchaseConversion } from '@/features/products/masterData'
 import { inactiveSalesComponent, salesComponentSnapshot, salesComponentsOf, validateSalesComponents } from '@/features/products/salesComponents'
 import { parseAwb } from '@/features/salesImport/parseAwb'
@@ -92,6 +101,7 @@ import {
   hasPermission,
   isOwnerRole,
   isOwnerUser,
+  HALAL_PERMISSION_KEYS,
   MANUFACTURING_PLAN_PERMISSION_KEYS,
   normalizePermissions,
   roleById,
@@ -178,6 +188,10 @@ import type {
   UserStatus,
   WastageKind,
   BalanceUsageReason,
+  HalalCertificate,
+  HalalVerificationStatus,
+  Manufacturer,
+  RawMaterialHalalCompliance,
   ProductionMaterialAllocation,
   ProductionMaterialAudit,
   ProductionMaterialAllocationSource,
@@ -243,7 +257,7 @@ function hydrateData(data: AppData): AppData {
       const raw = data.settings?.roleMatrix?.[role.id] ?? {}
       const normalized = normalizePermissions(raw)
       const defaults = defaultPermissionsForLegacy(role.legacyRole)
-      for (const key of [...WAREHOUSE_MAP_KEYS, ...AGENT_PERMISSION_KEYS, ...TASK_PERMISSION_KEYS, ...RECEIVING_PERMISSION_KEYS, ...OPENING_BALANCE_PERMISSION_KEYS, ...SALES_RETURN_PERMISSION_KEYS, ...CUSTOMER_PRICING_PERMISSION_KEYS, ...MANUFACTURING_PLAN_PERMISSION_KEYS, ...INVENTORY_USAGE_PERMISSION_KEYS]) {
+      for (const key of [...WAREHOUSE_MAP_KEYS, ...AGENT_PERMISSION_KEYS, ...TASK_PERMISSION_KEYS, ...RECEIVING_PERMISSION_KEYS, ...OPENING_BALANCE_PERMISSION_KEYS, ...SALES_RETURN_PERMISSION_KEYS, ...CUSTOMER_PRICING_PERMISSION_KEYS, ...MANUFACTURING_PLAN_PERMISSION_KEYS, ...INVENTORY_USAGE_PERMISSION_KEYS, ...HALAL_PERMISSION_KEYS]) {
         if (raw[key] === undefined) normalized[key] = defaults[key]
       }
       return [role.id, normalized]
@@ -318,6 +332,9 @@ function hydrateData(data: AppData): AppData {
     salesImportLines: data.salesImportLines ?? [],
     salesImportMappings: data.salesImportMappings ?? [],
     salesImportShipments: data.salesImportShipments ?? [],
+    manufacturers: data.manufacturers ?? [],
+    halalCertificates: data.halalCertificates ?? [],
+    halalCompliances: data.halalCompliances ?? [],
     packingAssemblies: hydratePackingAssemblies(data.packingAssemblies),
     salesReturns: hydrateSalesReturns(data.salesReturns),
     returnSources: data.returnSources ?? defaultReturnSources(PROTOTYPE_TODAY.toISOString()),
@@ -8162,6 +8179,340 @@ export const db = {
     } finally {
       salesImportConfirmInFlight = false
     }
+  },
+
+  createManufacturer(input: {
+    name: string
+    registrationNo?: string
+    address?: string
+    contact?: string
+    notes?: string
+    active?: boolean
+  }): Manufacturer | null {
+    if (!hasPermission(state, 'halal.manage')) {
+      toast('Permission denied', 'You cannot manage Halal Compliance.', 'danger')
+      return null
+    }
+    const name = input.name.trim()
+    if (!name) {
+      toast('Manufacturer name is required', undefined, 'danger')
+      return null
+    }
+    if (findManufacturerByName(state.manufacturers ?? [], name)) {
+      toast('Manufacturer already exists', 'Use the existing manufacturer with this name.', 'danger')
+      return null
+    }
+    const actor = currentUser(state).name
+    const now = nowIso()
+    const manufacturer: Manufacturer = {
+      id: uid('mfr'),
+      name,
+      registrationNo: input.registrationNo?.trim() || undefined,
+      address: input.address?.trim() || undefined,
+      contact: input.contact?.trim() || undefined,
+      notes: input.notes?.trim() || undefined,
+      active: input.active !== false,
+      createdAt: now,
+      createdBy: actor,
+      updatedAt: now,
+      updatedBy: actor,
+    }
+    setData({
+      manufacturers: [manufacturer, ...(state.manufacturers ?? [])],
+      documentAuditLogs: pushDocAudit(makeDocAudit({
+        action: 'manufacturer_created',
+        documentType: 'manufacturer',
+        documentId: manufacturer.id,
+        documentNo: manufacturer.name,
+        newValue: manufacturer.active ? 'active' : 'inactive',
+      })),
+    })
+    toast('Manufacturer saved', manufacturer.name)
+    return manufacturer
+  },
+
+  updateManufacturer(id: string, input: {
+    name: string
+    registrationNo?: string
+    address?: string
+    contact?: string
+    notes?: string
+    active?: boolean
+  }): Manufacturer | null {
+    if (!hasPermission(state, 'halal.manage')) {
+      toast('Permission denied', 'You cannot manage Halal Compliance.', 'danger')
+      return null
+    }
+    const current = (state.manufacturers ?? []).find((item) => item.id === id)
+    if (!current) {
+      toast('Manufacturer not found', undefined, 'danger')
+      return null
+    }
+    const name = input.name.trim()
+    if (!name) {
+      toast('Manufacturer name is required', undefined, 'danger')
+      return null
+    }
+    if (findManufacturerByName(state.manufacturers ?? [], name, id)) {
+      toast('Manufacturer already exists', 'Use the existing manufacturer with this name.', 'danger')
+      return null
+    }
+    const actor = currentUser(state).name
+    const next: Manufacturer = {
+      ...current,
+      name,
+      registrationNo: input.registrationNo?.trim() || undefined,
+      address: input.address?.trim() || undefined,
+      contact: input.contact?.trim() || undefined,
+      notes: input.notes?.trim() || undefined,
+      active: input.active !== false,
+      updatedAt: nowIso(),
+      updatedBy: actor,
+    }
+    setData({
+      manufacturers: (state.manufacturers ?? []).map((item) => (item.id === id ? next : item)),
+      documentAuditLogs: pushDocAudit(makeDocAudit({
+        action: 'manufacturer_updated',
+        documentType: 'manufacturer',
+        documentId: next.id,
+        documentNo: next.name,
+        oldValue: current.name,
+        newValue: next.name,
+      })),
+    })
+    toast('Manufacturer updated', next.name)
+    return next
+  },
+
+  async saveHalalCompliance(input: {
+    complianceId?: string
+    productId: string
+    manufacturerId: string
+    certificateNo: string
+    issuingAuthority: string
+    issueDate?: string
+    expiryDate: string
+    verificationStatus: HalalVerificationStatus
+    notes?: string
+    document?: { fileName: string; mimeType: string; blob: Blob } | null
+  }): Promise<RawMaterialHalalCompliance | null> {
+    if (!hasPermission(state, 'halal.manage')) {
+      toast('Permission denied', 'You cannot manage Halal Compliance.', 'danger')
+      return null
+    }
+    const product = state.products.find((item) => item.id === input.productId)
+    if (!isReceivableRawMaterial(state, product)) {
+      toast('Select a raw material', 'Choose an existing raw material product.', 'danger')
+      return null
+    }
+    const manufacturer = (state.manufacturers ?? []).find((item) => item.id === input.manufacturerId)
+    if (!manufacturer) {
+      toast('Select a manufacturer', undefined, 'danger')
+      return null
+    }
+    const existingCompliance = input.complianceId
+      ? (state.halalCompliances ?? []).find((item) => item.id === input.complianceId)
+      : undefined
+    if (input.complianceId && !existingCompliance) {
+      toast('Compliance record not found', undefined, 'danger')
+      return null
+    }
+    if (!manufacturer.active && manufacturer.id !== existingCompliance?.manufacturerId) {
+      toast('Manufacturer is inactive', 'Choose an active manufacturer.', 'danger')
+      return null
+    }
+    const certificateNo = input.certificateNo.trim()
+    const issuingAuthority = input.issuingAuthority.trim() || 'JAKIM'
+    if (!certificateNo) {
+      toast('Certificate number is required', undefined, 'danger')
+      return null
+    }
+    if (!isDateKey(input.expiryDate)) {
+      toast('Expiry date is invalid', undefined, 'danger')
+      return null
+    }
+    const issueDate = input.issueDate?.trim() || undefined
+    if (issueDate && !isDateKey(issueDate)) {
+      toast('Issue date is invalid', undefined, 'danger')
+      return null
+    }
+    if (issueDate && input.expiryDate < issueDate) {
+      toast('Expiry cannot be earlier than the issue date', undefined, 'danger')
+      return null
+    }
+    if (input.document) {
+      const documentError = validateHalalDocument({
+        name: input.document.fileName,
+        type: input.document.mimeType,
+        size: input.document.blob.size,
+      })
+      if (documentError) {
+        toast('Certificate document', documentError, 'danger')
+        return null
+      }
+    }
+
+    const currentCertificate = existingCompliance
+      ? (state.halalCertificates ?? []).find((item) => item.id === existingCompliance.certificateId)
+      : undefined
+    const period = { certificateNo, issuingAuthority, issueDate, expiryDate: input.expiryDate }
+    const matched = currentCertificate && certificatePeriodMatches(currentCertificate, period)
+      ? currentCertificate
+      : findCertificateByPeriod(state.halalCertificates ?? [], period)
+
+    const actor = currentUser(state).name
+    const now = nowIso()
+    let certificates = [...(state.halalCertificates ?? [])]
+    let audits = state.documentAuditLogs ?? []
+    const pushAudit = (log: Parameters<typeof makeDocAudit>[0]) => {
+      audits = [makeDocAudit(log), ...audits]
+    }
+
+    let documentFileId = matched?.documentFileId
+    let documentName = matched?.documentName
+    let documentMime = matched?.documentMime
+    if (input.document) {
+      documentFileId = uid('hdoc')
+      documentName = input.document.fileName
+      documentMime = input.document.mimeType === 'image/jpg' ? 'image/jpeg' : input.document.mimeType
+      await putAttachmentBlob({
+        fileId: documentFileId,
+        kind: HALAL_CERTIFICATE_KIND,
+        fileName: documentName,
+        mimeType: documentMime,
+        blob: input.document.blob,
+      })
+    }
+
+    const verificationStatus = input.verificationStatus === 'verified' ? 'verified' : 'pending'
+    const verifiedAt = verificationStatus === 'verified'
+      ? (matched?.verificationStatus === 'verified' ? matched.verifiedAt : now)
+      : undefined
+    const verifiedBy = verificationStatus === 'verified'
+      ? (matched?.verificationStatus === 'verified' ? matched.verifiedBy : actor)
+      : undefined
+
+    let certificate: HalalCertificate
+    if (matched) {
+      certificate = {
+        ...matched,
+        certificateNo,
+        issuingAuthority,
+        issueDate,
+        expiryDate: input.expiryDate,
+        verificationStatus,
+        verifiedAt,
+        verifiedBy,
+        documentFileId,
+        documentName,
+        documentMime,
+        notes: input.notes?.trim() || undefined,
+        updatedAt: now,
+        updatedBy: actor,
+      }
+      certificates = certificates.map((item) => (item.id === certificate.id ? certificate : item))
+      pushAudit({
+        action: 'halal_certificate_updated',
+        documentType: 'halal_certificate',
+        documentId: certificate.id,
+        documentNo: certificate.certificateNo,
+        field: matched.verificationStatus === certificate.verificationStatus ? '' : 'verificationStatus',
+        oldValue: matched.verificationStatus,
+        newValue: certificate.verificationStatus,
+      })
+    } else {
+      certificate = {
+        id: uid('hcert'),
+        certificateNo,
+        issuingAuthority,
+        issueDate,
+        expiryDate: input.expiryDate,
+        verificationStatus,
+        verifiedAt,
+        verifiedBy,
+        documentFileId,
+        documentName,
+        documentMime,
+        notes: input.notes?.trim() || undefined,
+        createdAt: now,
+        createdBy: actor,
+        updatedAt: now,
+        updatedBy: actor,
+      }
+      certificates = [certificate, ...certificates]
+      pushAudit({
+        action: 'halal_certificate_created',
+        documentType: 'halal_certificate',
+        documentId: certificate.id,
+        documentNo: certificate.certificateNo,
+        newValue: certificate.verificationStatus,
+      })
+    }
+
+    const duplicate = (state.halalCompliances ?? []).some((item) =>
+      item.id !== existingCompliance?.id
+      && item.productId === product!.id
+      && item.manufacturerId === manufacturer.id
+      && item.certificateId === certificate.id,
+    )
+    if (duplicate) {
+      toast('Already registered', 'This raw material already uses this manufacturer and certificate.', 'danger')
+      return null
+    }
+
+    let compliance: RawMaterialHalalCompliance
+    if (existingCompliance) {
+      const previous = existingCompliance.certificateId === certificate.id
+        ? existingCompliance.previousCertificateIds
+        : [...existingCompliance.previousCertificateIds, existingCompliance.certificateId]
+      compliance = {
+        ...existingCompliance,
+        manufacturerId: manufacturer.id,
+        certificateId: certificate.id,
+        previousCertificateIds: previous,
+        notes: input.notes?.trim() || undefined,
+        updatedAt: now,
+        updatedBy: actor,
+      }
+      pushAudit({
+        action: 'halal_compliance_updated',
+        documentType: 'halal_compliance',
+        documentId: compliance.id,
+        documentNo: product!.name,
+        oldValue: existingCompliance.certificateId,
+        newValue: certificate.certificateNo,
+      })
+    } else {
+      compliance = {
+        id: uid('hcomp'),
+        productId: product!.id,
+        manufacturerId: manufacturer.id,
+        certificateId: certificate.id,
+        previousCertificateIds: [],
+        notes: input.notes?.trim() || undefined,
+        createdAt: now,
+        createdBy: actor,
+        updatedAt: now,
+        updatedBy: actor,
+      }
+      pushAudit({
+        action: 'halal_compliance_created',
+        documentType: 'halal_compliance',
+        documentId: compliance.id,
+        documentNo: product!.name,
+        newValue: certificate.certificateNo,
+      })
+    }
+
+    setData({
+      halalCertificates: certificates,
+      halalCompliances: existingCompliance
+        ? (state.halalCompliances ?? []).map((item) => (item.id === compliance.id ? compliance : item))
+        : [compliance, ...(state.halalCompliances ?? [])],
+      documentAuditLogs: audits,
+    })
+    toast(existingCompliance ? 'Halal compliance updated' : 'Halal compliance saved', product!.name)
+    return compliance
   },
 
   async purgeExpiredSalesReturnEvidence(now = nowIso()) {
