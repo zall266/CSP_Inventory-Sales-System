@@ -153,6 +153,6 @@ export function spotCheckProgress(samples: SpotSample[], checkedKeys: readonly s
   return { done, required: samples.length, complete: samples.length === 0 || done === samples.length }
 }
 
-export function confirmSaleEnabled(input: { canCreate: boolean; systemCanConfirm: boolean; busy?: boolean; samples: SpotSample[]; checkedKeys: readonly string[] }) {
-  return Boolean(input.canCreate && input.systemCanConfirm && !input.busy && spotCheckProgress(input.samples, input.checkedKeys).complete)
+export function confirmSaleEnabled(input: { canCreate: boolean; systemCanConfirm: boolean; busy?: boolean; samples: SpotSample[]; checkedKeys: readonly string[]; reconciliationOk?: boolean }) {
+  return Boolean(input.canCreate && input.systemCanConfirm && !input.busy && input.reconciliationOk !== false && spotCheckProgress(input.samples, input.checkedKeys).complete)
 }
