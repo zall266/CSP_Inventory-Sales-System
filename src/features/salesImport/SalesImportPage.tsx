@@ -271,59 +271,17 @@ function SalesImportReview({ batchId }: { batchId: string }) {
           <Summary label="Orders" value={String(assessment.orderCount)} />
           <Summary label="Units" value={formatQty(review.imported)} />
         </div>
-        {orders.length > 0 && actions.issues === 0 && review.ok && review.needReview === 0 ? (
-          <div className="mt-4 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-900">
-            <div className="font-semibold">✓ Ready to post</div>
-            <div className="mt-1">{formatQty(review.willPost)} / {formatQty(review.imported)} units</div>
-            <div>{assessment.readyOrderIds.length} / {unconfirmedOrders.length} orders</div>
-            <div className="mt-1">Everything is ready.</div>
-          </div>
-        ) : orders.length > 0 && actions.issues > 0 ? (
-          <button type="button" className="mt-4 w-full rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-left text-sm text-amber-950" onClick={() => document.getElementById('sales-import-actions')?.scrollIntoView({ behavior: 'smooth', block: 'start' })}>
-            <div className="font-semibold">🟠 {actions.issues} item{actions.issues === 1 ? '' : 's'} need your action</div>
-            <div className="mt-1 text-amber-800">{actions.orders > 0 && actions.orders !== actions.issues ? `${actions.issues} issues across ${actions.orders} orders. ` : ''}Fix Issues →</div>
-          </button>
-        ) : null}
       </Card>
-      {orders.length > 0 && <ActionCentre actions={actions} onOpen={(kind) => { setMapIndex(0); setActionOpen(kind) }} />}
+      {orders.length > 0 && (
+        <ActionCentre
+          actions={actions}
+          review={review}
+          readyOrders={assessment.readyOrderIds.length}
+          openOrders={unconfirmedOrders.length}
+          onOpen={(kind) => { setMapIndex(0); setActionOpen(kind) }}
+        />
+      )}
       {orders.length > 0 && <ProductSummaryCard review={review} />}
-      {assessment.mismatch && (
-        <div className="mb-4 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-800">
-          Account mismatch. A file username ({assessment.mismatchNames.join(', ')}) does not match {account.name}. Confirmation is blocked.
-        </div>
-      )}
-      {!assessment.needsAcknowledgement && batch.accountAcknowledged && files.some((file) => !file.parseError && !file.identityReliable) && (
-        <div className="mb-4 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800">
-          Acknowledged by {batch.accountAcknowledgedBy || 'staff'}. The picking list did not print a reliable account name.
-        </div>
-      )}
-      {assessment.needsAcknowledgement && (
-        <label className="mb-4 flex items-start gap-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
-          <input
-            type="checkbox"
-            className="mt-1"
-            checked={Boolean(batch.accountAcknowledged)}
-            disabled={!canCreate || Boolean(batch.accountAcknowledged)}
-            onChange={() => api.acknowledgeSalesImportAccount(batch.id)}
-          />
-          <span>This file belongs to the selected platform/account. The picking list does not print a reliable account name, so confirmation stays blocked until you acknowledge it.</span>
-        </label>
-      )}
-      {assessment.blockers.filter((item) => !item.startsWith('Acknowledge') && !item.startsWith('Account mismatch')).map((item) => (
-        <div key={item} className="mb-4 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-800">{item}</div>
-      ))}
-      {samples.length > 0 && !summaryOpen && (
-        <Card className="mb-4 p-4">
-          <SpotCheckPanel
-            domId="sales-import-spot-check"
-            samples={samples}
-            checkedKeys={checkedKeys}
-            canEdit={canCreate && batch.status !== 'confirmed'}
-            onToggle={(key, checked) => api.setSalesImportSpotCheck(batch.id, key, checked)}
-            onViewAll={() => document.getElementById('sales-import-detail')?.scrollIntoView({ behavior: 'smooth', block: 'start' })}
-          />
-        </Card>
-      )}
       {canCreate && batch.status !== 'confirmed' && (
         <Card className="mb-4 p-4">
           <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
@@ -348,7 +306,9 @@ function SalesImportReview({ batchId }: { batchId: string }) {
             </label>
           </div>
           {files.length > 0 && (
-            <ul className="mt-4 space-y-2 text-sm">
+            <details className="mt-3">
+              <summary className="cursor-pointer text-sm text-slate-600">Show uploaded files</summary>
+            <ul className="mt-2 space-y-2 text-sm">
               {files.map((file) => (
                 <li key={file.id} className="rounded-lg border border-slate-200 px-3 py-2">
                   <div className="font-medium text-slate-800">{file.fileName}</div>
@@ -361,6 +321,7 @@ function SalesImportReview({ batchId }: { batchId: string }) {
                 </li>
               ))}
             </ul>
+            </details>
           )}
         </Card>
       )}
@@ -432,19 +393,25 @@ function SalesImportReview({ batchId }: { batchId: string }) {
             </label>
             )}
           </div>
-          <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-            <Summary label="Shipments" value={String(shipments.length)} />
-            <Summary label="Matched" value={String(shipments.filter((shipment) => shipment.linkStatus === 'matched').length)} />
-            <Summary label="Unmatched" value={String(shipments.filter((shipment) => shipment.linkStatus === 'unmatched').length)} />
-            <Summary label="Review" value={String(shipments.filter((shipment) => shipment.linkStatus === 'review').length)} />
-            <Summary label="Pending" value={String(pendingShipments)} />
-          </div>
-          {pendingShipments > 0 && shipments.length === 0 && (
-            <div className="mt-3 text-sm text-slate-500">AWB: {pendingShipments} pending. Pending is not an error.</div>
-          )}
+          <details className="mt-3">
+            <summary className="cursor-pointer text-sm text-slate-600">For your information</summary>
+            <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+              <Summary label="Shipments" value={String(shipments.length)} />
+              <Summary label="Matched" value={String(shipments.filter((shipment) => shipment.linkStatus === 'matched').length)} />
+              <Summary label="Unmatched" value={String(shipments.filter((shipment) => shipment.linkStatus === 'unmatched').length)} />
+              <Summary label="Review" value={String(shipments.filter((shipment) => shipment.linkStatus === 'review').length)} />
+              <Summary label="Pending" value={String(pendingShipments)} />
+            </div>
+            {pendingShipments > 0 && <p className="mt-2 text-sm text-slate-500">{pendingShipments} orders have no AWB yet. Pending is not an error and does not block confirmation.</p>}
+            {(actions.categories.find((category) => category.id === 'duplicate')?.rows ?? []).map((row) => (
+              <p key={row.id} className="mt-2 break-all text-sm text-slate-600">Duplicate order {row.orderRef}: {row.status}</p>
+            ))}
+          </details>
         </Card>
       {shipments.length > 0 && (
-        <Card className="mb-4">
+        <details className="mb-4">
+          <summary className="cursor-pointer px-1 text-sm text-slate-600">Show shipments</summary>
+        <Card className="mt-2">
           <div className="sf-table-wrap">
             <table>
               <thead>
@@ -499,15 +466,20 @@ function SalesImportReview({ batchId }: { batchId: string }) {
             </table>
           </div>
         </Card>
+        </details>
       )}
       <ReconciliationCard review={review} />
-      {actions.issues === 0 && review.ok && review.needReview === 0 && orders.length > 0 && (
-        <div className="mb-4 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-900">
-          <div className="font-semibold">✓ Ready to confirm</div>
-          <p className="mt-1">{formatQty(review.willPost)} / {formatQty(review.imported)} units ready</p>
-          <p>{assessment.readyOrderIds.length} / {unconfirmedOrders.length} orders ready</p>
-          <p className="mt-1">All imported quantity is accounted for.</p>
-        </div>
+      {samples.length > 0 && !summaryOpen && (
+        <Card className="mb-4 p-4">
+          <SpotCheckPanel
+            domId="sales-import-spot-check"
+            samples={samples}
+            checkedKeys={checkedKeys}
+            canEdit={canCreate && batch.status !== 'confirmed'}
+            onToggle={(key, checked) => api.setSalesImportSpotCheck(batch.id, key, checked)}
+            onViewAll={() => document.getElementById('sales-import-detail')?.scrollIntoView({ behavior: 'smooth', block: 'start' })}
+          />
+        </Card>
       )}
       {partial && review.ok && (
         <div className="mb-4 rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-950">
@@ -554,6 +526,9 @@ function SalesImportReview({ batchId }: { batchId: string }) {
         suggestions={state.products}
         unmapped={[...unmapped.entries()]}
         canMap={canCreate}
+        needsAcknowledgement={assessment.needsAcknowledgement}
+        acknowledged={Boolean(batch.accountAcknowledged)}
+        onAcknowledge={() => api.acknowledgeSalesImportAccount(batch.id)}
         onSaveMap={(row) => {
           const productId = choices[row.id]
           if (!productId) return
@@ -660,7 +635,9 @@ function ProductSummaryCard({ review }: { review: SalesImportReconciliation }) {
   return (
     <Card className="mb-4 p-4">
       <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Product Summary</div>
-      <div className="mt-2 space-y-2 sm:hidden">
+      <details className="mt-2 sm:hidden">
+        <summary className="cursor-pointer text-sm text-slate-600">Show product quantities</summary>
+      <div className="mt-2 space-y-2">
         {review.products.map((row) => (
           <div key={row.key} className="rounded-lg border border-slate-200 px-3 py-2 text-sm">
             <div className="break-words font-medium text-slate-900">{row.name}</div>
@@ -673,6 +650,7 @@ function ProductSummaryCard({ review }: { review: SalesImportReconciliation }) {
           </div>
         ))}
       </div>
+      </details>
       <div className="mt-2 hidden sm:block">
         <table className="w-full text-sm">
           <thead>
@@ -707,28 +685,58 @@ function ProductSummaryCard({ review }: { review: SalesImportReconciliation }) {
   )
 }
 
-function ActionCentre({ actions, onOpen }: { actions: ActionCentre; onOpen: (kind: ActionKind) => void }) {
+function workCountLabel(id: ActionKind, count: number) {
+  const noun = id === 'map' || id === 'stock' ? 'product' : id === 'quantity' || id === 'unallocated' ? 'order' : 'item'
+  return `${count} ${noun}${count === 1 ? '' : 's'}`
+}
+
+function ActionCentre({
+  actions,
+  review,
+  readyOrders,
+  openOrders,
+  onOpen,
+}: {
+  actions: ActionCentre
+  review: SalesImportReconciliation
+  readyOrders: number
+  openOrders: number
+  onOpen: (kind: ActionKind) => void
+}) {
+  const work = actions.categories.filter((category) => category.id !== 'duplicate')
+  const thing = work.length === 1 ? 'thing needs' : 'things need'
   return (
-    <Card className="mb-4 p-4" >
+    <Card className="mb-4 p-4">
       <div id="sales-import-actions">
-        <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Needs Action</div>
-        <p className="mt-1 text-sm text-slate-600">Fix these items before confirming the sale.</p>
-        {actions.categories.length === 0 ? (
-          <p className="mt-3 text-sm text-emerald-800">No open actions.</p>
+        <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">What I need to do</div>
+        {work.length === 0 && review.ok ? (
+          <div className="mt-3 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-900">
+            <div className="font-semibold">✓ Ready to confirm</div>
+            <p className="mt-1">{formatQty(review.willPost)} / {formatQty(review.imported)} units</p>
+            <p>{readyOrders} / {openOrders} orders</p>
+            <p className="mt-1">All imported quantity is accounted for.</p>
+          </div>
         ) : (
-          <div className="mt-3 space-y-2">
-            {actions.issues !== actions.orders && actions.orders > 0 && (
-              <p className="text-sm text-slate-600">{actions.issues} issues across {actions.orders} orders</p>
-            )}
-            {actions.categories.map((category) => (
-              <button key={category.id} type="button" className="flex w-full items-center justify-between gap-3 rounded-xl border border-amber-200 bg-amber-50 px-3 py-3 text-left" onClick={() => onOpen(category.id)}>
-                <span>
-                  <span className="block text-sm font-semibold text-slate-900">{category.title}</span>
-                  <span className="block text-sm text-slate-600">{category.hint}</span>
-                </span>
-                <span className="shrink-0 text-sm font-semibold text-amber-900">{category.count} →</span>
-              </button>
-            ))}
+          <div className="mt-3">
+            <p className="text-sm font-semibold text-slate-900">{work.length} {thing} your action</p>
+            {(() => {
+              const issueCount = work.reduce((sum, category) => sum + category.count, 0)
+              const orderCount = new Set(work.flatMap((category) => category.orderIds)).size
+              return issueCount !== orderCount && orderCount > 0 ? <p className="mt-1 text-sm text-slate-600">{issueCount} issues across {orderCount} orders</p> : null
+            })()}
+            <ol className="mt-3 space-y-2">
+              {work.map((category, index) => (
+                <li key={category.id}>
+                  <button type="button" className="flex min-h-11 w-full items-center justify-between gap-3 rounded-xl border border-amber-200 bg-amber-50 px-3 py-3 text-left" onClick={() => onOpen(category.id)}>
+                    <span>
+                      <span className="block text-sm font-semibold text-slate-900">{index + 1}. {category.title}</span>
+                      <span className="block text-sm text-slate-600">{workCountLabel(category.id, category.count)}</span>
+                    </span>
+                    <span className="shrink-0 text-sm font-semibold text-amber-900">Open →</span>
+                  </button>
+                </li>
+              ))}
+            </ol>
           </div>
         )}
       </div>
@@ -751,6 +759,9 @@ function ActionPanel({
   suggestions,
   unmapped,
   canMap,
+  needsAcknowledgement,
+  acknowledged,
+  onAcknowledge,
   onSaveMap,
 }: {
   kind: ActionKind | null
@@ -767,6 +778,9 @@ function ActionPanel({
   suggestions: Array<{ id: string; name: string; sku: string }>
   unmapped: Array<[string, { keyType: 'sku' | 'text'; key: string; label: string; suggestion?: string }]>
   canMap: boolean
+  needsAcknowledgement?: boolean
+  acknowledged?: boolean
+  onAcknowledge?: () => void
   onSaveMap: (row: { id: string; keyType: 'sku' | 'text'; key: string }) => void
 }) {
   const category = actions.categories.find((item) => item.id === kind)
@@ -821,7 +835,15 @@ function ActionPanel({
               {category.id === 'stock' && <Link className="mt-2 inline-block text-sm text-indigo-600" to="/products">View Product</Link>}
             </div>
           ))}
-          {category.id === 'quantity' && <p className="text-sm text-slate-600">Quantity is not changed from this list. Compare the picking list and AWB, then review the order.</p>}
+          {category.id === 'quantity' && <p className="text-sm text-slate-600">Picking and AWB quantities disagree. This screen does not change the quantity.</p>}
+          {category.id === 'unallocated' && <p className="text-sm text-slate-600">This quantity is shared across orders and cannot be allocated until the shipment lines account for the full quantity.</p>}
+          {category.id === 'stock' && <p className="text-sm text-slate-600">Stock is currently insufficient for the ready orders. Restock or adjust stock, then return here to recheck. Ready orders will remain unposted until stock is sufficient.</p>}
+          {category.id === 'other' && needsAcknowledgement && (
+            <label className="flex min-h-11 items-start gap-3 rounded-xl border border-amber-200 bg-amber-50 px-3 py-3 text-sm text-amber-950">
+              <input type="checkbox" className="mt-1 h-5 w-5" checked={Boolean(acknowledged)} disabled={!canMap || acknowledged} onChange={() => onAcknowledge?.()} />
+              <span>This file belongs to the selected platform and account. Confirmation stays off until this is acknowledged.</span>
+            </label>
+          )}
         </div>
       )}
     </Modal>

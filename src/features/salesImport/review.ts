@@ -655,8 +655,8 @@ export function salesImportActions(input: {
   if (quantityRows.length) {
     categories.push({
       id: 'quantity',
-      title: 'Fix Quantity',
-      hint: 'Orders where quantity needs checking',
+      title: 'Review Quantity',
+      hint: 'Picking and AWB quantities disagree',
       count: quantityOrders.length,
       units: seenQty(input.lines.filter((line) => quantityOrders.some((order) => order.id === line.orderId) && line.quantityReview)),
       orderIds: quantityOrders.map((order) => order.id),
@@ -687,8 +687,8 @@ export function salesImportActions(input: {
   if (unallocatedRows.length) {
     categories.push({
       id: 'unallocated',
-      title: 'Resolve Unallocated',
-      hint: 'Quantity could not be allocated',
+      title: 'Review Unallocated',
+      hint: 'This shared quantity is not allocated yet',
       count: unallocatedOrders.length,
       units: seenQty(input.lines.filter((line) => unallocatedOrders.some((order) => order.id === line.orderId) && line.unallocated)),
       orderIds: unallocatedOrders.map((order) => order.id),
@@ -700,7 +700,7 @@ export function salesImportActions(input: {
     categories.push({
       id: 'stock',
       title: 'Check Stock',
-      hint: 'Not enough stock to post the ready orders',
+      hint: 'Ready orders stay unposted until stock is sufficient',
       count: input.assessment.shortages.length,
       units: input.assessment.shortages.reduce((sum, row) => round2(sum + Math.max(0, row.required - row.available)), 0),
       orderIds: [],
@@ -745,8 +745,8 @@ export function salesImportActions(input: {
   if (otherNotes.length) {
     categories.push({
       id: 'other',
-      title: 'Other Action Required',
-      hint: 'Account or file checks are still open',
+      title: input.assessment.blockers.length ? 'Account or file check' : 'Needs a check',
+      hint: 'These checks apply before any orders can be posted',
       count: otherNotes.length,
       units: 0,
       orderIds: otherOrders.map((order) => order.id),
@@ -754,6 +754,8 @@ export function salesImportActions(input: {
     })
   }
 
+  const rank: Record<ActionKind, number> = { other: input.assessment.blockers.length ? 0 : 5, map: 1, quantity: 2, unallocated: 3, stock: 4, duplicate: 6 }
+  categories.sort((a, b) => rank[a.id] - rank[b.id])
   const orderIds = new Set(categories.flatMap((category) => category.orderIds))
   return {
     issues: categories.reduce((sum, category) => sum + category.count, 0),

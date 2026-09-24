@@ -86,6 +86,31 @@ check('12. Confirmed quantity is already confirmed, not will post', (() => {
 })())
 check('8. Order detail columns stay product, qty, status, order id', ['Product', 'Qty', 'Status', 'Order ID'].join('|') === 'Product|Qty|Status|Order ID')
 
+const workIds = (categories: Array<{ id: string }>) => categories.filter((item) => item.id !== 'duplicate').map((item) => item.id)
+check('D. Quantity category is Review Quantity and stays read-only data', view.actions.categories.find((item) => item.id === 'quantity')?.title === 'Review Quantity' && view.actions.categories.find((item) => item.id === 'quantity')?.rows[0]?.difference === undefined)
+check('E. Unallocated category is Review Unallocated', view.actions.categories.find((item) => item.id === 'unallocated')?.title === 'Review Unallocated')
+check('G. Numbered steps follow map, quantity, unallocated and hide empty stock', workIds(view.actions.categories).join(',') === 'map,quantity,unallocated', workIds(view.actions.categories).join(','))
+check('I. Duplicates stay out of the numbered list', !workIds(view.actions.categories).includes('duplicate'))
+
+const mapOnly = run([order('mo', '260922E0000001')], [line('mol', 'mo', 2, undefined, { externalProductName: 'Loose', variationText: 'CUP' })], [yam])
+check('B. Mapping only is step 1', workIds(mapOnly.actions.categories)[0] === 'map' && workIds(mapOnly.actions.categories).length === 1)
+const quantityOnly = run([order('qo', '260922E0000002')], [line('qol', 'qo', 3, 'p-waffle', { quantityReview: true, pickingQuantity: 3 })], [waffle])
+check('C. After mapping is gone the next category is step 1', workIds(quantityOnly.actions.categories)[0] === 'quantity')
+
+const sharedName = run(
+  [order('h1', '260922F0000001'), order('h2', '260922F0000002')],
+  [line('h1l', 'h1', 1, undefined, { variationText: 'SAME' }), line('h2l', 'h2', 1, undefined, { variationText: 'SAME' })],
+  [yam],
+)
+const mapStep = sharedName.actions.categories.find((item) => item.id === 'map')
+check('H. Map count is products, not orders', mapStep?.count === 1 && mapStep.orderIds.length === 2, `products ${mapStep?.count} orders ${mapStep?.orderIds.length}`)
+
+const ready = run([order('r1', '260922G0000001')], [line('r1l', 'r1', 4, 'p-yam')], [yam])
+check('A. No work items when the order is ready', workIds(ready.actions.categories).length === 0 && ready.review.ok && ready.assessment.canConfirm)
+check('J. AWB pending does not block a ready order', ready.assessment.canConfirm && ready.review.willPost === 4)
+check('F. Stock shortage blocks confirm for the ready set', stocked.assessment.canConfirm === false && stocked.actions.categories.some((item) => item.id === 'stock'))
+check('M. Spot check incomplete keeps confirm off', confirmSaleEnabled({ canCreate: true, systemCanConfirm: true, samples: [{ key: 'a', name: 'A', productName: 'A', quantity: 1, mappingStatus: 'Mapped', orderIds: [], categoryName: '' }], checkedKeys: [], reconciliationOk: true }) === false)
+
 const failed = results.filter((item) => !item.ok)
 console.log(`\n${results.length - failed.length}/${results.length} passed`)
 if (failed.length) process.exit(1)
