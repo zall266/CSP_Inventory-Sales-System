@@ -49,7 +49,8 @@ import {
 import { INVENTORY_USAGE_PERMISSION_KEYS, activeStockOrder } from '@/features/inventory/toOrderModel'
 import {
   HALAL_CERTIFICATE_KIND,
-  findCertificateByIdentity,
+  certificatePeriodMatches,
+  findCertificateByPeriod,
   findManufacturerByName,
   isDateKey,
   validateHalalDocument,
@@ -8354,15 +8355,10 @@ export const db = {
     const currentCertificate = existingCompliance
       ? (state.halalCertificates ?? []).find((item) => item.id === existingCompliance.certificateId)
       : undefined
-    const sameCurrentCertificate = currentCertificate
-      && findCertificateByIdentity([currentCertificate], certificateNo, issuingAuthority)
-    const matched = sameCurrentCertificate
+    const period = { certificateNo, issuingAuthority, issueDate, expiryDate: input.expiryDate }
+    const matched = currentCertificate && certificatePeriodMatches(currentCertificate, period)
       ? currentCertificate
-      : findCertificateByIdentity(state.halalCertificates ?? [], certificateNo, issuingAuthority)
-    if (matched && !sameCurrentCertificate && matched.expiryDate !== input.expiryDate) {
-      toast('Certificate already exists', 'This certificate number uses a different expiry. Enter a new certificate for the renewal.', 'danger')
-      return null
-    }
+      : findCertificateByPeriod(state.halalCertificates ?? [], period)
 
     const actor = currentUser(state).name
     const now = nowIso()

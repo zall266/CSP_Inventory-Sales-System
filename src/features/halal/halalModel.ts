@@ -74,7 +74,11 @@ export function halalStatusMark(status: HalalStatus) {
   return '⚪'
 }
 
-export function deriveHalalStatus(certificate: HalalCertificate | undefined, today = systemDateKey()): HalalStatus {
+export function halalBusinessDate(now = new Date()) {
+  return systemDateKey(now)
+}
+
+export function deriveHalalStatus(certificate: HalalCertificate | undefined, today = halalBusinessDate()): HalalStatus {
   if (!certificate || !isDateKey(certificate.expiryDate)) return 'not_registered'
   if (certificate.expiryDate < today) return 'expired'
   if (certificate.verificationStatus !== 'verified') return 'pending'
@@ -88,20 +92,24 @@ export function findManufacturerByName(manufacturers: Manufacturer[], name: stri
   return manufacturers.find((item) => item.id !== excludeId && normalizeManufacturerName(item.name) === needle)
 }
 
-export function findCertificateByIdentity(
+export function certificatePeriodMatches(
+  certificate: HalalCertificate,
+  input: { certificateNo: string; issuingAuthority: string; issueDate?: string; expiryDate: string },
+) {
+  return (
+    normalizeCertificateNo(certificate.certificateNo) === normalizeCertificateNo(input.certificateNo) &&
+    certificate.issuingAuthority.trim().toLowerCase() === input.issuingAuthority.trim().toLowerCase() &&
+    certificate.expiryDate === input.expiryDate &&
+    (certificate.issueDate ?? '') === (input.issueDate ?? '')
+  )
+}
+
+export function findCertificateByPeriod(
   certificates: HalalCertificate[],
-  certificateNo: string,
-  issuingAuthority: string,
+  input: { certificateNo: string; issuingAuthority: string; issueDate?: string; expiryDate: string },
   excludeId?: string,
 ) {
-  const number = normalizeCertificateNo(certificateNo)
-  const authority = issuingAuthority.trim().toLowerCase()
-  return certificates.find(
-    (item) =>
-      item.id !== excludeId &&
-      normalizeCertificateNo(item.certificateNo) === number &&
-      item.issuingAuthority.trim().toLowerCase() === authority,
-  )
+  return certificates.find((item) => item.id !== excludeId && certificatePeriodMatches(item, input))
 }
 
 export function validateHalalDocument(file: { name: string; type: string; size: number }) {
@@ -137,7 +145,7 @@ function certificateOf(state: Pick<AppState, 'halalCertificates'>, certificateId
 export function complianceToRow(
   state: Pick<AppState, 'products' | 'manufacturers' | 'halalCertificates'>,
   compliance: RawMaterialHalalCompliance,
-  today = systemDateKey(),
+  today = halalBusinessDate(),
 ): HalalRow {
   const product = productOf(state, compliance.productId)
   const manufacturer = manufacturerOf(state, compliance.manufacturerId)
@@ -164,7 +172,7 @@ export function complianceToRow(
   }
 }
 
-export function buildHalalRows(state: Pick<AppState, 'products' | 'boms' | 'manufacturers' | 'halalCertificates' | 'halalCompliances'>, today = systemDateKey()) {
+export function buildHalalRows(state: Pick<AppState, 'products' | 'boms' | 'manufacturers' | 'halalCertificates' | 'halalCompliances'>, today = halalBusinessDate()) {
   const compliances = state.halalCompliances ?? []
   const registeredIds = new Set(compliances.map((row) => row.productId))
   const registered = compliances.map((row) => complianceToRow(state, row, today))

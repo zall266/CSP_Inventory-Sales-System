@@ -27,7 +27,8 @@ const { readFileSync } = await import('node:fs')
 const { db } = await import('@/store/db')
 const { hasPermission } = await import('@/features/settings/permissions')
 const { getAttachmentBlob } = await import('@/store/attachmentBlobs')
-const { buildHalalRows, deriveHalalStatus, filterHalalRows } = await import('@/features/halal/halalModel')
+const { addCalendarDays, buildHalalRows, deriveHalalStatus, filterHalalRows, halalBusinessDate } = await import('@/features/halal/halalModel')
+const { systemDateKey } = await import('@/utils/format')
 const { receivableRawMaterials } = await import('@/features/receiving/receivingModel')
 
 type Check = { name: string; ok: boolean; detail?: string }
@@ -36,6 +37,22 @@ function check(name: string, ok: boolean, detail?: string) {
   results.push({ name, ok, detail })
   console.log(`${ok ? 'PASS' : 'FAIL'}  ${name}${detail ? ` — ${detail}` : ''}`)
 }
+
+const today = halalBusinessDate()
+const activeExpiry = addCalendarDays(today, 120)
+const expiringExpiry = addCalendarDays(today, 30)
+const expiredExpiry = addCalendarDays(today, -5)
+const renewalExpiry = addCalendarDays(today, 400)
+const klBefore = new Date('2026-09-24T15:30:00Z')
+const klAfter = new Date('2026-09-24T16:30:00Z')
+check('malaysia date uses current instant', today === systemDateKey(new Date()) && /^\d{4}-\d{2}-\d{2}$/.test(today))
+check('malaysia date keeps the kuala lumpur boundary', halalBusinessDate(klBefore) === '2026-09-24' && halalBusinessDate(klAfter) === '2026-09-25' && klAfter.toISOString().slice(0, 10) === '2026-09-24')
+check('expired before today', deriveHalalStatus({ expiryDate: addCalendarDays(today, -1), verificationStatus: 'verified' } as never) === 'expired')
+check('expiring on today and day 90', deriveHalalStatus({ expiryDate: today, verificationStatus: 'verified' } as never) === 'expiring' && deriveHalalStatus({ expiryDate: addCalendarDays(today, 90), verificationStatus: 'verified' } as never) === 'expiring')
+check('active after day 90', deriveHalalStatus({ expiryDate: addCalendarDays(today, 91), verificationStatus: 'verified' } as never) === 'active')
+check('pending unless expired', deriveHalalStatus({ expiryDate: addCalendarDays(today, 91), verificationStatus: 'pending' } as never) === 'pending' && deriveHalalStatus({ expiryDate: addCalendarDays(today, -1), verificationStatus: 'pending' } as never) === 'expired')
+const halalSource = readFileSync(new URL('../src/features/halal/halalModel.ts', import.meta.url), 'utf8')
+check('halal model does not freeze the prototype date', !halalSource.includes('PROTOTYPE_TODAY') && halalSource.includes('systemDateKey(now)'))
 
 db.resetDemo()
 const beforeProducts = JSON.stringify(db.getSnapshot().products)
@@ -69,14 +86,14 @@ const pending = await db.saveHalalCompliance({
   certificateNo: 'JAKIM-12345',
   issuingAuthority: 'JAKIM',
   issueDate: '2026-05-12',
-  expiryDate: '2027-05-12',
+  expiryDate: activeExpiry,
   verificationStatus: 'pending',
   notes: 'Awaiting check',
   document: { fileName: 'jakim-12345.pdf', mimeType: 'application/pdf', blob: pdf },
 })
 check('3 register raw material', pending?.productId === 'p-sugar')
 const cert = (db.getSnapshot().halalCertificates ?? []).find((item) => item.id === pending?.certificateId)
-check('4 register certificate', cert?.certificateNo === 'JAKIM-12345' && cert.expiryDate === '2027-05-12')
+check('4 register certificate', cert?.certificateNo === 'JAKIM-12345' && cert.expiryDate === activeExpiry)
 const stored = cert?.documentFileId ? await getAttachmentBlob(cert.documentFileId) : undefined
 check('5 upload certificate document', stored?.kind === 'halal_certificate' && stored.mimeType === 'application/pdf' && !JSON.stringify(cert).includes('%PDF'))
 check('6 pending verification status', deriveHalalStatus(cert) === 'pending' && cert?.verificationStatus === 'pending' && !cert.verifiedBy)
@@ -88,7 +105,7 @@ const verified = await db.saveHalalCompliance({
   certificateNo: 'JAKIM-12345',
   issuingAuthority: 'JAKIM',
   issueDate: '2026-05-12',
-  expiryDate: '2027-05-12',
+  expiryDate: activeExpiry,
   verificationStatus: 'verified',
   notes: 'Checked',
 })
@@ -102,7 +119,7 @@ const shared = await db.saveHalalCompliance({
   certificateNo: 'JAKIM-12345',
   issuingAuthority: 'JAKIM',
   issueDate: '2026-05-12',
-  expiryDate: '2027-05-12',
+  expiryDate: activeExpiry,
   verificationStatus: 'verified',
 })
 check(
@@ -115,7 +132,7 @@ const expiring = await db.saveHalalCompliance({
   manufacturerId: created!.id,
   certificateNo: 'JAKIM-EXP',
   issuingAuthority: 'JAKIM',
-  expiryDate: '2026-10-01',
+  expiryDate: expiringExpiry,
   verificationStatus: 'verified',
 })
 const expiringCert = (db.getSnapshot().halalCertificates ?? []).find((item) => item.id === expiring?.certificateId)
@@ -126,7 +143,7 @@ const expired = await db.saveHalalCompliance({
   manufacturerId: created!.id,
   certificateNo: 'JAKIM-OLD',
   issuingAuthority: 'JAKIM',
-  expiryDate: '2026-09-01',
+  expiryDate: expiredExpiry,
   verificationStatus: 'pending',
 })
 const expiredCert = (db.getSnapshot().halalCertificates ?? []).find((item) => item.id === expired?.certificateId)
@@ -143,27 +160,33 @@ const renewed = await db.saveHalalCompliance({
   complianceId: pending!.id,
   productId: 'p-sugar',
   manufacturerId: created!.id,
-  certificateNo: 'JAKIM-99999',
+  certificateNo: 'JAKIM-12345',
   issuingAuthority: 'JAKIM',
-  issueDate: '2026-09-01',
-  expiryDate: '2028-01-01',
+  issueDate: today,
+  expiryDate: renewalExpiry,
   verificationStatus: 'verified',
   notes: 'Renewed',
 })
-const oldStillThere = (db.getSnapshot().halalCertificates ?? []).some((item) => item.certificateNo === 'JAKIM-12345')
+const sameNumberCerts = (db.getSnapshot().halalCertificates ?? []).filter((item) => item.certificateNo === 'JAKIM-12345')
+const originalCert = sameNumberCerts.find((item) => item.expiryDate === activeExpiry)
 check(
-  '17 historical certificate remains',
-  renewed?.certificateId !== pending?.certificateId && renewed?.previousCertificateIds.includes(pending!.certificateId) && oldStillThere && shared?.certificateId === (db.getSnapshot().halalCompliances ?? []).find((item) => item.productId === 'p-milkpw')?.certificateId,
+  '17 same number renewal keeps history',
+  renewed?.certificateId !== pending?.certificateId
+    && renewed?.previousCertificateIds.includes(pending!.certificateId)
+    && sameNumberCerts.length === 2
+    && originalCert?.expiryDate === activeExpiry
+    && sameNumberCerts.some((item) => item.expiryDate === renewalExpiry)
+    && shared?.certificateId === (db.getSnapshot().halalCompliances ?? []).find((item) => item.productId === 'p-milkpw')?.certificateId,
 )
 
 const edited = await db.saveHalalCompliance({
   complianceId: renewed!.id,
   productId: 'p-sugar',
   manufacturerId: created!.id,
-  certificateNo: 'JAKIM-99999',
+  certificateNo: 'JAKIM-12345',
   issuingAuthority: 'JAKIM',
-  issueDate: '2026-09-01',
-  expiryDate: '2028-01-01',
+  issueDate: today,
+  expiryDate: renewalExpiry,
   verificationStatus: 'verified',
   notes: 'Edited note',
 })
@@ -186,15 +209,26 @@ const badExpiry = await db.saveHalalCompliance({
 })
 check('expiry before issue blocked', badExpiry === null)
 
-const clash = await db.saveHalalCompliance({
+const reusedPeriod = await db.saveHalalCompliance({
   productId: extra[2].id,
   manufacturerId: created!.id,
   certificateNo: 'JAKIM-12345',
   issuingAuthority: 'JAKIM',
-  expiryDate: '2028-02-02',
+  issueDate: '2026-05-12',
+  expiryDate: activeExpiry,
   verificationStatus: 'verified',
 })
-check('same certificate different expiry blocked', clash === null)
+check('exact certificate period is reused', reusedPeriod?.certificateId === originalCert?.id && (db.getSnapshot().halalCertificates ?? []).filter((item) => item.certificateNo === 'JAKIM-12345' && item.expiryDate === activeExpiry).length === 1)
+const duplicateRow = await db.saveHalalCompliance({
+  productId: 'p-milkpw',
+  manufacturerId: created!.id,
+  certificateNo: 'JAKIM-12345',
+  issuingAuthority: 'JAKIM',
+  issueDate: '2026-05-12',
+  expiryDate: activeExpiry,
+  verificationStatus: 'verified',
+})
+check('exact compliance duplicate blocked', duplicateRow === null)
 
 check('22 product master unaffected', JSON.stringify(db.getSnapshot().products) === beforeProducts && JSON.stringify(db.getSnapshot().boms) === beforeBoms)
 check('supplier master unaffected', JSON.stringify(db.getSnapshot().suppliers) === beforeSuppliers)
