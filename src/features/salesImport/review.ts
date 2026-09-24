@@ -1,6 +1,6 @@
 import type { ImportBatch, ImportFile, Product, SalesImportAccount, SalesImportLine, SalesImportMapping, SalesImportOrder, SalesImportOrderStatus, SalesImportParsedLine, SalesImportShipment } from '@/types'
 import { salesComponentsOf } from '@/features/products/salesComponents'
-import { externalLabel, resolveLineProduct } from '@/features/salesImport/mapping'
+import { externalLabel, mappingIdentity, resolveLineProduct } from '@/features/salesImport/mapping'
 import { round2 } from '@/utils/format'
 
 export const SALES_IMPORT_WAREHOUSE_ID = 'wh-main'
@@ -534,6 +534,231 @@ export function salesImportProductReview(input: {
     ok: unaccounted === 0,
     products: [...products.values()].sort((a, b) => a.name.localeCompare(b.name)),
     attention,
+  }
+}
+
+export type ActionKind = 'map' | 'quantity' | 'unallocated' | 'stock' | 'duplicate' | 'other'
+
+export type ActionRow = {
+  id: string
+  product: string
+  units: number
+  orders: number
+  orderRef: string
+  picking?: number
+  awb?: number
+  difference?: number
+  imported?: number
+  allocated?: number
+  unallocatedQty?: number
+  required?: number
+  available?: number
+  short?: number
+  status?: string
+  keyType?: 'sku' | 'text'
+  mapKey?: string
+}
+
+export type ActionCategory = {
+  id: ActionKind
+  title: string
+  hint: string
+  count: number
+  units: number
+  orderIds: string[]
+  rows: ActionRow[]
+}
+
+export type ActionCentre = {
+  issues: number
+  orders: number
+  categories: ActionCategory[]
+}
+
+export function salesImportActions(input: {
+  assessment: ImportAssessment
+  orders: SalesImportOrder[]
+  lines: SalesImportLine[]
+  products: Product[]
+  takenOrderIds: Set<string>
+}): ActionCentre {
+  const statusOf = new Map(input.orders.map((order) => [order.id, liveOrderStatus(order, input.lines, input.takenOrderIds)]))
+  const withStatus = (status: SalesImportOrderStatus) => input.orders.filter((order) => statusOf.get(order.id) === status)
+  const seenQty = (lines: SalesImportLine[]) => {
+    const seen = new Set<string>()
+    let qty = 0
+    for (const line of lines) {
+      if (!(line.quantity > 0)) continue
+      const key = accountKey(line)
+      if (seen.has(key)) continue
+      seen.add(key)
+      qty = round2(qty + line.quantity)
+    }
+    return qty
+  }
+  const orderRef = (list: SalesImportOrder[]) => list.length === 1 ? list[0].externalOrderId : `${list.length} orders`
+  const categories: ActionCategory[] = []
+
+  const unmappedOrders = withStatus('unmapped')
+  const mapGroups = new Map<string, { row: ActionRow; orders: SalesImportOrder[]; lines: SalesImportLine[] }>()
+  for (const order of unmappedOrders) {
+    for (const line of input.lines.filter((item) => item.orderId === order.id && !item.mappedProductId && !item.unallocated)) {
+      const identity = mappingIdentity(line)
+      const id = `${identity.keyType}:${identity.key}`
+      const group = mapGroups.get(id) ?? {
+        row: { id, product: externalLabel(line), units: 0, orders: 0, orderRef: '', keyType: identity.keyType, mapKey: identity.key },
+        orders: [],
+        lines: [],
+      }
+      if (!group.orders.some((item) => item.id === order.id)) group.orders.push(order)
+      group.lines.push(line)
+      mapGroups.set(id, group)
+    }
+  }
+  const mapRows = [...mapGroups.values()].map((group) => ({
+    ...group.row,
+    units: seenQty(group.lines),
+    orders: group.orders.length,
+    orderRef: orderRef(group.orders),
+  }))
+  if (mapRows.length) {
+    categories.push({
+      id: 'map',
+      title: 'Map Products',
+      hint: 'Products still need to be mapped',
+      count: mapRows.length,
+      units: seenQty(mapRows.flatMap(() => [])),
+      orderIds: unmappedOrders.map((order) => order.id),
+      rows: mapRows,
+    })
+    categories[categories.length - 1].units = seenQty(input.lines.filter((line) => unmappedOrders.some((order) => order.id === line.orderId) && !line.mappedProductId && !line.unallocated))
+  }
+
+  const quantityOrders = withStatus('error').filter((order) => input.lines.some((line) => line.orderId === order.id && line.quantityReview))
+  const quantityRows: ActionRow[] = []
+  for (const order of quantityOrders) {
+    for (const line of input.lines.filter((item) => item.orderId === order.id && item.quantityReview)) {
+      const picking = line.pickingQuantity ?? line.quantity
+      const awb = line.quantitySource === 'awb' ? line.quantity : undefined
+      quantityRows.push({
+        id: line.id,
+        product: line.mappedProductId ? productName(line, input.products) : externalLabel(line),
+        units: line.quantity,
+        orders: 1,
+        orderRef: order.externalOrderId,
+        picking,
+        awb,
+        difference: awb === undefined ? undefined : round2(awb - picking),
+      })
+    }
+  }
+  if (quantityRows.length) {
+    categories.push({
+      id: 'quantity',
+      title: 'Fix Quantity',
+      hint: 'Orders where quantity needs checking',
+      count: quantityOrders.length,
+      units: seenQty(input.lines.filter((line) => quantityOrders.some((order) => order.id === line.orderId) && line.quantityReview)),
+      orderIds: quantityOrders.map((order) => order.id),
+      rows: quantityRows,
+    })
+  }
+
+  const unallocatedOrders = withStatus('unallocated')
+  const unallocatedRows: ActionRow[] = []
+  const seenUnallocated = new Set<string>()
+  for (const order of unallocatedOrders) {
+    for (const line of input.lines.filter((item) => item.orderId === order.id && item.unallocated)) {
+      const key = `${order.id}:${accountKey(line)}`
+      if (seenUnallocated.has(key)) continue
+      seenUnallocated.add(key)
+      unallocatedRows.push({
+        id: `${order.id}:${line.id}`,
+        product: line.mappedProductId ? productName(line, input.products) : externalLabel(line),
+        units: line.quantity,
+        orders: 1,
+        orderRef: order.externalOrderId,
+        imported: line.quantity,
+        allocated: 0,
+        unallocatedQty: line.quantity,
+      })
+    }
+  }
+  if (unallocatedRows.length) {
+    categories.push({
+      id: 'unallocated',
+      title: 'Resolve Unallocated',
+      hint: 'Quantity could not be allocated',
+      count: unallocatedOrders.length,
+      units: seenQty(input.lines.filter((line) => unallocatedOrders.some((order) => order.id === line.orderId) && line.unallocated)),
+      orderIds: unallocatedOrders.map((order) => order.id),
+      rows: unallocatedRows,
+    })
+  }
+
+  if (input.assessment.shortages.length) {
+    categories.push({
+      id: 'stock',
+      title: 'Check Stock',
+      hint: 'Not enough stock to post the ready orders',
+      count: input.assessment.shortages.length,
+      units: input.assessment.shortages.reduce((sum, row) => round2(sum + Math.max(0, row.required - row.available)), 0),
+      orderIds: [],
+      rows: input.assessment.shortages.map((row) => ({
+        id: row.productId,
+        product: row.name,
+        units: round2(Math.max(0, row.required - row.available)),
+        orders: 0,
+        orderRef: '',
+        required: row.required,
+        available: row.available,
+        short: round2(Math.max(0, row.required - row.available)),
+      })),
+    })
+  }
+
+  const duplicateOrders = withStatus('duplicate')
+  if (duplicateOrders.length) {
+    categories.push({
+      id: 'duplicate',
+      title: 'Review Duplicates',
+      hint: 'These orders were already imported',
+      count: duplicateOrders.length,
+      units: seenQty(input.lines.filter((line) => duplicateOrders.some((order) => order.id === line.orderId))),
+      orderIds: duplicateOrders.map((order) => order.id),
+      rows: duplicateOrders.map((order) => ({
+        id: order.id,
+        product: order.externalOrderId,
+        units: seenQty(input.lines.filter((line) => line.orderId === order.id)),
+        orders: 1,
+        orderRef: order.externalOrderId,
+        status: order.saleId ? 'Already confirmed' : 'Already imported',
+      })),
+    })
+  }
+
+  const otherOrders = withStatus('error').filter((order) => !quantityOrders.some((item) => item.id === order.id))
+  const otherNotes = [
+    ...input.assessment.blockers,
+    ...otherOrders.map((order) => `${order.externalOrderId}: needs a check`),
+  ]
+  if (otherNotes.length) {
+    categories.push({
+      id: 'other',
+      title: 'Other Action Required',
+      hint: 'Account or file checks are still open',
+      count: otherNotes.length,
+      units: 0,
+      orderIds: otherOrders.map((order) => order.id),
+      rows: otherNotes.map((note, index) => ({ id: `other-${index}`, product: note, units: 0, orders: 0, orderRef: '' })),
+    })
+  }
+
+  const orderIds = new Set(categories.flatMap((category) => category.orderIds))
+  return {
+    issues: categories.reduce((sum, category) => sum + category.count, 0),
+    orders: orderIds.size,
+    categories,
   }
 }
 
