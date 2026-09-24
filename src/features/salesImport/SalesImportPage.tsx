@@ -15,6 +15,7 @@ import {
   takenOrderIds,
   type SalesImportPostingSummary,
 } from '@/features/salesImport/review'
+import { buildSpotSamples, confirmSaleEnabled, spotCheckProgress, spotOrderLabel, type SpotSample } from '@/features/salesImport/spotCheck'
 import { hasPermission } from '@/features/settings/permissions'
 import { useApi, useStore } from '@/store/hooks'
 import type { SalesImportPlatform } from '@/types'
@@ -232,6 +233,17 @@ function SalesImportReview({ batchId }: { batchId: string }) {
   const shipmentFor = (orderId: string) => shipments.find((shipment) => shipment.externalOrderId === orderId)
   const pendingShipments = orders.filter((order) => !shipments.some((shipment) => shipment.externalOrderId === order.externalOrderId)).length
 
+  const samples = buildSpotSamples({
+    orders,
+    lines: lines.filter((line) => orders.some((order) => order.id === line.orderId)),
+    products: state.products,
+    categories: state.categories,
+  })
+  const checkedKeys = batch.spotCheckedKeys ?? []
+  const spot = spotCheckProgress(samples, checkedKeys)
+  const saleEnabled = confirmSaleEnabled({ canCreate, systemCanConfirm: assessment.canConfirm, busy, samples, checkedKeys })
+  const orderIdsOk = !files.some((file) => file.role !== 'awb' && !file.parseError && (file.warnings ?? []).some((warning) => /order id/i.test(warning)))
+
   return (
     <div>
       <PageHeader
@@ -251,7 +263,7 @@ function SalesImportReview({ batchId }: { batchId: string }) {
           <Summary label="Unmapped" value={String(assessment.unmapped)} />
           <Summary label="Unallocated" value={String(assessment.unallocated)} />
           <Summary label="Errors" value={String(assessment.errors)} />
-          <Summary label="Status" value={assessment.canConfirm ? 'READY TO CONFIRM' : batchStatusLabel(batch.status)} />
+          <Summary label="Status" value={assessment.canConfirm ? (spot.complete ? 'READY TO CONFIRM' : 'SPOT CHECK') : batchStatusLabel(batch.status)} />
         </div>
       </Card>
       {assessment.mismatch && (
@@ -279,6 +291,18 @@ function SalesImportReview({ batchId }: { batchId: string }) {
       {assessment.blockers.filter((item) => !item.startsWith('Acknowledge') && !item.startsWith('Account mismatch')).map((item) => (
         <div key={item} className="mb-4 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-800">{item}</div>
       ))}
+      {samples.length > 0 && !summaryOpen && (
+        <Card className="mb-4 p-4">
+          <SpotCheckPanel
+            domId="sales-import-spot-check"
+            samples={samples}
+            checkedKeys={checkedKeys}
+            canEdit={canCreate && batch.status !== 'confirmed'}
+            onToggle={(key, checked) => api.setSalesImportSpotCheck(batch.id, key, checked)}
+            onViewAll={() => document.getElementById('sales-import-detail')?.scrollIntoView({ behavior: 'smooth', block: 'start' })}
+          />
+        </Card>
+      )}
       {canCreate && batch.status !== 'confirmed' && (
         <Card className="mb-4 p-4">
           <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
@@ -502,11 +526,15 @@ function SalesImportReview({ batchId }: { batchId: string }) {
       )}
       <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
         <Button variant="secondary" onClick={() => setSummaryOpen(true)}>View Sales Summary</Button>
-        <Button disabled={!canCreate || !assessment.canConfirm || busy} onClick={() => api.confirmSalesImport(batch.id)}>
+        <Button disabled={!saleEnabled} onClick={() => api.confirmSalesImport(batch.id)}>
           Confirm Sale
         </Button>
         <div className="text-sm text-slate-500">
-          {assessment.canConfirm ? `${assessment.readyOrderIds.length} order${assessment.readyOrderIds.length === 1 ? '' : 's'} will be posted to Main Warehouse.` : 'Confirm stays off until blocking issues for the ready orders are cleared. Duplicates and missing AWB do not block valid orders.'}
+          {!assessment.canConfirm
+            ? 'Confirm stays off until blocking issues for the ready orders are cleared. Duplicates and missing AWB do not block valid orders.'
+            : !spot.complete
+              ? `Spot check ${spot.done}/${spot.required}. Confirm stays off until each selected product is checked.`
+              : `${assessment.readyOrderIds.length} order${assessment.readyOrderIds.length === 1 ? '' : 's'} will be posted to Main Warehouse.`}
         </div>
       </div>
       <SalesSummaryModal
@@ -519,7 +547,12 @@ function SalesImportReview({ batchId }: { batchId: string }) {
           document.getElementById('sales-import-detail')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
         }}
         onConfirm={() => api.confirmSalesImport(batch.id)}
-        canConfirm={canCreate && assessment.canConfirm && !busy}
+        canConfirm={saleEnabled}
+        samples={samples}
+        checkedKeys={checkedKeys}
+        canEditSpotCheck={canCreate && batch.status !== 'confirmed'}
+        onToggleSpotCheck={(key, checked) => api.setSalesImportSpotCheck(batch.id, key, checked)}
+        orderIdsOk={orderIdsOk}
         platform={platformLabel(batch.platform)}
         account={account.name}
         summary={salesImportSummary({
@@ -539,6 +572,64 @@ function formatQty(qty: number) {
   return Number.isInteger(qty) ? String(qty) : String(qty)
 }
 
+function SpotCheckPanel({
+  domId,
+  samples,
+  checkedKeys,
+  canEdit,
+  onToggle,
+  onViewAll,
+}: {
+  domId?: string
+  samples: SpotSample[]
+  checkedKeys: string[]
+  canEdit: boolean
+  onToggle: (key: string, checked: boolean) => void
+  onViewAll: () => void
+}) {
+  const progress = spotCheckProgress(samples, checkedKeys)
+  const checked = new Set(checkedKeys)
+  if (!samples.length) return null
+  return (
+    <div id={domId}>
+      <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Spot Check</div>
+      <p className="mt-1 text-sm text-slate-600">Compare these products with your uploaded Picking List.</p>
+      <p className="mt-1 text-sm text-slate-600">System checks all imported data. Please spot-check these {progress.required} products against your Picking List.</p>
+      <p className="mt-2 text-sm font-medium text-slate-800">System-selected {progress.required} products</p>
+      <p className="mt-1 text-sm text-slate-600">Check these {progress.required} products against the uploaded Picking List. If they match, mark each as checked.</p>
+      <ol className="mt-3 space-y-3">
+        {samples.map((sample, index) => {
+          const isChecked = checked.has(sample.key)
+          return (
+            <li key={sample.key} className="rounded-xl border border-slate-200 p-3">
+              <div className="break-words text-sm font-medium text-slate-900">{index + 1}. {sample.name}</div>
+              <div className="mt-1 text-sm text-slate-600">Picking List: {formatQty(sample.quantity)} units</div>
+              <div className="text-sm text-slate-600">System: {formatQty(sample.quantity)} units</div>
+              <div className="break-words text-sm text-slate-600">Mapping: {sample.mappingStatus === 'Mapped' ? sample.mappedName || 'Mapped' : 'Unmapped'}</div>
+              <div className="break-words text-sm text-slate-600">Orders: {spotOrderLabel(sample.orderIds)}</div>
+              <label className="mt-2 flex min-h-11 cursor-pointer items-center gap-3 text-sm text-slate-800">
+                <input
+                  type="checkbox"
+                  className="h-5 w-5"
+                  checked={isChecked}
+                  disabled={!canEdit}
+                  aria-label={`Checked ${sample.name}`}
+                  onChange={(event) => onToggle(sample.key, event.target.checked)}
+                />
+                <span>{isChecked ? 'Checked' : 'Not checked'}</span>
+              </label>
+            </li>
+          )
+        })}
+      </ol>
+      <div className={`mt-3 text-sm font-medium ${progress.complete ? 'text-emerald-800' : 'text-slate-800'}`}>
+        {progress.complete ? `✓ Spot Check Complete — ${progress.required}/${progress.required}` : `${progress.done} / ${progress.required} checked`}
+      </div>
+      <Button variant="secondary" className="mt-3 w-full sm:w-auto" onClick={onViewAll}>View All Imported Data</Button>
+    </div>
+  )
+}
+
 function SalesSummaryModal({
   open,
   sort,
@@ -547,6 +638,11 @@ function SalesSummaryModal({
   onDetails,
   onConfirm,
   canConfirm,
+  samples,
+  checkedKeys,
+  canEditSpotCheck,
+  onToggleSpotCheck,
+  orderIdsOk,
   platform,
   account,
   summary,
@@ -558,6 +654,11 @@ function SalesSummaryModal({
   onDetails: () => void
   onConfirm: () => void
   canConfirm: boolean
+  samples: SpotSample[]
+  checkedKeys: string[]
+  canEditSpotCheck: boolean
+  onToggleSpotCheck: (key: string, checked: boolean) => void
+  orderIdsOk: boolean
   platform: string
   account: string
   summary: SalesImportPostingSummary
@@ -571,12 +672,18 @@ function SalesSummaryModal({
     summary.awb.review ? `${summary.awb.review} review` : '',
     summary.awb.unmatched ? `${summary.awb.unmatched} unmatched` : '',
   ].filter(Boolean).join(' · ')
+  const quantityOk = summary.unallocated === 0 && summary.errors === 0
+  const checks = [
+    { label: 'Product Mapping', ok: summary.mappingOk, detail: summary.mappingOk ? 'Complete' : `${summary.unmapped} unmapped` },
+    { label: 'Order IDs', ok: orderIdsOk, detail: orderIdsOk ? 'Present' : 'Review warnings' },
+    { label: 'Quantity Allocation', ok: quantityOk, detail: summary.unallocated ? `${summary.unallocated} unallocated` : summary.errors ? `${summary.errors} quantity review` : 'Complete' },
+    { label: 'Duplicate Check', ok: summary.duplicates === 0, detail: summary.duplicates ? `${summary.duplicates} already imported` : 'Passed' },
+    { label: 'Inventory', ok: summary.inventoryOk, detail: summary.inventoryOk ? 'OK' : 'Attention' },
+  ]
   return (
     <Modal open={open} onClose={onClose} title="Sales Summary" width="max-w-xl">
       <div className="text-sm text-slate-500">{platform} · {account}</div>
-      <p className="mt-3 text-base font-medium text-slate-900">
-        {summary.ready === 0 ? 'No orders will be posted.' : `${summary.ready} order${summary.ready === 1 ? '' : 's'} will be posted.`}
-      </p>
+      <p className="mt-3 text-base font-medium text-slate-900">{summary.orders} Orders · {formatQty(summary.importedQty)} Units</p>
       <div className="mt-4 grid grid-cols-3 gap-2 text-center">
         <div className="rounded-xl bg-slate-50 px-2 py-3">
           <div className="text-xs text-slate-500">Orders</div>
@@ -591,73 +698,88 @@ function SalesSummaryModal({
           <div className={summary.attention ? 'text-xl font-semibold text-amber-800' : 'text-xl font-semibold text-slate-900'}>{summary.attention}</div>
         </div>
       </div>
-      <div className="mt-3 grid grid-cols-1 gap-2 text-sm sm:grid-cols-3">
-        <div className="rounded-xl border border-slate-200 px-3 py-2">
-          <div className="text-xs uppercase tracking-wide text-slate-400">Imported</div>
-          <div className="font-medium text-slate-800">{formatQty(summary.importedQty)} units</div>
-        </div>
-        <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2">
-          <div className="text-xs uppercase tracking-wide text-emerald-700">Will be posted</div>
-          <div className="font-semibold text-emerald-900">{formatQty(summary.postQty)} units</div>
-        </div>
-        <div className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2">
-          <div className="text-xs uppercase tracking-wide text-amber-700">Not posted</div>
-          <div className="font-semibold text-amber-900">{formatQty(summary.heldQty)} units</div>
+      <div className="mt-5 border-t border-slate-100 pt-4">
+        <SpotCheckPanel
+          samples={samples}
+          checkedKeys={checkedKeys}
+          canEdit={canEditSpotCheck}
+          onToggle={onToggleSpotCheck}
+          onViewAll={onDetails}
+        />
+      </div>
+      <div className="mt-5 border-t border-slate-100 pt-4">
+        <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">System Validation</div>
+        <div className="mt-2 space-y-1 text-sm text-slate-700">
+          {checks.map((row) => (
+            <div key={row.label} className="flex items-baseline justify-between gap-3">
+              <span>{row.ok ? '✓' : '⚠'} {row.label}</span>
+              <span className="font-medium">{row.detail}</span>
+            </div>
+          ))}
         </div>
       </div>
-      <div className="mt-5 flex items-center justify-between gap-3">
-        <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Will be posted</div>
-        {products.length > 1 && (
-          <div className="flex gap-2 text-xs">
-            <button type="button" className={sort === 'name' ? 'font-semibold text-indigo-700' : 'text-slate-500'} onClick={() => onSort('name')}>Name</button>
-            <button type="button" className={sort === 'qty' ? 'font-semibold text-indigo-700' : 'text-slate-500'} onClick={() => onSort('qty')}>Quantity</button>
+      <div className="mt-5 border-t border-slate-100 pt-4">
+        <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Final Posting</div>
+        <p className="mt-2 text-sm font-medium text-slate-900">
+          {summary.ready === 0 ? 'No orders will be posted.' : `${summary.ready} order${summary.ready === 1 ? '' : 's'} will be posted.`}
+        </p>
+        <div className="mt-3 grid grid-cols-1 gap-2 text-sm sm:grid-cols-3">
+          <div className="rounded-xl border border-slate-200 px-3 py-2">
+            <div className="text-xs uppercase tracking-wide text-slate-400">Imported</div>
+            <div className="font-medium text-slate-800">{formatQty(summary.importedQty)} units</div>
+          </div>
+          <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2">
+            <div className="text-xs uppercase tracking-wide text-emerald-700">Will be posted</div>
+            <div className="font-semibold text-emerald-900">{formatQty(summary.postQty)} units</div>
+          </div>
+          <div className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2">
+            <div className="text-xs uppercase tracking-wide text-amber-700">Not posted</div>
+            <div className="font-semibold text-amber-900">{formatQty(summary.heldQty)} units</div>
+          </div>
+        </div>
+        <div className="mt-4 flex items-center justify-between gap-3">
+          <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Will be posted</div>
+          {products.length > 1 && (
+            <div className="flex gap-2 text-xs">
+              <button type="button" className={sort === 'name' ? 'font-semibold text-indigo-700' : 'text-slate-500'} onClick={() => onSort('name')}>Name</button>
+              <button type="button" className={sort === 'qty' ? 'font-semibold text-indigo-700' : 'text-slate-500'} onClick={() => onSort('qty')}>Quantity</button>
+            </div>
+          )}
+        </div>
+        {products.length === 0 ? (
+          <p className="mt-2 text-sm text-slate-500">Nothing in this batch will be sent to a sale.</p>
+        ) : (
+          <div className="mt-1 max-h-52 overflow-y-auto">
+            {products.map((product) => (
+              <div key={product.productId} className="border-b border-slate-100 py-2 sm:flex sm:items-baseline sm:justify-between sm:gap-4">
+                <div className="text-sm text-slate-800">{product.name}</div>
+                <div className="text-sm font-semibold text-slate-900">{formatQty(product.qty)}</div>
+              </div>
+            ))}
+            <div className="flex items-baseline justify-between py-2 text-sm font-semibold text-slate-900">
+              <span>Total quantity</span>
+              <span>{formatQty(summary.postQty)}</span>
+            </div>
+          </div>
+        )}
+        {summary.attention > 0 && (
+          <div className="mt-4 rounded-xl border border-amber-200 bg-amber-50 px-3 py-3 text-sm text-amber-950">
+            <div className="font-medium">{summary.attention} order{summary.attention === 1 ? '' : 's'} will not be posted.</div>
+            <ul className="mt-2 space-y-1">
+              {summary.reasons.map((reason) => (
+                <li key={reason.label}>{reason.count} {reason.label}</li>
+              ))}
+            </ul>
           </div>
         )}
       </div>
-      {products.length === 0 ? (
-        <p className="mt-2 text-sm text-slate-500">Nothing in this batch will be sent to a sale.</p>
-      ) : (
-        <div className="mt-1 max-h-52 overflow-y-auto">
-          {products.map((product) => (
-            <div key={product.productId} className="border-b border-slate-100 py-2 sm:flex sm:items-baseline sm:justify-between sm:gap-4">
-              <div className="text-sm text-slate-800">{product.name}</div>
-              <div className="text-sm font-semibold text-slate-900">{formatQty(product.qty)}</div>
-            </div>
-          ))}
-          <div className="flex items-baseline justify-between py-2 text-sm font-semibold text-slate-900">
-            <span>Total quantity</span>
-            <span>{formatQty(summary.postQty)}</span>
-          </div>
-        </div>
-      )}
-      {summary.attention > 0 && (
-        <div className="mt-4 rounded-xl border border-amber-200 bg-amber-50 px-3 py-3 text-sm text-amber-950">
-          <div className="font-medium">{summary.attention} order{summary.attention === 1 ? '' : 's'} will not be posted.</div>
-          <ul className="mt-2 space-y-1">
-            {summary.reasons.map((reason) => (
-              <li key={reason.label}>{reason.count} {reason.label}</li>
-            ))}
-          </ul>
-        </div>
-      )}
-      <div className="mt-4 grid grid-cols-1 gap-1 text-sm text-slate-700 sm:grid-cols-2 sm:gap-x-4">
-        <div className="flex justify-between gap-3"><span>Ready to Confirm</span><span className="font-medium">{summary.ready}</span></div>
-        <div className="flex justify-between gap-3"><span>Duplicates</span><span className="font-medium">{summary.duplicates}</span></div>
-        <div className="flex justify-between gap-3"><span>Unmapped</span><span className="font-medium">{summary.unmapped}</span></div>
-        <div className="flex justify-between gap-3"><span>Unallocated</span><span className="font-medium">{summary.unallocated}</span></div>
-        <div className="flex justify-between gap-3"><span>Other errors</span><span className="font-medium">{summary.errors}</span></div>
-        <div className="flex justify-between gap-3"><span>Already confirmed</span><span className="font-medium">{summary.confirmed}</span></div>
+      <div className="mt-5 border-t border-slate-100 pt-4">
+        <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">AWB</div>
+        <div className={`mt-2 text-sm ${awbClass}`}>{awbLabel}</div>
+        <p className="mt-2 text-xs text-slate-500">Pending AWB is not an error. Missing shipments do not block confirmation.</p>
       </div>
-      <div className="mt-4 space-y-2 text-sm">
-        <div className="flex justify-between gap-3"><span>Mapping</span><span className={summary.mappingOk ? 'text-emerald-700' : 'text-amber-700'}>{summary.mappingOk ? 'Complete' : `${summary.unmapped} unmapped`}</span></div>
-        <div className="flex justify-between gap-3"><span>Inventory</span><span className={summary.inventoryOk ? 'text-emerald-700' : 'text-amber-700'}>{summary.inventoryOk ? 'OK' : 'Attention'}</span></div>
-        <div className="flex justify-between gap-3"><span>Duplicates</span><span className={summary.duplicates ? 'text-amber-700' : 'text-emerald-700'}>{summary.duplicates ? `${summary.duplicates} already imported` : 'None'}</span></div>
-        <div className="flex justify-between gap-3"><span>AWB</span><span className={awbClass}>{awbLabel}</span></div>
-      </div>
-      <p className="mt-3 text-xs text-slate-500">Pending AWB is not an error. Missing shipments do not block confirmation.</p>
       <div className="mt-5 flex flex-col gap-2 sm:flex-row sm:justify-end">
-        <Button variant="secondary" onClick={onDetails}>View Details</Button>
-        <Button disabled={!canConfirm} onClick={onConfirm}>Confirm Sale</Button>
+        <Button className="w-full sm:w-auto" disabled={!canConfirm} onClick={onConfirm}>Confirm Sale</Button>
       </div>
     </Modal>
   )

@@ -27,6 +27,7 @@ import { db } from '@/store/db'
 import type { TextItem } from '@/features/salesImport/parsePickingList'
 import { parsePickingList } from '@/features/salesImport/parsePickingList'
 import { extractPdfTextItems } from '@/features/salesImport/pdfText'
+import { assessSalesImport, salesImportSummary } from '@/features/salesImport/review'
 
 type Check = { name: string; ok: boolean; detail?: string }
 const results: Check[] = []
@@ -390,6 +391,172 @@ check(
   Boolean(originalName) && afterRename?.mappedProductSnapshot?.productName === originalName && afterRename?.mappedProductSnapshot?.sku === '900006' && bundleSale?.items[0]?.productId === bundle.id,
   afterRename?.mappedProductSnapshot?.productName,
 )
+
+function continuationPicklist() {
+  const shared = [orderNo('S0000001'), orderNo('S0000002'), orderNo('S0000003')]
+  const single = orderNo('KSVM5AK1')
+  const repeated = orderNo('KXNHDUG1')
+  const other = orderNo('MATFTWK1')
+  const control = orderNo('CONTROL01')
+  const items: TextItem[] = [
+    word('Picklist', 17, 820),
+    word('Username:', 17, 800),
+    word('coolslurppypowder', 96, 800),
+    word('#', 15, 760),
+    word('Parent SKU', 28, 760),
+    word('Name', 152, 760),
+    word('SKU', 233, 760),
+    word('Variation Name', 295, 760),
+    word('Qty', 376, 760),
+    word('Order ID', 417, 760),
+    word('1', 15, 720),
+    word('Tepung Waffle', 152, 720),
+    word('ORIGINAL', 295, 720),
+    word('4', 376, 720),
+    word(shared[0], 417, 720),
+    word(shared[1], 417, 706),
+    word(shared[2], 417, 692),
+    word('LEAK', 295, 670),
+    word('1', 376, 670),
+    word('2', 15, 640),
+    word('Serbuk Aiskrim', 152, 640),
+    word('MANGGO', 295, 640),
+    word('1', 376, 640),
+    word(single, 417, 640),
+    word('#', 15, 820, 2),
+    word('Parent SKU', 28, 820, 2),
+    word('Name', 152, 820, 2),
+    word('SKU', 233, 820, 2),
+    word('Variation Name', 295, 820, 2),
+    word('Qty', 376, 820, 2),
+    word('Order ID', 417, 820, 2),
+    word('HONEYDEW', 295, 780, 2),
+    word('1', 376, 780, 2),
+    word('CHOCOLATE', 295, 760, 2),
+    word('1', 376, 760, 2),
+    word('MALT', 295, 746, 2),
+    word('YOGURT APPLE', 295, 730, 2),
+    word('1', 376, 730, 2),
+    word('3', 15, 690, 2),
+    word('Serbuk Air Balang', 152, 690, 2),
+    word('Yogurt Blueberry', 295, 690, 2),
+    word('1', 376, 690, 2),
+    word(repeated, 417, 690, 2),
+    word('4', 15, 660, 2),
+    word('Serbuk Air Balang', 152, 660, 2),
+    word('Keladi/Yam', 295, 660, 2),
+    word('1', 376, 660, 2),
+    word(repeated, 417, 660, 2),
+    word('5', 15, 630, 2),
+    word('Serbuk Air Balang', 152, 630, 2),
+    word('Coklat Lava', 295, 630, 2),
+    word('1', 376, 630, 2),
+    word(other, 417, 630, 2),
+    word('6', 15, 600, 2),
+    word('Control Product', 152, 600, 2),
+    word('ONCE', 295, 600, 2),
+    word('2', 376, 600, 2),
+    word(control, 417, 600, 2),
+  ]
+  return { items, shared, single, repeated, other, control }
+}
+
+const continuation = continuationPicklist()
+const continued = parsePickingList(continuation.items)
+const continuedUnits = continued.lines.reduce((sum, line) => sum + (line.orderIds.length ? line.quantity : 0), 0)
+const findContinued = (variation: string, orderId?: string) =>
+  continued.lines.filter((line) => line.variationText === variation && (orderId == null || (line.orderIds.length === 1 && line.orderIds[0] === orderId)))
+check(
+  '22. Multi-page picking list keeps every qty row',
+  continued.lines.length === 10 && continuedUnits === 13 && !continued.error,
+  `lines ${continued.lines.length} units ${continuedUnits} ${continued.warnings.join('; ')}`,
+)
+check(
+  '23. Qty rows in the same group inherit one printed Order ID',
+  findContinued('MANGGO', continuation.single).length === 1 &&
+    findContinued('HONEYDEW', continuation.single).length === 1 &&
+    findContinued('CHOCOLATE MALT', continuation.single).length === 1 &&
+    findContinued('YOGURT APPLE', continuation.single).length === 1,
+  continued.lines.filter((line) => line.orderIds.includes(continuation.single)).map((line) => line.variationText).join(', '),
+)
+check(
+  '24. A shared Order ID list does not leak onto the next qty',
+  continued.lines.some((line) => line.variationText === 'ORIGINAL' && line.quantity === 4 && line.orderIds.join() === continuation.shared.join()) &&
+    continued.lines.some((line) => line.variationText === 'LEAK' && line.quantity === 1 && line.orderIds.length === 0),
+  continued.lines.filter((line) => line.externalProductName === 'Tepung Waffle').map((line) => `${line.variationText}:${line.orderIds.length}`).join(', '),
+)
+check(
+  '25. Page 2 order lines are captured once, including a repeated Order ID',
+  findContinued('Yogurt Blueberry', continuation.repeated).length === 1 &&
+    findContinued('Keladi/Yam', continuation.repeated).length === 1 &&
+    findContinued('Coklat Lava', continuation.other).length === 1 &&
+    findContinued('ONCE', continuation.control).length === 1 &&
+    !continued.lines.some((line) => line.orderIds.includes(continuation.single) && line.orderIds.includes(continuation.repeated)),
+  continued.lines.map((line) => `${line.variationText ?? ''}:${line.orderIds.join('+')}`).join(' | '),
+)
+
+const pageTwoPdf = '/home/ubuntu/.cursor/projects/workspace/uploads/220926_Picking_List_Shopee1_8d24.pdf'
+if (!existsSync(pageTwoPdf)) {
+  check('26. Real 220926 picking list imports 72 units', true, 'skipped, file not in this environment')
+} else {
+  const pageTwoItems = await extractPdfTextItems(new Uint8Array(readFileSync(pageTwoPdf)))
+  const pageTwo = parsePickingList(pageTwoItems)
+  const orderedUnits = pageTwo.lines.reduce((sum, line) => sum + (line.orderIds.length ? line.quantity : 0), 0)
+  const allUnits = pageTwo.lines.reduce((sum, line) => sum + line.quantity, 0)
+  const once = (product: string, variation: string, orderId: string) =>
+    pageTwo.lines.filter((line) => line.externalProductName.includes(product) && line.variationText === variation && line.quantity === 1 && line.orderIds.length === 1 && line.orderIds[0] === orderId).length
+  const pageTwoLines =
+    once('Yogurt Blueberry', 'Yogurt Blueberry', '260921KXNHDUG2') === 1 &&
+    once('Keladi', 'Keladi/Yam', '260921KXNHDUG2') === 1 &&
+    once('Coklat Lava', 'Coklat Lava', '260921MATFTWKE') === 1
+  const recovered =
+    once('AISKRIM', 'MANGGO', '260921KSVM5AKW') === 1 &&
+    once('AISKRIM', 'HONEYDEW', '260921KSVM5AKW') === 1 &&
+    once('AISKRIM', 'CHOCOLATE MALT', '260921KSVM5AKW') === 1 &&
+    once('AISKRIM', 'YOGURT APPLE', '260921KSVM5AKW') === 1
+  const signatures = pageTwo.lines.map((line) => `${line.externalProductName}|${line.variationText ?? ''}|${line.quantity}|${line.orderIds.join('+')}`)
+  const uniqueSignatures = new Set(signatures)
+  check(
+    '26. Real 220926 picking list imports 72 units',
+    !pageTwo.error && pageTwo.lines.length === 25 && allUnits === 72 && orderedUnits === 72 && pageTwoLines && recovered && uniqueSignatures.size === signatures.length && new Set(pageTwo.lines.flatMap((line) => line.orderIds)).size === 30,
+    `lines ${pageTwo.lines.length} units ${allUnits} ordered ${orderedUnits} orders ${new Set(pageTwo.lines.flatMap((line) => line.orderIds)).size} warnings ${pageTwo.warnings.length}`,
+  )
+  const pageTwoAccount = snap().salesImportAccounts.find((account) => account.platform === 'shopee' && account.name === pageTwo.detectedUsername) ?? db.createSalesImportAccount('shopee', pageTwo.detectedUsername || 'coolslurppypowder')
+  const pageTwoBatch = pageTwoAccount ? db.createSalesImportBatch('shopee', pageTwoAccount.id) : undefined
+  if (!pageTwoBatch || !pageTwoAccount) throw new Error('220926 batch missing')
+  db.ingestSalesImportPicking(pageTwoBatch.id, { fileName: '220926_Picking_List_Shopee1.pdf', fileHash: 'hash-220926-page2', items: pageTwoItems })
+  const after = snap()
+  const batchOrders = after.salesImportOrders.filter((order) => order.batchId === pageTwoBatch.id)
+  const batchLines = after.salesImportLines.filter((line) => batchOrders.some((order) => order.id === line.orderId))
+  const assessment = assessSalesImport({
+    account: pageTwoAccount,
+    batch: pageTwoBatch,
+    files: after.salesImportFiles ?? [],
+    orders: after.salesImportOrders,
+    lines: after.salesImportLines ?? [],
+    products: after.products,
+    takenOrderIds: new Set(),
+    allowNegativeStock: after.settings.allowNegativeStock,
+    availableQty: () => 0,
+  })
+  const imported = salesImportSummary({
+    assessment,
+    orders: batchOrders,
+    lines: batchLines,
+    products: after.products,
+    shipments: [],
+    takenOrderIds: new Set(),
+  })
+  const orderLines = (orderId: string) => {
+    const order = batchOrders.find((item) => item.externalOrderId === orderId)
+    return batchLines.filter((line) => line.orderId === order?.id)
+  }
+  check(
+    '27. Review summary counts the recovered picking lines',
+    imported.importedQty === 72 && imported.orders === 30 && imported.heldQty === imported.importedQty - imported.postQty && orderLines('260921KSVM5AKW').length === 4 && orderLines('260921KXNHDUG2').some((line) => line.variationText === 'Yogurt Blueberry') && orderLines('260921MATFTWKE').some((line) => line.variationText === 'Coklat Lava'),
+    `imported ${imported.importedQty} orders ${imported.orders} ready ${imported.ready} attention ${imported.attention}`,
+  )
+}
 
 const realFiles = [
   ['/home/ubuntu/.cursor/projects/workspace/uploads/230926_Picking_List_Shopee1_2174.pdf', 'shopee-picklist', 'coolslurppypowder', 35],

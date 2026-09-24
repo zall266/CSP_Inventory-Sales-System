@@ -188,8 +188,14 @@ function linesFromShopee(rows: TextItem[][], anchors: Anchor[]): ParsedPickingLi
     let parentSku = ''
     const segs: Seg[] = []
     let seg: Seg | null = null
+    // One Order ID printed on the first variation of a # group also covers later qty rows that omit it.
+    let carryOrderId = ''
     const push = () => {
-      if (seg && seg.qty && seg.qty > 0) segs.push(seg)
+      if (seg && seg.qty && seg.qty > 0) {
+        if (!seg.orderIds.length && carryOrderId) seg.orderIds = [carryOrderId]
+        segs.push(seg)
+        carryOrderId = seg.orderIds.length === 1 ? seg.orderIds[0] : ''
+      }
       seg = null
     }
     for (const row of group) {
