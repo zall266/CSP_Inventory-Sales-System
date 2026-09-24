@@ -82,7 +82,7 @@ const shuffled = buildSpotSamples({
 check('4. Samples stay deterministic', JSON.stringify(many) === JSON.stringify(fixture(6)) && shuffled.map((sample) => sample.key).join('|') === many.map((sample) => sample.key).join('|'), shuffled.map((sample) => sample.name).join(', '))
 
 const keys = (samples: SpotSample[]) => samples.map((sample) => sample.key)
-check('5. Spot check incomplete keeps Confirm disabled', confirmSaleEnabled({ canCreate: true, systemCanConfirm: true, samples: four, checkedKeys: keys(four).slice(0, 3) }) === false)
+check('5. Spot check no longer gates Confirm', confirmSaleEnabled({ canCreate: true, systemCanConfirm: true, samples: four, checkedKeys: keys(four).slice(0, 3) }) === true)
 check('6. Spot check complete and a clear system check enables Confirm', confirmSaleEnabled({ canCreate: true, systemCanConfirm: true, samples: four, checkedKeys: keys(four) }) === true)
 check('7. Spot check complete does not override a system blocker', confirmSaleEnabled({ canCreate: true, systemCanConfirm: false, samples: four, checkedKeys: keys(four) }) === false && confirmSaleEnabled({ canCreate: false, systemCanConfirm: true, samples: four, checkedKeys: keys(four) }) === false)
 

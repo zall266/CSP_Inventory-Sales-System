@@ -11,7 +11,7 @@ Object.defineProperty(globalThis, 'localStorage', {
 })
 Object.defineProperty(globalThis, 'window', { value: globalThis })
 
-import { assessSalesImport, salesImportActions, salesImportProductReview } from '@/features/salesImport/review'
+import { assessSalesImport, salesImportActions, salesImportLinesForBatch, salesImportProductReview } from '@/features/salesImport/review'
 import { confirmSaleEnabled } from '@/features/salesImport/spotCheck'
 import type { ImportBatch, ImportFile, Product, SalesImportAccount, SalesImportLine, SalesImportOrder } from '@/types'
 
@@ -109,7 +109,7 @@ const ready = run([order('r1', '260922G0000001')], [line('r1l', 'r1', 4, 'p-yam'
 check('A. No work items when the order is ready', workIds(ready.actions.categories).length === 0 && ready.review.ok && ready.assessment.canConfirm)
 check('J. AWB pending does not block a ready order', ready.assessment.canConfirm && ready.review.willPost === 4)
 check('F. Stock shortage blocks confirm for the ready set', stocked.assessment.canConfirm === false && stocked.actions.categories.some((item) => item.id === 'stock'))
-check('M. Spot check incomplete keeps confirm off', confirmSaleEnabled({ canCreate: true, systemCanConfirm: true, samples: [{ key: 'a', name: 'A', productName: 'A', quantity: 1, mappingStatus: 'Mapped', orderIds: [], categoryName: '' }], checkedKeys: [], reconciliationOk: true }) === false)
+check('M. Spot check is no longer a confirm gate', confirmSaleEnabled({ canCreate: true, systemCanConfirm: true, samples: [{ key: 'a', name: 'A', productName: 'A', quantity: 1, mappingStatus: 'Mapped', orderIds: [], categoryName: '' }], checkedKeys: [], reconciliationOk: true }) === true)
 
 const apple = product('p-apple', 'AB Green Apple')
 const summaryOrders = [
@@ -159,6 +159,55 @@ const blocked = run(
 )
 const blockedWaffle = blocked.review.products.find((row) => row.name === 'Tepung Waffle')
 check('J. A mapped product can still need review when another blocker remains', blockedWaffle?.mapped === true && blockedWaffle.willPost === 0 && blockedWaffle.needReview === 6 && blockedWaffle.imported === 6, `post ${blockedWaffle?.willPost} review ${blockedWaffle?.needReview}`)
+
+const pickingName = '[READY STOCK] Tepung Waffle Crispy Premium'
+const workbenchOpen = beforeMap.review.products.find((row) => row.name === pickingName)
+const workbenchMapped = afterMap.review.products.find((row) => row.name === 'Tepung Waffle')
+check('WB-A. Unmapped row shows the picking name and Needs Mapping', workbenchOpen?.displayStatus === 'needs-mapping' && workbenchOpen.mapped === false && Boolean(workbenchOpen.mapKey))
+check('WB-B. Mapped row shows the CSP name and Ready to Import', workbenchMapped?.displayStatus === 'ready' && workbenchMapped.name === 'Tepung Waffle')
+check('WB-E. Needs Mapping stays above Action Required and Ready', beforeMap.review.products.every((row, index, list) => row.displayStatus !== 'needs-mapping' || list.slice(0, index).every((item) => item.displayStatus === 'needs-mapping')))
+check('WB-F. Quantity mismatch is an Action Required reason', blockedWaffle?.displayStatus === 'action-required' && blockedWaffle.reasons.includes('Quantity mismatch'))
+const shortRow = held.review.products.find((row) => row.name === 'Tepung Waffle')
+check('WB-G. Stock shortage is an Action Required reason', shortRow?.reasons.includes('Stock shortage') === true && shortRow.details.some((detail) => detail.startsWith('Required:')))
+const sharedUnmapped = run(
+  [order('su1', '260922I0000001'), order('su2', '260922I0000002')],
+  [
+    line('su1l', 'su1', 6, undefined, { externalProductName: pickingName, variationText: 'CRISPY', unallocated: true, sharedOrderCount: 2 }),
+    line('su2l', 'su2', 6, undefined, { externalProductName: pickingName, variationText: 'CRISPY', unallocated: true, sharedOrderCount: 2 }),
+  ],
+  [waffle],
+)
+const sharedRow = sharedUnmapped.review.products[0]
+check('WB-H. Unallocated shared product shows Needs Mapping and a reason', sharedRow?.displayStatus === 'needs-mapping' && sharedRow.reasons.includes('Quantity not yet allocated') && sharedRow.imported === 6 && Boolean(sharedRow.mapKey))
+const sharedMapped = run(
+  [order('su1', '260922I0000001'), order('su2', '260922I0000002')],
+  [
+    line('su1l', 'su1', 6, 'p-waffle', { externalProductName: pickingName, variationText: 'CRISPY', unallocated: true, sharedOrderCount: 2 }),
+    line('su2l', 'su2', 6, 'p-waffle', { externalProductName: pickingName, variationText: 'CRISPY', unallocated: true, sharedOrderCount: 2 }),
+  ],
+  [waffle],
+)
+check('WB-H2. Shared mapping survives recalculation', sharedMapped.review.products.length === 1 && sharedMapped.review.products[0].name === 'Tepung Waffle' && sharedMapped.review.products[0].reasons.includes('Quantity not yet allocated') && sharedMapped.review.imported === 6)
+const batchA = { ...batch, id: 'batch-a' }
+const batchB = { ...batch, id: 'batch-b' }
+const ordersA = [{ ...order('oa', '260922J0000001'), batchId: 'batch-a' }]
+const ordersB = [{ ...order('ob', '260922J0000002'), batchId: 'batch-b' }]
+const linesA = [line('la', 'oa', 4, 'p-yam', { externalProductName: 'AB Yam' })]
+const linesB = [line('lb', 'ob', 9, 'p-waffle', { externalProductName: 'Tepung Waffle' })]
+const allOrders = [...ordersA, ...ordersB]
+const allLines = [...linesA, ...linesB]
+function reviewBatch(current: typeof batchA, currentOrders: typeof ordersA) {
+  const scoped = salesImportLinesForBatch(current.id, allOrders, allLines)
+  const assessment = assessSalesImport({ account, batch: current, files: [{ ...file, batchId: current.id }], orders: currentOrders, lines: scoped, products: [yam, waffle], takenOrderIds: new Set(), allowNegativeStock: false, availableQty: () => 1000 })
+  return salesImportProductReview({ assessment, orders: currentOrders, lines: scoped, products: [yam, waffle], takenOrderIds: new Set() })
+}
+const onlyA = reviewBatch(batchA, ordersA)
+const onlyB = reviewBatch(batchB, ordersB)
+check('WB-N. Batch lines do not contaminate each other', onlyA.imported === 4 && onlyA.unaccounted === 0 && onlyB.imported === 9 && onlyB.unaccounted === 0 && onlyA.products.every((row) => row.name !== 'Tepung Waffle') && onlyB.products.every((row) => row.name !== 'AB Yam'))
+check('WB-P. Shared picking quantity is counted once', sharedUnmapped.review.imported === 6)
+const confirmedOrder = { ...order('cq', '260922K0000001'), status: 'confirmed' as const, saleId: 'sale-q' }
+const confirmedReview = run([confirmedOrder], [line('cql', 'cq', 6, 'p-yam')], [yam])
+check('WB-Q. Confirmed quantity is not posted again', confirmedReview.review.alreadyConfirmed === 6 && confirmedReview.review.willPost === 0 && confirmedReview.review.products.length === 1)
 
 const failed = results.filter((item) => !item.ok)
 console.log(`\n${results.length - failed.length}/${results.length} passed`)

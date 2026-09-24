@@ -384,6 +384,8 @@ export function salesImportSummary(input: {
   }
 }
 
+export type ProductDisplayStatus = 'needs-mapping' | 'action-required' | 'ready'
+
 export type ProductReviewRow = {
   key: string
   name: string
@@ -391,6 +393,12 @@ export type ProductReviewRow = {
   imported: number
   willPost: number
   needReview: number
+  confirmed: number
+  displayStatus: ProductDisplayStatus
+  reasons: string[]
+  details: string[]
+  keyType?: 'sku' | 'text'
+  mapKey?: string
 }
 
 export type AttentionItem = {
@@ -427,7 +435,16 @@ function productKey(line: SalesImportLine) {
 }
 
 function stableProductOrder(rows: ProductReviewRow[]) {
-  return [...rows.filter((row) => !row.mapped), ...rows.filter((row) => row.mapped)]
+  const rank: Record<ProductDisplayStatus, number> = { 'needs-mapping': 0, 'action-required': 1, ready: 2 }
+  return [...rows.filter((row) => rank[row.displayStatus] === 0), ...rows.filter((row) => rank[row.displayStatus] === 1), ...rows.filter((row) => rank[row.displayStatus] === 2)]
+}
+
+export function salesImportLinesForBatch(batchId: string, orders: SalesImportOrder[], lines: SalesImportLine[]) {
+  const owner = new Map(orders.map((order) => [order.id, order.batchId]))
+  return lines.filter((line) => {
+    const ownerBatch = owner.get(line.orderId)
+    return ownerBatch === undefined || ownerBatch === batchId
+  })
 }
 
 function productName(line: SalesImportLine, products: Product[]) {
@@ -437,6 +454,59 @@ function productName(line: SalesImportLine, products: Product[]) {
   const variation = line.variationText?.trim()
   if (variation && variation.toLowerCase() !== line.externalProductName.trim().toLowerCase()) return `${line.externalProductName} — ${variation}`
   return line.externalProductName || 'Unmapped product'
+}
+
+function rememberLineIssue(row: ProductReviewRow, lines: SalesImportLine[]) {
+  for (const line of lines) {
+    if (line.unallocated && !row.reasons.includes('Quantity not yet allocated')) row.reasons.push('Quantity not yet allocated')
+    if (line.quantityReview && !row.reasons.includes('Quantity mismatch')) {
+      row.reasons.push('Quantity mismatch')
+      const picking = line.pickingQuantity ?? line.quantity
+      const awb = line.quantitySource === 'awb' ? line.quantity : undefined
+      if (!row.details.some((detail) => detail.startsWith('Picking:'))) {
+        row.details.push(`Picking: ${picking}`)
+        if (awb !== undefined) {
+          row.details.push(`AWB: ${awb}`)
+          row.details.push(`Difference: ${round2(awb - picking)}`)
+        }
+      }
+    }
+  }
+}
+
+function assignDisplayStatus(rows: ProductReviewRow[], assessment: ImportAssessment, products: Product[]) {
+  const shortIds = new Set(assessment.shortages.map((row) => row.productId))
+  const accountBlocked = assessment.blockers.some((blocker) => /account|acknowledge/i.test(blocker))
+  for (const row of rows) {
+    if (!row.mapped) {
+      row.displayStatus = 'needs-mapping'
+      row.reasons = row.reasons.filter((reason) => reason === 'Quantity not yet allocated' || reason === 'Quantity mismatch')
+      continue
+    }
+    const productId = row.key.startsWith('mapped:') ? row.key.slice('mapped:'.length) : ''
+    const product = products.find((item) => item.id === productId)
+    const componentShort = product ? salesComponentsOf(product).filter((component) => shortIds.has(component.productId)) : []
+    const ownShort = assessment.shortages.find((item) => item.productId === productId)
+    const heldByStock = assessment.shortages.length > 0 && row.needReview > 0 && !ownShort && componentShort.length === 0
+    const reasons: string[] = row.reasons.filter((reason) => reason === 'Quantity not yet allocated' || reason === 'Quantity mismatch')
+    if (ownShort) {
+      reasons.push('Stock shortage')
+      row.details.push(`Required: ${ownShort.required}`, `Available: ${ownShort.available}`, `Short: ${round2(Math.max(0, ownShort.required - ownShort.available))}`)
+    }
+    for (const component of componentShort) {
+      const shortage = assessment.shortages.find((item) => item.productId === component.productId)
+      if (!shortage || reasons.includes('Stock shortage')) continue
+      reasons.push('Stock shortage')
+      row.details.push(`${shortage.name} required ${shortage.required}, available ${shortage.available}`)
+    }
+    if (heldByStock && reasons.length === 0) reasons.push('Held until the stock shortage is resolved')
+    if (accountBlocked && row.needReview > 0 && !reasons.length) reasons.push('Held until the account check is resolved')
+    row.reasons = reasons
+    const open = round2(row.imported - row.confirmed)
+    const ready = row.needReview === 0 && (row.willPost === row.imported || (open > 0 && row.willPost === open) || row.imported === row.confirmed)
+    row.displayStatus = reasons.length || !ready ? 'action-required' : 'ready'
+    if (row.displayStatus === 'ready') row.reasons = []
+  }
 }
 
 export function salesImportProductReview(input: {
@@ -475,12 +545,33 @@ export function salesImportProductReview(input: {
     totals[bucket] = round2(totals[bucket] + group.qty)
     const line = group.lines.find((item) => item.mappedProductId) ?? group.lines[0]
     const key = productKey(line)
-    const row = products.get(key) ?? { key, name: productName(line, input.products), mapped: Boolean(line.mappedProductId), imported: 0, willPost: 0, needReview: 0 }
+    const identity = mappingIdentity(line)
+    const row = products.get(key) ?? {
+      key,
+      name: productName(line, input.products),
+      mapped: Boolean(line.mappedProductId),
+      imported: 0,
+      willPost: 0,
+      needReview: 0,
+      confirmed: 0,
+      displayStatus: line.mappedProductId ? 'ready' : 'needs-mapping',
+      reasons: [],
+      details: [],
+      keyType: line.mappedProductId ? undefined : identity.keyType,
+      mapKey: line.mappedProductId ? undefined : identity.key,
+    }
     row.imported = round2(row.imported + group.qty)
     if (bucket === 'post') row.willPost = round2(row.willPost + group.qty)
     if (bucket === 'review') row.needReview = round2(row.needReview + group.qty)
+    if (bucket === 'confirmed') row.confirmed = round2(row.confirmed + group.qty)
+    if (!row.mapped && !line.mappedProductId && !row.mapKey) {
+      row.keyType = identity.keyType
+      row.mapKey = identity.key
+    }
+    rememberLineIssue(row, group.lines)
     products.set(key, row)
   }
+  assignDisplayStatus([...products.values()], input.assessment, input.products)
   const unaccounted = round2(totals.imported - totals.post - totals.review - totals.confirmed)
   const attentionOrders = (status: SalesImportOrderStatus) => input.orders.filter((order) => statusOf.get(order.id) === status)
   const unitsFor = (orderIds: Set<string>) => {
