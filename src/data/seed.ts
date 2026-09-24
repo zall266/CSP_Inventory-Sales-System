@@ -1338,6 +1338,9 @@ export function createSeedData(): AppData {
     salesImportLines: [],
     salesImportMappings: [],
     salesImportShipments: [],
+    manufacturers: [],
+    halalCertificates: [],
+    halalCompliances: [],
     ...createMainWarehouseLayout(iso(9, 8, 9)),
     ...seedWarehouseOccupancy(iso(9, 8, 16), 'Admin'),
     settings: {

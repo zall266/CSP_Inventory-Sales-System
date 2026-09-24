@@ -31,6 +31,8 @@ export const PERMISSION_KEYS: PermissionKey[] = [
   'receiving.view',
   'receiving.create',
   'receiving.link_purchase',
+  'halal.view',
+  'halal.manage',
   'opening_balance.view',
   'opening_balance.create',
   'inventory.view',
@@ -143,6 +145,7 @@ export const PERMISSION_GROUPS: Array<{ id: string; label: string; keys: Permiss
     label: 'Receiving',
     keys: ['receiving.view', 'receiving.create', 'receiving.link_purchase'],
   },
+  { id: 'halal', label: 'Halal Compliance', keys: ['halal.view', 'halal.manage'] },
   {
     id: 'inventory',
     label: 'Inventory',
@@ -233,6 +236,8 @@ export const PERMISSION_LABELS: Record<PermissionKey, string> = {
   'receiving.view': 'View Receiving',
   'receiving.create': 'Receive Raw Materials',
   'receiving.link_purchase': 'Link Receiving to Purchase',
+  'halal.view': 'View Halal Compliance',
+  'halal.manage': 'Manage Halal Compliance',
   'inventory.view': 'View Inventory',
   'inventory.adjust': 'Adjust Stock',
   'inventory.transfer': 'Stock Transfer',
@@ -299,6 +304,7 @@ export const PERMISSION_LABELS: Record<PermissionKey, string> = {
 }
 
 export const MANUFACTURING_PLAN_PERMISSION_KEYS = ['manufacturing.plan.edit', 'manufacturing.plan.amend'] as const
+export const HALAL_PERMISSION_KEYS = ['halal.view', 'halal.manage'] as const
 
 export function emptyPermissions(): RolePermissions {
   return Object.fromEntries(PERMISSION_KEYS.map((key) => [key, false])) as RolePermissions

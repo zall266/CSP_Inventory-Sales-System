@@ -4,6 +4,7 @@ import { DashboardPage } from '@/features/dashboard/DashboardPage'
 import { PosPage } from '@/features/pos/PosPage'
 import { SalesPage } from '@/features/sales/SalesPage'
 import { SalesImportPage } from '@/features/salesImport/SalesImportPage'
+import { SalesImportMappingsPage } from '@/features/salesImport/SalesImportMappingsPage'
 import { CategoriesPage, ProductsPage, RawMaterialsPage } from '@/features/products/ProductsPage'
 import { PRODUCT_PRICING_PATH, ProductPricingPage } from '@/features/products/ProductPricingPage'
 import { InventoryPage } from '@/features/inventory/InventoryPage'
@@ -36,7 +37,9 @@ import { DeliveryOrdersPage, DeliveryEditorPage, DeliveryDetailPage, DeliveryPri
 import { AgentDetailPage, AgentsPage } from '@/features/agent/AgentPages'
 import { MyTasksPage, TaskCategoriesPage, TaskDetailPage, TaskEditorPage, TaskManagePage } from '@/features/tasks/TaskPages'
 import { NewReceivingPage, ReceivingDetailPage, ReceivingListPage } from '@/features/receiving/ReceivingPages'
+import { Pjkm511PreviewPage, PjkmRecordsPage } from '@/features/pjkm/PjkmPages'
 import { OpeningBalancePage } from '@/features/openingBalance/OpeningBalancePages'
+import { HalalCompliancePage } from '@/features/halal/HalalCompliancePage'
 
 export default function App() {
   return (
@@ -45,10 +48,12 @@ export default function App() {
         <Route path="/print/quotation/:id" element={<QuotationPrintPage />} />
         <Route path="/print/invoice/:id" element={<InvoicePrintPage />} />
         <Route path="/print/delivery/:id" element={<DeliveryPrintPage />} />
+        <Route path="/pjkm/5.1.1" element={<Pjkm511PreviewPage />} />
         <Route element={<AppLayout />}>
           <Route path="/" element={<DashboardPage />} />
           <Route path="/sales" element={<SalesPage />} />
           <Route path="/sales/import" element={<SalesImportPage />} />
+          <Route path="/sales/import/mappings" element={<SalesImportMappingsPage />} />
           <Route path="/sales/import/:batchId" element={<SalesImportPage />} />
           <Route path="/sales/quotations" element={<QuotationsPage />} />
           <Route path="/sales/quotations/new" element={<QuotationEditorPage />} />
@@ -70,11 +75,13 @@ export default function App() {
           <Route path="/customers" element={<CustomersPage />} />
           <Route path="/purchases" element={<PurchasesPage />} />
           <Route path="/purchases/new" element={<NewPurchasePage />} />
+          <Route path="/pjkm" element={<PjkmRecordsPage />} />
           <Route path="/receiving" element={<ReceivingListPage />} />
           <Route path="/receiving/new" element={<NewReceivingPage />} />
           <Route path="/receiving/:id" element={<ReceivingDetailPage />} />
           <Route path="/purchase-returns" element={<PurchaseReturnsPage />} />
           <Route path="/suppliers" element={<SuppliersPage />} />
+          <Route path="/compliance/halal" element={<HalalCompliancePage />} />
           <Route path="/inventory" element={<InventoryPage />} />
           <Route path="/inventory/stock-usage" element={<StockUsagePage />} />
           <Route path="/inventory/to-order" element={<ToOrderPage />} />

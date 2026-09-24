@@ -170,7 +170,7 @@ check(
 const receive = db.createReceiving({
   warehouseId: 'wh-main',
   source: 'shopee',
-  items: [{ productId: a4!.id, qty: 20 }],
+  items: [{ productId: a4!.id, qty: 20, condition: 'Baik' }],
   stockOrderId: order!.id,
 })
 check('CASE 5 Receive 20 through existing receiving', Boolean(receive?.id) && receive?.stockOrderId === order?.id)

@@ -1,5 +1,11 @@
 import { formatUnit, productHasBom, purchaseQtyToBaseQty } from '@/features/products/masterData'
-import type { AppState, Product, Receiving, ReceivingInput, ReceivingLine, ReceivingSource } from '@/types'
+import type { AppState, Product, Receiving, ReceivingCondition, ReceivingInput, ReceivingLine, ReceivingSource } from '@/types'
+
+export const RECEIVING_CONDITIONS: ReceivingCondition[] = ['Baik', 'Tidak Baik', 'Perlu Pemeriksaan']
+
+export function isReceivingCondition(value: string | undefined): value is ReceivingCondition {
+  return RECEIVING_CONDITIONS.includes(value as ReceivingCondition)
+}
 
 export const RECEIVING_PERMISSION_KEYS = ['receiving.view', 'receiving.create', 'receiving.link_purchase'] as const
 
@@ -58,6 +64,7 @@ export function emptyReceivingLine(product: Product | undefined): {
   batchNo: string
   expiry: string
   notes: string
+  condition: string
 } {
   return {
     productId: product?.id ?? '',
@@ -65,6 +72,7 @@ export function emptyReceivingLine(product: Product | undefined): {
     batchNo: '',
     expiry: '',
     notes: '',
+    condition: '',
   }
 }
 
@@ -88,6 +96,9 @@ export function buildReceivingLines(
     if (product.trackExpiry && !expiry) {
       return { ok: false, reason: `Enter an expiry date for ${product.name}.` }
     }
+    if (!isReceivingCondition(item.condition)) {
+      return { ok: false, reason: 'Please select the material condition.' }
+    }
     const unit = product.purchaseUnit || product.unit
     const baseQty = purchaseQtyToBaseQty(qty, product)
     lines.push({
@@ -98,6 +109,7 @@ export function buildReceivingLines(
       batchNo,
       expiry,
       notes: item.notes?.trim() || undefined,
+      condition: item.condition,
     })
   }
   if (!lines.length) return { ok: false, reason: 'Add at least one raw material.' }

@@ -7,6 +7,7 @@ import { companyWarehouses, isCompanyWarehouseId } from '@/features/agent/agentM
 import { formatUnit } from '@/features/products/masterData'
 import {
   RECEIVING_SOURCES,
+  RECEIVING_CONDITIONS,
   emptyReceivingLine,
   isAllowedReceivingPhotoFile,
   receivableRawMaterials,
@@ -126,7 +127,7 @@ export function ReceivingListPage() {
   )
 }
 
-type DraftLine = { productId: string; qty: number; batchNo: string; expiry: string; notes: string }
+type DraftLine = { productId: string; qty: number; batchNo: string; expiry: string; notes: string; condition: string }
 
 export function NewReceivingPage() {
   const state = useStore()
@@ -312,6 +313,19 @@ export function NewReceivingPage() {
                     }
                   />
                 </Field>
+                <Field label="Condition">
+                  <Select
+                    value={line.condition}
+                    onChange={(event) =>
+                      setLines(lines.map((item, i) => (i === index ? { ...item, condition: event.target.value } : item)))
+                    }
+                  >
+                    <option value="">Select condition</option>
+                    {RECEIVING_CONDITIONS.map((condition) => (
+                      <option key={condition} value={condition}>{condition}</option>
+                    ))}
+                  </Select>
+                </Field>
                 <div className="flex items-end justify-between gap-2 lg:col-span-2">
                   <Field label="Line note">
                     <Input
@@ -406,6 +420,7 @@ export function ReceivingDetailPage() {
                   <th>Stock in (base)</th>
                   <th>Batch / lot</th>
                   <th>Expiry</th>
+                  <th>Condition</th>
                 </tr>
               </thead>
               <tbody>
@@ -417,6 +432,7 @@ export function ReceivingDetailPage() {
                     <td className="tabular">{formatQty(line.baseQty)}</td>
                     <td>{line.batchNo || '—'}</td>
                     <td>{line.expiry || '—'}</td>
+                    <td>{line.condition || '—'}</td>
                   </tr>
                 ))}
               </tbody>

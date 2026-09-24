@@ -531,7 +531,7 @@ const milkAllocBeforeRecv = sessionAllocatedQty(afterLoose, bagProduct, 'p-milkp
 const recv = db.createReceiving({
   warehouseId: 'wh-main',
   source: 'direct',
-  items: [{ productId: 'p-sugar', qty: 5 }],
+  items: [{ productId: 'p-sugar', qty: 5, condition: 'Baik' }],
 })
 const afterRecv = db.getSnapshot().productionSessions.find((item) => item.id === 'ps-0910')!
 check('TEST 3 receiving posts warehouse stock', Boolean(recv?.id) && inventoryOf('p-sugar') === round2(sugarBeforeRecv + 5))
