@@ -546,11 +546,17 @@ export type DocumentAuditAction =
   | 'sales_import_awb_imported'
   | 'sales_import_shipment_linked'
   | 'sales_import_shipment_review'
+  | 'manufacturer_created'
+  | 'manufacturer_updated'
+  | 'halal_certificate_created'
+  | 'halal_certificate_updated'
+  | 'halal_compliance_created'
+  | 'halal_compliance_updated'
 
 export type DocumentAuditLog = {
   id: string
   action: DocumentAuditAction
-  documentType: 'quotation' | 'invoice' | 'delivery' | 'agent_sale' | 'agent_withdrawal' | 'staff_task' | 'staff_task_category' | 'opening_balance' | 'sales_return' | 'customer_wholesale_price' | 'stock_order' | 'stock_usage' | 'sales_import'
+  documentType: 'quotation' | 'invoice' | 'delivery' | 'agent_sale' | 'agent_withdrawal' | 'staff_task' | 'staff_task_category' | 'opening_balance' | 'sales_return' | 'customer_wholesale_price' | 'stock_order' | 'stock_usage' | 'sales_import' | 'manufacturer' | 'halal_certificate' | 'halal_compliance'
   documentId: string
   documentNo: string
   field: string
@@ -1250,6 +1256,8 @@ export type PermissionKey =
   | 'receiving.view'
   | 'receiving.create'
   | 'receiving.link_purchase'
+  | 'halal.view'
+  | 'halal.manage'
   | 'opening_balance.view'
   | 'opening_balance.create'
   | 'inventory.view'
@@ -1445,6 +1453,57 @@ export type AppData = {
   salesImportLines: SalesImportLine[]
   salesImportMappings: SalesImportMapping[]
   salesImportShipments: SalesImportShipment[]
+  manufacturers: Manufacturer[]
+  halalCertificates: HalalCertificate[]
+  halalCompliances: RawMaterialHalalCompliance[]
+}
+
+export type HalalVerificationStatus = 'pending' | 'verified'
+
+export type Manufacturer = {
+  id: string
+  name: string
+  registrationNo?: string
+  address?: string
+  contact?: string
+  notes?: string
+  active: boolean
+  createdAt: string
+  createdBy: string
+  updatedAt: string
+  updatedBy: string
+}
+
+export type HalalCertificate = {
+  id: string
+  certificateNo: string
+  issuingAuthority: string
+  issueDate?: string
+  expiryDate: string
+  verificationStatus: HalalVerificationStatus
+  verifiedAt?: string
+  verifiedBy?: string
+  documentFileId?: string
+  documentName?: string
+  documentMime?: string
+  notes?: string
+  createdAt: string
+  createdBy: string
+  updatedAt: string
+  updatedBy: string
+}
+
+export type RawMaterialHalalCompliance = {
+  id: string
+  productId: string
+  manufacturerId: string
+  certificateId: string
+  previousCertificateIds: string[]
+  notes?: string
+  createdAt: string
+  createdBy: string
+  updatedAt: string
+  updatedBy: string
 }
 
 export type SalesImportPlatform = 'shopee' | 'tiktok'

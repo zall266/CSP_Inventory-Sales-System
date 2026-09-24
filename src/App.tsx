@@ -39,6 +39,7 @@ import { MyTasksPage, TaskCategoriesPage, TaskDetailPage, TaskEditorPage, TaskMa
 import { NewReceivingPage, ReceivingDetailPage, ReceivingListPage } from '@/features/receiving/ReceivingPages'
 import { Pjkm511PreviewPage, PjkmRecordsPage } from '@/features/pjkm/PjkmPages'
 import { OpeningBalancePage } from '@/features/openingBalance/OpeningBalancePages'
+import { HalalCompliancePage } from '@/features/halal/HalalCompliancePage'
 
 export default function App() {
   return (
@@ -80,6 +81,7 @@ export default function App() {
           <Route path="/receiving/:id" element={<ReceivingDetailPage />} />
           <Route path="/purchase-returns" element={<PurchaseReturnsPage />} />
           <Route path="/suppliers" element={<SuppliersPage />} />
+          <Route path="/compliance/halal" element={<HalalCompliancePage />} />
           <Route path="/inventory" element={<InventoryPage />} />
           <Route path="/inventory/stock-usage" element={<StockUsagePage />} />
           <Route path="/inventory/to-order" element={<ToOrderPage />} />
