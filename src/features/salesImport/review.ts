@@ -384,6 +384,159 @@ export function salesImportSummary(input: {
   }
 }
 
+export type ProductReviewRow = {
+  key: string
+  name: string
+  mapped: boolean
+  imported: number
+  willPost: number
+  needReview: number
+}
+
+export type AttentionItem = {
+  id: 'quantity' | 'unallocated' | 'unmapped' | 'duplicate' | 'other' | 'inventory'
+  label: string
+  orders: number
+  units: number
+  ok: boolean
+  details: string[]
+}
+
+export type SalesImportReconciliation = {
+  imported: number
+  willPost: number
+  needReview: number
+  alreadyConfirmed: number
+  unaccounted: number
+  ok: boolean
+  products: ProductReviewRow[]
+  attention: AttentionItem[]
+}
+
+type AccountBucket = 'post' | 'review' | 'confirmed' | 'unaccounted'
+
+function accountKey(line: SalesImportLine) {
+  const shared = Boolean(line.unallocated) && (line.sharedOrderCount ?? 0) > 1
+  if (!shared) return `line:${line.id}`
+  return `shared:${line.externalSku ?? ''}:${line.parentSku ?? ''}:${line.externalProductName}:${line.variationText ?? ''}:${line.quantity}:${line.sharedOrderCount}`
+}
+
+function productKey(line: SalesImportLine) {
+  if (line.mappedProductId) return `mapped:${line.mappedProductId}`
+  return `unmapped:${(line.externalSku ?? '').trim()}|${line.externalProductName}|${line.variationText ?? ''}`
+}
+
+function productName(line: SalesImportLine, products: Product[]) {
+  if (line.mappedProductId) {
+    return products.find((item) => item.id === line.mappedProductId)?.name || line.mappedProductSnapshot?.productName || 'Product'
+  }
+  const variation = line.variationText?.trim()
+  if (variation && variation.toLowerCase() !== line.externalProductName.trim().toLowerCase()) return `${line.externalProductName} — ${variation}`
+  return line.externalProductName || 'Unmapped product'
+}
+
+export function salesImportProductReview(input: {
+  assessment: ImportAssessment
+  orders: SalesImportOrder[]
+  lines: SalesImportLine[]
+  products: Product[]
+  takenOrderIds: Set<string>
+}): SalesImportReconciliation {
+  const postIds = new Set(input.assessment.canConfirm ? input.assessment.readyOrderIds : [])
+  const orders = new Map(input.orders.map((order) => [order.id, order]))
+  const statusOf = new Map(input.orders.map((order) => [order.id, liveOrderStatus(order, input.lines, input.takenOrderIds)]))
+  const groups = new Map<string, { qty: number; buckets: Set<AccountBucket>; lines: SalesImportLine[] }>()
+  for (const line of input.lines) {
+    if (!(line.quantity > 0)) continue
+    const order = orders.get(line.orderId)
+    const bucket: AccountBucket = !order
+      ? 'unaccounted'
+      : statusOf.get(order.id) === 'confirmed'
+        ? 'confirmed'
+        : postIds.has(order.id)
+          ? 'post'
+          : 'review'
+    const key = accountKey(line)
+    const group = groups.get(key) ?? { qty: line.quantity, buckets: new Set<AccountBucket>(), lines: [] }
+    group.buckets.add(bucket)
+    group.lines.push(line)
+    if (group.qty !== line.quantity) group.buckets.add('unaccounted')
+    groups.set(key, group)
+  }
+  const totals = { post: 0, review: 0, confirmed: 0, unaccounted: 0, imported: 0 }
+  const products = new Map<string, ProductReviewRow>()
+  for (const group of groups.values()) {
+    totals.imported = round2(totals.imported + group.qty)
+    const bucket: AccountBucket = group.buckets.size === 1 ? [...group.buckets][0] : 'unaccounted'
+    totals[bucket] = round2(totals[bucket] + group.qty)
+    const line = group.lines[0]
+    const key = productKey(line)
+    const row = products.get(key) ?? { key, name: productName(line, input.products), mapped: Boolean(line.mappedProductId), imported: 0, willPost: 0, needReview: 0 }
+    row.imported = round2(row.imported + group.qty)
+    if (bucket === 'post') row.willPost = round2(row.willPost + group.qty)
+    if (bucket === 'review') row.needReview = round2(row.needReview + group.qty)
+    products.set(key, row)
+  }
+  const unaccounted = round2(totals.imported - totals.post - totals.review - totals.confirmed)
+  const attentionOrders = (status: SalesImportOrderStatus) => input.orders.filter((order) => statusOf.get(order.id) === status)
+  const unitsFor = (orderIds: Set<string>) => {
+    const seen = new Set<string>()
+    let qty = 0
+    for (const line of input.lines) {
+      if (!orderIds.has(line.orderId) || !(line.quantity > 0)) continue
+      const key = accountKey(line)
+      if (seen.has(key)) continue
+      seen.add(key)
+      qty = round2(qty + line.quantity)
+    }
+    return qty
+  }
+  const quantityOrders = attentionOrders('error').filter((order) => input.lines.some((line) => line.orderId === order.id && line.quantityReview))
+  const otherOrders = attentionOrders('error').filter((order) => !quantityOrders.some((item) => item.id === order.id))
+  const detailFor = (list: SalesImportOrder[], kind: 'quantity' | 'unallocated') => {
+    const rows = new Map<string, { name: string; qty: number }>()
+    const seen = new Set<string>()
+    for (const order of list) {
+      for (const line of input.lines.filter((item) => item.orderId === order.id)) {
+        if (kind === 'quantity' && !line.quantityReview) continue
+        if (kind === 'unallocated' && !line.unallocated) continue
+        const key = `${productKey(line)}|${accountKey(line)}`
+        if (seen.has(key)) continue
+        seen.add(key)
+        const current = rows.get(productKey(line)) ?? { name: productName(line, input.products), qty: 0 }
+        current.qty = round2(current.qty + line.quantity)
+        rows.set(productKey(line), current)
+      }
+    }
+    return [...rows.values()].map((row) => kind === 'unallocated'
+      ? `${row.name} — ${row.qty} imported / 0 allocated / ${row.qty} unallocated`
+      : `${row.name} — ${row.qty} in quantity review`)
+  }
+  const quantityIds = new Set(quantityOrders.map((order) => order.id))
+  const unallocatedIds = new Set(attentionOrders('unallocated').map((order) => order.id))
+  const unmappedIds = new Set(attentionOrders('unmapped').map((order) => order.id))
+  const duplicateIds = new Set(attentionOrders('duplicate').map((order) => order.id))
+  const otherIds = new Set(otherOrders.map((order) => order.id))
+  const attention: AttentionItem[] = [
+    { id: 'quantity', label: 'Quantity Review', orders: quantityOrders.length, units: unitsFor(quantityIds), ok: quantityOrders.length === 0, details: detailFor(quantityOrders, 'quantity') },
+    { id: 'unallocated', label: 'Unallocated Quantity', orders: unallocatedIds.size, units: unitsFor(unallocatedIds), ok: unallocatedIds.size === 0, details: detailFor(attentionOrders('unallocated'), 'unallocated') },
+    { id: 'unmapped', label: 'Unmapped', orders: unmappedIds.size, units: unitsFor(unmappedIds), ok: unmappedIds.size === 0, details: [] },
+    { id: 'duplicate', label: 'Duplicate', orders: duplicateIds.size, units: unitsFor(duplicateIds), ok: duplicateIds.size === 0, details: [] },
+    { id: 'other', label: 'Other Errors', orders: otherIds.size, units: unitsFor(otherIds), ok: otherIds.size === 0 && input.assessment.blockers.length === 0, details: input.assessment.blockers },
+    { id: 'inventory', label: 'Inventory', orders: input.assessment.shortages.length, units: input.assessment.shortages.reduce((sum, row) => round2(sum + Math.max(0, row.required - row.available)), 0), ok: input.assessment.shortages.length === 0, details: input.assessment.shortages.map((row) => `${row.name} — required ${row.required}, available ${row.available}`) },
+  ]
+  return {
+    imported: totals.imported,
+    willPost: totals.post,
+    needReview: totals.review,
+    alreadyConfirmed: totals.confirmed,
+    unaccounted,
+    ok: unaccounted === 0,
+    products: [...products.values()].sort((a, b) => a.name.localeCompare(b.name)),
+    attention,
+  }
+}
+
 function attentionReason(status: SalesImportOrderStatus, assessment: ImportAssessment) {
   if (status === 'duplicate') return 'Duplicate'
   if (status === 'unallocated') return 'Unallocated quantity'
