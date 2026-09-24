@@ -458,7 +458,7 @@ function productName(line: SalesImportLine, products: Product[]) {
 
 function rememberLineIssue(row: ProductReviewRow, lines: SalesImportLine[]) {
   for (const line of lines) {
-    if (line.unallocated && !row.reasons.includes('Quantity not yet allocated')) row.reasons.push('Quantity not yet allocated')
+    if (line.unallocated && !row.reasons.includes('Shared quantity is not ready to post.')) row.reasons.push('Shared quantity is not ready to post.')
     if (line.quantityReview && !row.reasons.includes('Quantity mismatch')) {
       row.reasons.push('Quantity mismatch')
       const picking = line.pickingQuantity ?? line.quantity
@@ -476,19 +476,17 @@ function rememberLineIssue(row: ProductReviewRow, lines: SalesImportLine[]) {
 
 function assignDisplayStatus(rows: ProductReviewRow[], assessment: ImportAssessment, products: Product[]) {
   const shortIds = new Set(assessment.shortages.map((row) => row.productId))
-  const accountBlocked = assessment.blockers.some((blocker) => /account|acknowledge/i.test(blocker))
   for (const row of rows) {
     if (!row.mapped) {
       row.displayStatus = 'needs-mapping'
-      row.reasons = row.reasons.filter((reason) => reason === 'Quantity not yet allocated' || reason === 'Quantity mismatch')
+      row.reasons = row.reasons.filter((reason) => reason === 'Shared quantity is not ready to post.' || reason === 'Quantity mismatch')
       continue
     }
     const productId = row.key.startsWith('mapped:') ? row.key.slice('mapped:'.length) : ''
     const product = products.find((item) => item.id === productId)
     const componentShort = product ? salesComponentsOf(product).filter((component) => shortIds.has(component.productId)) : []
     const ownShort = assessment.shortages.find((item) => item.productId === productId)
-    const heldByStock = assessment.shortages.length > 0 && row.needReview > 0 && !ownShort && componentShort.length === 0
-    const reasons: string[] = row.reasons.filter((reason) => reason === 'Quantity not yet allocated' || reason === 'Quantity mismatch')
+    const reasons: string[] = row.reasons.filter((reason) => reason === 'Shared quantity is not ready to post.' || reason === 'Quantity mismatch')
     if (ownShort) {
       reasons.push('Stock shortage')
       row.details.push(`Required: ${ownShort.required}`, `Available: ${ownShort.available}`, `Short: ${round2(Math.max(0, ownShort.required - ownShort.available))}`)
@@ -499,12 +497,9 @@ function assignDisplayStatus(rows: ProductReviewRow[], assessment: ImportAssessm
       reasons.push('Stock shortage')
       row.details.push(`${shortage.name} required ${shortage.required}, available ${shortage.available}`)
     }
-    if (heldByStock && reasons.length === 0) reasons.push('Held until the stock shortage is resolved')
-    if (accountBlocked && row.needReview > 0 && !reasons.length) reasons.push('Held until the account check is resolved')
+    if (!reasons.length && row.willPost > 0 && row.needReview > 0) reasons.push('Not all of this quantity can be imported yet.')
     row.reasons = reasons
-    const open = round2(row.imported - row.confirmed)
-    const ready = row.needReview === 0 && (row.willPost === row.imported || (open > 0 && row.willPost === open) || row.imported === row.confirmed)
-    row.displayStatus = reasons.length || !ready ? 'action-required' : 'ready'
+    row.displayStatus = reasons.length ? 'action-required' : 'ready'
     if (row.displayStatus === 'ready') row.reasons = []
   }
 }

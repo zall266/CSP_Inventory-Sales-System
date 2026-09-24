@@ -11,6 +11,7 @@ Object.defineProperty(globalThis, 'localStorage', {
 })
 Object.defineProperty(globalThis, 'window', { value: globalThis })
 
+import { readFileSync } from 'node:fs'
 import { assessSalesImport, salesImportActions, salesImportLinesForBatch, salesImportProductReview } from '@/features/salesImport/review'
 import { confirmSaleEnabled } from '@/features/salesImport/spotCheck'
 import type { ImportBatch, ImportFile, Product, SalesImportAccount, SalesImportLine, SalesImportOrder } from '@/types'
@@ -178,7 +179,7 @@ const sharedUnmapped = run(
   [waffle],
 )
 const sharedRow = sharedUnmapped.review.products[0]
-check('WB-H. Unallocated shared product shows Needs Mapping and a reason', sharedRow?.displayStatus === 'needs-mapping' && sharedRow.reasons.includes('Quantity not yet allocated') && sharedRow.imported === 6 && Boolean(sharedRow.mapKey))
+check('WB-H. Shared quantity uses staff wording and stays Needs Mapping', sharedRow?.displayStatus === 'needs-mapping' && sharedRow.reasons.includes('Shared quantity is not ready to post.') && !sharedRow.reasons.some((reason) => /unallocated|not yet allocated/i.test(reason)) && sharedRow.imported === 6 && Boolean(sharedRow.mapKey))
 const sharedMapped = run(
   [order('su1', '260922I0000001'), order('su2', '260922I0000002')],
   [
@@ -187,7 +188,9 @@ const sharedMapped = run(
   ],
   [waffle],
 )
-check('WB-H2. Shared mapping survives recalculation', sharedMapped.review.products.length === 1 && sharedMapped.review.products[0].name === 'Tepung Waffle' && sharedMapped.review.products[0].reasons.includes('Quantity not yet allocated') && sharedMapped.review.imported === 6)
+check('WB-H2. Shared mapping survives recalculation', sharedMapped.review.products.length === 1 && sharedMapped.review.products[0].name === 'Tepung Waffle' && sharedMapped.review.products[0].reasons.includes('Shared quantity is not ready to post.') && sharedMapped.review.imported === 6)
+const pageSrc = readFileSync('src/features/salesImport/SalesImportPage.tsx', 'utf8')
+check('UI-A. Primary page has no secondary workbench cards', !pageSrc.includes('Order Details') && !pageSrc.includes('Shipments & AWB') && !pageSrc.includes('Import History') && !pageSrc.includes('Action required') && !pageSrc.includes('not accounted for') && !pageSrc.includes('Quantity not yet allocated') && pageSrc.includes('Upload Picking List') && pageSrc.includes('Upload AWB'))
 const batchA = { ...batch, id: 'batch-a' }
 const batchB = { ...batch, id: 'batch-b' }
 const ordersA = [{ ...order('oa', '260922J0000001'), batchId: 'batch-a' }]
