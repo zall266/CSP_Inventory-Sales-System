@@ -1,0 +1,185 @@
+.bmr-root {
+  min-height: 100vh;
+  background: #e2e8f0;
+  color: #000;
+}
+
+.bmr-sheet {
+  box-sizing: border-box;
+  width: 210mm;
+  margin: 0 auto 16px;
+  padding: 10mm 12mm 12mm;
+  background: #fff;
+  color: #000;
+  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.12);
+  font-family: Arial, Helvetica, sans-serif;
+}
+
+.bmr-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.bmr-identity {
+  padding-top: 1px;
+}
+
+.bmr-company {
+  font-size: 16px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
+.bmr-doc,
+.bmr-effective {
+  margin-top: 2px;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.bmr-control {
+  width: 62mm;
+  flex: 0 0 62mm;
+  border-collapse: collapse;
+  font-size: 11px;
+}
+
+.bmr-control th,
+.bmr-control td {
+  height: 18px;
+  border: 1px solid #000;
+  padding: 2px 6px;
+  text-align: left;
+  vertical-align: middle;
+  line-height: 1.2;
+}
+
+.bmr-control th {
+  width: 46%;
+  font-weight: 600;
+}
+
+.bmr-note {
+  margin: 4px 0 0;
+  font-size: 9px;
+  font-style: italic;
+}
+
+.bmr-write td {
+  height: 28px;
+}
+
+.bmr-title {
+  margin: 12px 0 8px;
+  text-align: center;
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.bmr-meta,
+.bmr-grid {
+  width: 100%;
+  border-collapse: collapse;
+  table-layout: fixed;
+}
+
+.bmr-meta th,
+.bmr-meta td,
+.bmr-grid th,
+.bmr-grid td {
+  border: 1px solid #000;
+  padding: 4px 6px;
+  vertical-align: top;
+  text-align: left;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.bmr-meta {
+  font-size: 11px;
+}
+
+.bmr-meta th {
+  width: 28%;
+  font-weight: 700;
+}
+
+.bmr-section {
+  margin: 12px 0 4px;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.bmr-grid {
+  font-size: 9px;
+}
+
+.bmr-grid th {
+  font-weight: 700;
+  line-height: 1.2;
+}
+
+.bmr-grid tbody td {
+  height: 22px;
+}
+
+.bmr-sign td {
+  height: 36px;
+}
+
+.bmr-keep {
+  break-inside: avoid;
+  page-break-inside: avoid;
+}
+
+
+@media (max-width: 800px) {
+  .bmr-sheet {
+    width: 100%;
+    margin-bottom: 12px;
+    zoom: 0.42;
+  }
+}
+
+@page bmr {
+  size: A4 portrait;
+  margin: 10mm 10mm 14mm;
+  @bottom-center {
+    content: counter(page) " of " counter(pages);
+    font-family: Arial, Helvetica, sans-serif;
+    font-size: 9px;
+  }
+}
+
+@media print {
+  .bmr-root {
+    page: bmr;
+    min-height: 0 !important;
+    background: #fff !important;
+  }
+  .bmr-root,
+  .bmr-root > div {
+    margin: 0 !important;
+    padding: 0 !important;
+    min-height: 0 !important;
+  }
+  .bmr-sheet {
+    width: auto;
+    margin: 0;
+    padding: 0;
+    zoom: 1;
+    box-shadow: none;
+    break-after: auto;
+    page-break-after: auto;
+  }
+  .bmr-grid thead {
+    display: table-header-group;
+  }
+  .bmr-grid tr,
+  .bmr-keep {
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+}

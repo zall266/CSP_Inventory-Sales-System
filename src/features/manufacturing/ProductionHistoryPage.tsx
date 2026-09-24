@@ -8,6 +8,7 @@ import { formatUnit } from '@/features/products/masterData'
 import { originSessionForLine, sessionTotals } from './sessionPlan'
 import { allocationLabel, expectedRemainingQty, usesPurchaseUnitSplit } from './materialClosing'
 import { hasPermission } from '@/features/settings/permissions'
+import { canPrintBmr } from '@/features/manufacturing/bmrModel'
 
 export function SessionEditDeniedPage() {
   return (
@@ -118,6 +119,7 @@ export function ProductionSessionDetailPage() {
         subtitle={`Daily session · ${formatDate(session.productionDate + 'T00:00:00+08:00')}`}
         actions={
           <div className="flex gap-2">
+            {canPrintBmr(session) && <Link to={`/manufacturing/bmr/${session.id}`}><Button>Print BMR</Button></Link>}
             {allowEdit && <Link to={`/manufacturing/history/${session.id}/edit`}><Button>Edit completed production</Button></Link>}
             <Button variant="secondary" onClick={() => navigate('/manufacturing/history')}>Back</Button>
           </div>
