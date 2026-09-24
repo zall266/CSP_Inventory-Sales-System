@@ -229,68 +229,75 @@ export function HalalCompliancePage() {
         onClose={() => setMode('closed')}
         title={mode === 'edit' ? 'Edit Halal Compliance' : 'Register Halal Compliance'}
         subtitle={row?.productName}
+        width="max-w-[28rem]"
       >
         {row && (
-          <div className="space-y-4">
-            <Field label="Product">
-              <Input value={`${row.productName}${row.sku ? ` · ${row.sku}` : ''}`} readOnly />
-            </Field>
-            <Field label="Manufacturer / Factory">
-              <Select aria-label="Manufacturer" value={manufacturerId} onChange={(event) => setManufacturerId(event.target.value)}>
-                <option value="">Select Manufacturer</option>
-                {manufacturers.map((item) => (
-                  <option key={item.id} value={item.id}>{item.name}</option>
-                ))}
-              </Select>
-            </Field>
-            {canManage && <Button variant="secondary" onClick={() => setManufacturerOpen(true)}>+ Add Manufacturer</Button>}
-            <Field label="Halal Certificate" hint={fileError || 'PDF, JPG, or PNG'}>
-              <Input
-                aria-label="Upload Certificate"
-                type="file"
-                accept="application/pdf,image/jpeg,image/png,.pdf,.jpg,.jpeg,.png"
-                onChange={(event) => {
-                  const next = event.target.files?.[0] ?? null
-                  const error = next ? validateHalalDocument(next) : ''
-                  setFile(error ? null : next)
-                  setFileError(error)
-                }}
-              />
-            </Field>
-            {(file || row.documentName) && (
-              <div className="flex items-center gap-3 text-sm text-slate-700">
-                <span>📄 {file?.name || row.documentName}</span>
-                {row.documentFileId && !file && (
-                  <button type="button" className="text-indigo-600" onClick={() => void viewDocument(row.documentFileId)}>View</button>
+          <div className="flex min-h-full flex-col">
+            <div className="flex-1 space-y-4 px-6 py-5">
+              <Field label="Product">
+                <Input value={`${row.productName}${row.sku ? ` · ${row.sku}` : ''}`} readOnly />
+              </Field>
+              <div className="space-y-2">
+                <Field label="Manufacturer / Factory">
+                  <Select aria-label="Manufacturer" value={manufacturerId} onChange={(event) => setManufacturerId(event.target.value)}>
+                    <option value="">Select Manufacturer</option>
+                    {manufacturers.map((item) => (
+                      <option key={item.id} value={item.id}>{item.name}</option>
+                    ))}
+                  </Select>
+                </Field>
+                {canManage && (
+                  <Button size="sm" variant="secondary" onClick={() => setManufacturerOpen(true)}>+ Add Manufacturer</Button>
                 )}
               </div>
-            )}
-            <Field label="Expiry Date">
-              <Input aria-label="Expiry Date" type="date" value={expiryDate} onChange={(event) => setExpiryDate(event.target.value)} />
-            </Field>
-            {mode === 'edit' && (
-              <Button variant="secondary" onClick={() => setShowHistory((value) => !value)}>View History</Button>
-            )}
-            {showHistory && (
-              <div className="space-y-2 rounded-xl border border-slate-100 p-3 text-sm">
-                {historyIds.length === 0 && <div className="text-slate-500">No earlier certificates.</div>}
-                {historyIds.map((id) => {
-                  const certificate = certificates.find((item) => item.id === id)
-                  if (!certificate) return null
-                  return (
-                    <div key={id} className="border-b border-slate-50 pb-2 last:border-0">
-                      <div className="font-medium">{certificate.documentName || 'Certificate'}</div>
-                      <div className="text-slate-500">Expiry {formatDate(certificate.expiryDate)}</div>
-                      <div className="text-slate-500">{certificate.verificationStatus === 'verified' ? `Verified${certificate.verifiedBy ? ` by ${certificate.verifiedBy}` : ''}` : 'Pending Verification'}</div>
-                      {certificate.documentFileId && (
-                        <button type="button" className="text-indigo-600" onClick={() => void viewDocument(certificate.documentFileId)}>View Certificate</button>
-                      )}
-                    </div>
-                  )
-                })}
-              </div>
-            )}
-            <div className="flex justify-end gap-2">
+              <Field label="Halal Certificate" hint={fileError || 'PDF, JPG, or PNG'}>
+                <Input
+                  aria-label="Upload Certificate"
+                  type="file"
+                  accept="application/pdf,image/jpeg,image/png,.pdf,.jpg,.jpeg,.png"
+                  onChange={(event) => {
+                    const next = event.target.files?.[0] ?? null
+                    const error = next ? validateHalalDocument(next) : ''
+                    setFile(error ? null : next)
+                    setFileError(error)
+                  }}
+                />
+              </Field>
+              {(file || row.documentName) && (
+                <div className="-mt-2 flex items-center gap-3 text-sm text-slate-700">
+                  <span>📄 {file?.name || row.documentName}</span>
+                  {row.documentFileId && !file && (
+                    <button type="button" className="text-indigo-600" onClick={() => void viewDocument(row.documentFileId)}>View</button>
+                  )}
+                </div>
+              )}
+              <Field label="Expiry Date">
+                <Input aria-label="Expiry Date" type="date" value={expiryDate} onChange={(event) => setExpiryDate(event.target.value)} />
+              </Field>
+              {mode === 'edit' && (
+                <Button size="sm" variant="secondary" onClick={() => setShowHistory((value) => !value)}>View History</Button>
+              )}
+              {showHistory && (
+                <div className="space-y-2 rounded-xl border border-slate-100 p-3 text-sm">
+                  {historyIds.length === 0 && <div className="text-slate-500">No earlier certificates.</div>}
+                  {historyIds.map((id) => {
+                    const certificate = certificates.find((item) => item.id === id)
+                    if (!certificate) return null
+                    return (
+                      <div key={id} className="border-b border-slate-50 pb-2 last:border-0">
+                        <div className="font-medium">{certificate.documentName || 'Certificate'}</div>
+                        <div className="text-slate-500">Expiry {formatDate(certificate.expiryDate)}</div>
+                        <div className="text-slate-500">{certificate.verificationStatus === 'verified' ? `Verified${certificate.verifiedBy ? ` by ${certificate.verifiedBy}` : ''}` : 'Pending Verification'}</div>
+                        {certificate.documentFileId && (
+                          <button type="button" className="text-indigo-600" onClick={() => void viewDocument(certificate.documentFileId)}>View Certificate</button>
+                        )}
+                      </div>
+                    )
+                  })}
+                </div>
+              )}
+            </div>
+            <div className="sticky bottom-0 mt-auto flex justify-end gap-2 border-t border-slate-100 bg-white px-6 py-4">
               <Button variant="secondary" onClick={() => setMode('closed')}>Cancel</Button>
               <Button onClick={() => void saveCompliance()} disabled={!canManage}>Save</Button>
             </div>
