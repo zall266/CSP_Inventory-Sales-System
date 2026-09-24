@@ -134,9 +134,6 @@
   page-break-inside: avoid;
 }
 
-.bmr-page-no::before {
-  content: counter(page) " of " counter(pages);
-}
 
 @media (max-width: 800px) {
   .bmr-sheet {

@@ -73,7 +73,7 @@ function BmrDocumentView({ record }: { record: BmrDocument }) {
 
 function Letterhead() {
   return (
-    <header className="bmr-head">
+    <div className="bmr-head">
       <div className="bmr-identity">
         <div className="bmr-company">{BMR_COMPANY}</div>
         <div className="bmr-doc">{BMR_DOCUMENT}</div>
@@ -84,10 +84,9 @@ function Letterhead() {
           <tr><th>Document</th><td>BMR</td></tr>
           <tr><th>Effective Date</th><td>{BMR_EFFECTIVE_DATE}</td></tr>
           <tr><th>Version</th><td>1</td></tr>
-          <tr><th>Page</th><td className="bmr-page-no" /></tr>
         </tbody>
       </table>
-    </header>
+    </div>
   )
 }
 

@@ -318,7 +318,7 @@ check('multi-product filling uses total packs', multiSchedule?.process[2].timeSt
 check('print page is one flowing sheet', pageSource.includes('BmrDocumentView') && !pageSource.includes('continued') && !pageSource.includes('page-break-before'))
 check('page count is a print counter, not a fixed total', css.includes('counter(page)') && css.includes('counter(pages)') && !css.includes('page-break-after: always'))
 check('print page is A4 portrait', css.includes('size: A4 portrait'))
-check('header is a two-column letterhead', pageSource.includes('bmr-head') && pageSource.includes('bmr-control') && pageSource.includes('bmr-page-no'))
+check('header is a two-column letterhead', pageSource.includes('bmr-head') && pageSource.includes('bmr-control') && !pageSource.includes('<header'))
 check('material table header repeats on print', css.includes('display: table-header-group'))
 check('final approval stays together', css.includes('.bmr-keep') && pageSource.includes('bmr-keep'))
 check('effective date is on the print page path', pageSource.includes('BMR_EFFECTIVE_DATE') && BMR_EFFECTIVE_DATE === '01st JUNE 2026')
