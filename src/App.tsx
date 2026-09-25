@@ -39,7 +39,7 @@ import { DeliveryOrdersPage, DeliveryEditorPage, DeliveryDetailPage, DeliveryPri
 import { AgentDetailPage, AgentsPage } from '@/features/agent/AgentPages'
 import { MyTasksPage, TaskCategoriesPage, TaskDetailPage, TaskEditorPage, TaskManagePage } from '@/features/tasks/TaskPages'
 import { NewReceivingPage, ReceivingDetailPage, ReceivingListPage } from '@/features/receiving/ReceivingPages'
-import { Pjkm511PreviewPage, PjkmRecordsPage } from '@/features/pjkm/PjkmPages'
+import { Pjkm1011PreviewPage, Pjkm511PreviewPage, PjkmRecordsPage } from '@/features/pjkm/PjkmPages'
 import { OpeningBalancePage } from '@/features/openingBalance/OpeningBalancePages'
 import { HalalCompliancePage } from '@/features/halal/HalalCompliancePage'
 
@@ -51,6 +51,7 @@ export default function App() {
         <Route path="/print/invoice/:id" element={<InvoicePrintPage />} />
         <Route path="/print/delivery/:id" element={<DeliveryPrintPage />} />
         <Route path="/pjkm/5.1.1" element={<Pjkm511PreviewPage />} />
+        <Route path="/pjkm/10.1.1" element={<Pjkm1011PreviewPage />} />
         <Route path="/manufacturing/bmr/:sessionId" element={<BmrPrintPage />} />
         <Route element={<AppLayout />}>
           <Route path="/" element={<DashboardPage />} />
