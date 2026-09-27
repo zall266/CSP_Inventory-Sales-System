@@ -166,7 +166,7 @@ export function Pjkm1011PreviewPage() {
         </div>
       </div>
       {report.attention.length > 0 && (
-        <div className="no-print mx-auto mt-4 max-w-[297mm] rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-950">
+        <div className="no-print mx-auto mt-4 max-w-[186mm] rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-950">
           Some fields require manual review. Blank cells are not filled in.
         </div>
       )}
@@ -178,26 +178,33 @@ export function Pjkm1011PreviewPage() {
 }
 
 function Pjkm1011Sheet({ page, monthLabel: period }: { page: Pjkm1011Page; monthLabel: string }) {
+  const first = page.page === 1
   return (
     <section className="pjkm1011-sheet">
-      <div className="pjkm1011-head">
-        <div>
-          <div className="pjkm1011-company">{PJKM_1011.company}</div>
-          <div className="pjkm1011-manual">{PJKM_1011.manual}</div>
-          <div className="pjkm1011-manual">{PJKM_1011.control}</div>
-        </div>
-        <table className="pjkm1011-control">
-          <tbody>
-            <tr><th>No. Dokumen</th><td>{PJKM_1011.documentNo}</td></tr>
-            <tr><th>Tarikh Berkuatkuasa</th><td>{PJKM_1011.effectiveDate}</td></tr>
-            <tr><th>Versi</th><td>{PJKM_1011.version}</td></tr>
-            <tr><th>Muka Surat</th><td>{page.label}</td></tr>
-          </tbody>
-        </table>
-      </div>
-      <div className="pjkm1011-sub">{PJKM_1011.subtopic}</div>
-      <div className="pjkm1011-title">{PJKM_1011.title}</div>
-      <div className="pjkm1011-month">{period}</div>
+      {first ? (
+        <>
+          <div className="pjkm1011-head">
+            <div>
+              <div className="pjkm1011-company">{PJKM_1011.company}</div>
+              <div className="pjkm1011-manual">{PJKM_1011.manual}</div>
+              <div className="pjkm1011-manual">{PJKM_1011.control}</div>
+            </div>
+            <table className="pjkm1011-control">
+              <tbody>
+                <tr><th>No. Dokumen</th><td>{PJKM_1011.documentNo}</td></tr>
+                <tr><th>Tarikh Berkuatkuasa</th><td>{PJKM_1011.effectiveDate}</td></tr>
+                <tr><th>Versi</th><td>{PJKM_1011.version}</td></tr>
+                <tr><th>Muka Surat</th><td>{page.label}</td></tr>
+              </tbody>
+            </table>
+          </div>
+          <div className="pjkm1011-sub">{PJKM_1011.subtopic}</div>
+          <div className="pjkm1011-title">{PJKM_1011.title}</div>
+          <div className="pjkm1011-month">{period}</div>
+        </>
+      ) : (
+        <div className="pjkm1011-page">Muka Surat {page.label}</div>
+      )}
       <table className="pjkm1011-grid">
         <thead>
           <tr>

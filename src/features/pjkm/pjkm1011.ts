@@ -13,8 +13,18 @@ export const PJKM_1011 = {
   title: 'REKOD 10.1.1 : REKOD PENGEDAR / PENJUAL',
 } as const
 
-/** Landscape rows are taller than 5.1.1. Budget is weighted lines, not a fixed page count. */
-export const PJKM_1011_ROW_BUDGET = 14
+/**
+ * A4 portrait content box used by the app print page (297mm minus 14mm top and 18mm bottom).
+ * Row capacity is the leftover millimetres after the header, not a fixed row count.
+ */
+const PAGE_INNER_MM = 297 - 14 - 18
+const SHEET_PAD_MM = 8
+const FIRST_CHROME_MM = 42
+const TABLE_HEAD_MM = 14
+const LINE_MM = 4.6
+
+export const PJKM_1011_FIRST_BODY_MM = PAGE_INNER_MM - SHEET_PAD_MM - FIRST_CHROME_MM - TABLE_HEAD_MM
+export const PJKM_1011_NEXT_BODY_MM = PAGE_INNER_MM - SHEET_PAD_MM - TABLE_HEAD_MM
 
 const FINISHED_CATEGORIES = new Set(['cat-air', 'cat-ice', 'cat-waffle'])
 const IN_TYPES = new Set(['production_in', 'receiving', 'opening_balance', 'opening_stock', 'sales_return', 'sales_return_good'])
@@ -221,15 +231,49 @@ export function pjkm1011QtyText(value: number | null) {
   return qtyText(value)
 }
 
-export function paginatePjkm1011(rows: Pjkm1011Row[], rowBudget = PJKM_1011_ROW_BUDGET): Pjkm1011Page[] {
+function wrappedLines(value: string, chars: number) {
+  if (!value) return 1
+  return value.split('\n').reduce((sum, part) => sum + Math.max(1, Math.ceil(part.length / Math.max(chars, 1))), 0)
+}
+
+/** Lines this row occupies once the 11 portrait columns wrap. */
+export function pjkm1011RowLines(row: Pjkm1011Row) {
+  return Math.max(
+    1,
+    wrappedLines(String(row.bil), 4),
+    wrappedLines(row.product, 14),
+    wrappedLines(row.tarikhBuat, 10),
+    wrappedLines(row.tarikhLuput, 10),
+    wrappedLines(qtyText(row.qtyIn), 7),
+    wrappedLines(row.tempatSimpan, 12),
+    wrappedLines(row.seller, 12),
+    wrappedLines(row.tarikhEdar, 10),
+    wrappedLines(qtyText(row.qtyOut), 7),
+    wrappedLines(row.batchNo, 6),
+    wrappedLines(qtyText(row.baki), 6),
+  )
+}
+
+export function paginatePjkm1011(
+  rows: Pjkm1011Row[],
+  limits?: { firstMm?: number; nextMm?: number },
+): Pjkm1011Page[] {
+  const firstMm = limits?.firstMm ?? PJKM_1011_FIRST_BODY_MM
+  const nextMm = limits?.nextMm ?? PJKM_1011_NEXT_BODY_MM
   const pages: Pjkm1011Row[][] = []
   let current: Pjkm1011Row[] = []
+  let used = 0
+  let budget = firstMm
   for (const row of rows) {
-    if (current.length >= rowBudget) {
+    const height = pjkm1011RowLines(row) * LINE_MM
+    if (current.length && used + height > budget) {
       pages.push(current)
       current = []
+      used = 0
+      budget = nextMm
     }
     current.push(row)
+    used += height
   }
   if (current.length || pages.length === 0) pages.push(current)
   const count = Math.max(pages.length, 1)
@@ -248,7 +292,6 @@ export function buildPjkm1011(input: {
   products: Product[]
   warehouses: Warehouse[]
   sessions: ProductionSession[]
-  rowBudget?: number
 }) {
   const finished = pjkm1011FinishedIds(input.products, input.sessions, input.movements)
   const events = buildEvents({
@@ -384,7 +427,7 @@ export function buildPjkm1011(input: {
   rows.forEach((row, index) => {
     row.bil = index + 1
   })
-  const pages = paginatePjkm1011(rows, input.rowBudget)
+  const pages = paginatePjkm1011(rows)
   return {
     rows,
     pages,
