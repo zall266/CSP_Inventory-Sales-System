@@ -11,7 +11,7 @@ Object.defineProperty(globalThis, 'localStorage', { value: localStoragePolyfill 
 Object.defineProperty(globalThis, 'window', { value: globalThis })
 
 import { readFileSync } from 'node:fs'
-import { buildPjkm1011, paginatePjkm1011, pjkm1011Seller } from '@/features/pjkm/pjkm1011'
+import { buildPjkm1011, paginatePjkm1011, pjkm1011RowLines, pjkm1011Seller } from '@/features/pjkm/pjkm1011'
 import type { Product, ProductionSession, Sale, StockMovement, Warehouse } from '@/types'
 
 const results: Array<{ name: string; ok: boolean }> = []
@@ -111,9 +111,25 @@ check('18. Void reversal comes back in on the void date', ibMain.some((row) => r
 check('19. Multiple products are separate rows', new Set(report.rows.map((row) => row.productId)).size >= 3)
 check('20. Multiple warehouses stay separate', report.rows.some((row) => row.warehouseId === 'wh-shop' && row.baki === -4) && !ab.some((row) => row.warehouseId === 'wh-shop'))
 check('21. October and unused packaging are excluded', !report.rows.some((row) => row.dateKey.startsWith('2026-10') || row.productId === 'p-cup'))
-const pages = paginatePjkm1011(report.rows, 2)
-check('22. Dynamic pagination grows with the row count', pages.length > 1 && pages[0].label === `1 of ${pages.length}` && pages.at(-1)?.label === `${pages.length} of ${pages.length}`)
-check('23. Print layout uses the official landscape record', readFileSync('src/features/pjkm/pjkm1011.css', 'utf8').includes('size: A4 landscape') && readFileSync('src/features/pjkm/pjkm1011.ts', 'utf8').includes('KAWALAN KEBOLEHKESANAN') && readFileSync('src/features/pjkm/pjkm1011.ts', 'utf8').includes('MGT/10'))
+const pages = paginatePjkm1011(report.rows, { firstMm: 8, nextMm: 8 })
+const packed = paginatePjkm1011(report.rows)
+const packedCount = packed.reduce((sum, page) => sum + page.rows.length, 0)
+check('22. Dynamic pagination grows with the row count', pages.length > 1 && pages[0].label === `1 of ${pages.length}` && pages.at(-1)?.label === `${pages.length} of ${pages.length}` && packedCount === report.rows.length && !readFileSync('src/features/pjkm/pjkm1011.ts', 'utf8').includes('ROW_BUDGET'))
+const fitted = report.rows[0]
+const oneLine = pjkm1011RowLines({
+  ...fitted,
+  product: 'Pandan Waffle Premix',
+  tempatSimpan: 'Main Warehouse',
+  tarikhBuat: '10-Sep-2026',
+  tarikhEdar: '10-Sep-2026',
+  seller: 'Shopee / Cool Official',
+})
+const fortySix = Array.from({ length: 46 }, (_, index) => ({ ...fitted, key: `fit-${index}`, bil: index + 1, product: 'Pandan Waffle Premix', tempatSimpan: 'Main Warehouse', tarikhEdar: '10-Sep-2026' }))
+const packedFortySix = paginatePjkm1011(fortySix)
+const packedEighty = paginatePjkm1011(Array.from({ length: 80 }, (_, index) => fortySix[0] && { ...fortySix[0], key: `more-${index}`, bil: index + 1 }))
+const wrapped = pjkm1011RowLines({ ...fitted, product: 'Pandan Waffle Premix '.repeat(4).trim(), seller: 'Shopee / Cool Official' })
+check('24. A fitting row stays on the current page', oneLine === 1 && wrapped > oneLine && packedFortySix.length === 1 && packedFortySix[0].rows.length === 46 && packedEighty.length > 1 && packedEighty[0].rows.length > 40)
+check('23. Print layout is A4 portrait', readFileSync('src/features/pjkm/pjkm1011.css', 'utf8').includes('size: A4 portrait') && !readFileSync('src/features/pjkm/pjkm1011.css', 'utf8').includes('landscape') && readFileSync('src/features/pjkm/pjkm1011.ts', 'utf8').includes('KAWALAN KEBOLEHKESANAN') && readFileSync('src/features/pjkm/pjkm1011.ts', 'utf8').includes('MGT/10'))
 check('Tarikh Buat uses the production date', report.rows.find((row) => row.productId === 'p-pack' && row.qtyIn === 80)?.tarikhBuat === '1-Sep-2026')
 check('Seller helper does not invent a customer', pjkm1011Seller('WALKIN') === '' && pjkm1011Seller('SHOPEE:Official:1') === 'Shopee / Official')
 check('Stock usage is not a keluar', !ab.some((row) => row.qtyOut === 70))

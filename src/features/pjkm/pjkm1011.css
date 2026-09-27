@@ -1,10 +1,9 @@
 .pjkm1011-sheet {
   box-sizing: border-box;
-  width: 297mm;
-  height: 200mm;
-  min-height: 200mm;
+  width: 186mm;
+  height: 265mm;
   margin: 0 auto 16px;
-  padding: 8mm 8mm 7mm;
+  padding: 4mm 0;
   overflow: hidden;
   background: #fff;
   color: #000;
@@ -15,33 +14,34 @@
 .pjkm1011-head {
   display: flex;
   justify-content: space-between;
-  gap: 12px;
+  gap: 8px;
   align-items: flex-start;
 }
 
 .pjkm1011-company {
-  font-size: 16px;
+  font-size: 13px;
   font-weight: 700;
   letter-spacing: 0.02em;
 }
 
 .pjkm1011-manual {
-  margin-top: 2px;
-  font-size: 13px;
+  margin-top: 1px;
+  font-size: 11px;
   font-weight: 700;
 }
 
 .pjkm1011-control {
   border-collapse: collapse;
-  font-size: 11px;
+  font-size: 9px;
 }
 
 .pjkm1011-control th,
 .pjkm1011-control td {
   border: 1px solid #000;
-  padding: 2px 6px;
+  padding: 1px 4px;
   text-align: left;
   font-weight: 600;
+  white-space: nowrap;
 }
 
 .pjkm1011-control th {
@@ -51,40 +51,46 @@
 .pjkm1011-sub,
 .pjkm1011-title,
 .pjkm1011-month {
-  margin-top: 8px;
+  margin-top: 4px;
   text-align: center;
-  font-size: 12px;
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.pjkm1011-page {
+  margin: 0 0 4px;
+  text-align: right;
+  font-size: 9px;
   font-weight: 700;
 }
 
 .pjkm1011-grid {
   width: 100%;
-  margin-top: 6px;
+  margin-top: 4px;
   border-collapse: collapse;
   table-layout: fixed;
-  font-size: 8px;
+  font-size: 7px;
 }
 
 .pjkm1011-grid th,
 .pjkm1011-grid td {
   border: 1px solid #000;
-  padding: 2px 3px;
+  padding: 1px 2px;
   vertical-align: top;
   text-align: left;
-  overflow-wrap: anywhere;
-  word-break: break-word;
+  overflow-wrap: break-word;
+  line-height: 1.2;
 }
 
 .pjkm1011-grid th {
   font-weight: 700;
-  line-height: 1.15;
   text-align: center;
 }
 
 .pjkm1011-grid th:nth-child(1),
 .pjkm1011-grid td:nth-child(1) { width: 4%; }
 .pjkm1011-grid th:nth-child(2),
-.pjkm1011-grid td:nth-child(2) { width: 14%; }
+.pjkm1011-grid td:nth-child(2) { width: 15%; }
 .pjkm1011-grid th:nth-child(3),
 .pjkm1011-grid td:nth-child(3) { width: 9%; }
 .pjkm1011-grid th:nth-child(4),
@@ -92,26 +98,26 @@
 .pjkm1011-grid th:nth-child(5),
 .pjkm1011-grid td:nth-child(5) { width: 8%; }
 .pjkm1011-grid th:nth-child(6),
-.pjkm1011-grid td:nth-child(6) { width: 11%; }
+.pjkm1011-grid td:nth-child(6) { width: 12%; }
 .pjkm1011-grid th:nth-child(7),
-.pjkm1011-grid td:nth-child(7) { width: 12%; }
+.pjkm1011-grid td:nth-child(7) { width: 13%; }
 .pjkm1011-grid th:nth-child(8),
 .pjkm1011-grid td:nth-child(8) { width: 9%; }
 .pjkm1011-grid th:nth-child(9),
 .pjkm1011-grid td:nth-child(9) { width: 8%; }
 .pjkm1011-grid th:nth-child(10),
-.pjkm1011-grid td:nth-child(10) { width: 8%; }
+.pjkm1011-grid td:nth-child(10) { width: 7%; }
 .pjkm1011-grid th:nth-child(11),
-.pjkm1011-grid td:nth-child(11) { width: 8%; }
+.pjkm1011-grid td:nth-child(11) { width: 6%; }
 
 @page pjkm1011 {
-  size: A4 landscape;
-  margin: 0;
+  size: A4 portrait;
+  margin: 14mm 12mm 18mm;
 }
 
 @media (max-width: 800px) {
   .pjkm1011-sheet {
-    zoom: 0.34;
+    zoom: 0.48;
     margin-bottom: 12px;
   }
 }
@@ -129,9 +135,8 @@
     min-height: 0 !important;
   }
   .pjkm1011-sheet {
-    width: 297mm;
-    height: 200mm;
-    min-height: 0;
+    width: 186mm;
+    height: 265mm;
     margin: 0;
     zoom: 1;
     box-shadow: none;
