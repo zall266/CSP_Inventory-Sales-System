@@ -14,17 +14,20 @@ export const PJKM_1011 = {
 } as const
 
 /**
- * A4 portrait content box used by the app print page (297mm minus 14mm top and 18mm bottom).
- * Row capacity is the leftover millimetres after the header, not a fixed row count.
+ * A4 portrait content box (297mm minus the 14mm top and 18mm bottom print margins).
+ * Heights below are the measured Chrome print sizes, with a small allowance so a
+ * row is kept while it still fits and is moved only when the next row would clip.
+ * One painted row is 3.01mm; the letterhead is 33.9mm; the table header is 5.2mm.
  */
 const PAGE_INNER_MM = 297 - 14 - 18
 const SHEET_PAD_MM = 8
-const FIRST_CHROME_MM = 42
-const TABLE_HEAD_MM = 14
-const LINE_MM = 4.6
+const FIRST_CHROME_MM = 36
+const NEXT_CHROME_MM = 6
+const TABLE_HEAD_MM = 6
+const LINE_MM = 3.15
 
 export const PJKM_1011_FIRST_BODY_MM = PAGE_INNER_MM - SHEET_PAD_MM - FIRST_CHROME_MM - TABLE_HEAD_MM
-export const PJKM_1011_NEXT_BODY_MM = PAGE_INNER_MM - SHEET_PAD_MM - TABLE_HEAD_MM
+export const PJKM_1011_NEXT_BODY_MM = PAGE_INNER_MM - SHEET_PAD_MM - NEXT_CHROME_MM - TABLE_HEAD_MM
 
 const FINISHED_CATEGORIES = new Set(['cat-air', 'cat-ice', 'cat-waffle'])
 const IN_TYPES = new Set(['production_in', 'receiving', 'opening_balance', 'opening_stock', 'sales_return', 'sales_return_good'])
@@ -236,21 +239,25 @@ function wrappedLines(value: string, chars: number) {
   return value.split('\n').reduce((sum, part) => sum + Math.max(1, Math.ceil(part.length / Math.max(chars, 1))), 0)
 }
 
-/** Lines this row occupies once the 11 portrait columns wrap. */
+/**
+ * Lines this row occupies in the 11 portrait columns.
+ * Capacities match the painted column content width at 7px Arial, so a value
+ * that fits on one line is counted as one line.
+ */
 export function pjkm1011RowLines(row: Pjkm1011Row) {
   return Math.max(
     1,
     wrappedLines(String(row.bil), 4),
-    wrappedLines(row.product, 14),
-    wrappedLines(row.tarikhBuat, 10),
-    wrappedLines(row.tarikhLuput, 10),
-    wrappedLines(qtyText(row.qtyIn), 7),
-    wrappedLines(row.tempatSimpan, 12),
-    wrappedLines(row.seller, 12),
-    wrappedLines(row.tarikhEdar, 10),
-    wrappedLines(qtyText(row.qtyOut), 7),
-    wrappedLines(row.batchNo, 6),
-    wrappedLines(qtyText(row.baki), 6),
+    wrappedLines(row.product, 24),
+    wrappedLines(row.tarikhBuat, 12),
+    wrappedLines(row.tarikhLuput, 12),
+    wrappedLines(qtyText(row.qtyIn), 8),
+    wrappedLines(row.tempatSimpan, 18),
+    wrappedLines(row.seller, 24),
+    wrappedLines(row.tarikhEdar, 12),
+    wrappedLines(qtyText(row.qtyOut), 8),
+    wrappedLines(row.batchNo, 8),
+    wrappedLines(qtyText(row.baki), 8),
   )
 }
 
