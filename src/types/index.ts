@@ -558,11 +558,13 @@ export type DocumentAuditAction =
   | 'dispatch_created'
   | 'dispatch_confirmed'
   | 'dispatch_voided'
+  | 'inspection_group_created'
+  | 'inspection_group_released'
 
 export type DocumentAuditLog = {
   id: string
   action: DocumentAuditAction
-  documentType: 'quotation' | 'invoice' | 'delivery' | 'agent_sale' | 'agent_withdrawal' | 'staff_task' | 'staff_task_category' | 'opening_balance' | 'sales_return' | 'customer_wholesale_price' | 'stock_order' | 'stock_usage' | 'sales_import' | 'manufacturer' | 'halal_certificate' | 'halal_compliance' | 'vehicle' | 'dispatch'
+  documentType: 'quotation' | 'invoice' | 'delivery' | 'agent_sale' | 'agent_withdrawal' | 'staff_task' | 'staff_task_category' | 'opening_balance' | 'sales_return' | 'customer_wholesale_price' | 'stock_order' | 'stock_usage' | 'sales_import' | 'manufacturer' | 'halal_certificate' | 'halal_compliance' | 'vehicle' | 'dispatch' | 'inspection_group'
   documentId: string
   documentNo: string
   field: string
@@ -1461,6 +1463,7 @@ export type AppData = {
   salesImportShipments: SalesImportShipment[]
   vehicles: Vehicle[]
   dispatches: DispatchRecord[]
+  inspectionGroups: InspectionGroup[]
   manufacturers: Manufacturer[]
   halalCertificates: HalalCertificate[]
   halalCompliances: RawMaterialHalalCompliance[]
@@ -1478,6 +1481,20 @@ export type DispatchCourierKey =
   | 'UNKNOWN'
 
 export type DispatchStatus = 'draft' | 'confirmed' | 'void'
+
+export type InspectionGroupStatus = 'confirmed' | 'released'
+
+export type InspectionGroup = {
+  id: string
+  groupNo: string
+  dispatchDate: string
+  status: InspectionGroupStatus
+  dispatchIds: string[]
+  createdAt: string
+  createdBy: string
+  confirmedAt: string
+  confirmedBy: string
+}
 
 export type Vehicle = {
   id: string
@@ -1512,6 +1529,7 @@ export type DispatchRecord = {
   confirmedAt?: string
   voidedBy?: string
   voidedAt?: string
+  inspectionGroupId?: string
 }
 
 export type HalalVerificationStatus = 'pending' | 'verified'

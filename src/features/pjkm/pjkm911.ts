@@ -1,6 +1,5 @@
-import { activeCourierColumns, dispatchAwbTotals } from '@/features/dispatch/dispatchModel'
-import { pjkmDate } from '@/features/pjkm/pjkm511'
-import type { DispatchCourierKey, DispatchRecord } from '@/types'
+import { DISPATCH_COURIER_ORDER, dispatchAwbTotals, dispatchCourierKeys, inspectionCourierConflict } from '@/features/dispatch/dispatchModel'
+import type { DispatchCourierKey, DispatchRecord, InspectionGroup } from '@/types'
 
 export const PJKM_911 = {
   company: 'COOL SLURPPY MARKETING',
@@ -13,33 +12,50 @@ export const PJKM_911 = {
   title: 'REKOD 9.1.1 : REKOD PEMERIKSAAN KENDERAAN',
 } as const
 
+export const PJKM_911_MONTHS = ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC'] as const
+
+export const PJKM_911_DETAILS = [
+  { key: 'parcel', lines: ['QUANTITI', 'PARCEL'] },
+  { key: 'vehicle', lines: ['JENIS', 'KENDERAAN'] },
+  { key: 'plate', lines: ['PLATE', 'NUMBER'] },
+  { key: 'suhu', lines: ['SUHU', 'KENDERAAN'] },
+  { key: 'condition', lines: ['KEADAAN'] },
+] as const
+
+export type Pjkm911DetailKey = (typeof PJKM_911_DETAILS)[number]['key']
+
 const PAGE_INNER_MM = 297 - 14 - 18
 const SHEET_PAD_MM = 8
-const FIRST_CHROME_MM = 28
-const NEXT_CHROME_MM = 6
-const TABLE_HEAD_MM = 12
-const LINE_MM = 3.05
+const FIRST_CHROME_MM = 38
+const NEXT_CHROME_MM = 0
+const TABLE_HEAD_MM = 11
+const LINE_MM = 3.3
+const ROW_PAD_MM = 1.8
+const FIXED_MM = { tarikh: 8, butiran: 24, total: 16 }
 
-const FIXED_MM = { tarikh: 13, total: 9, parcel: 11, jenis: 14, plate: 12, suhu: 16, keadaan: 12 }
-
-export type Pjkm911Row = {
-  dispatchId: string
-  dateKey: string
-  dateLabel: string
-  counts: Partial<Record<DispatchCourierKey, number>>
-  totalAwb: number
+export type Pjkm911Cell = {
   parcelQty: number
   vehicleType: string
   plateNumber: string
-  condition: 'BAIK'
+}
+
+export type Pjkm911Block = {
+  id: string
+  bil: number
+  dateKey: string
+  cells: Partial<Record<DispatchCourierKey, Pjkm911Cell>>
+  totalAwb: number
+  dispatchIds: string[]
 }
 
 export type Pjkm911Page = {
   page: number
   pages: number
   label: string
-  rows: Pjkm911Row[]
+  blocks: Pjkm911Block[]
   columns: DispatchCourierKey[]
+  bulan: string
+  tahun: string
 }
 
 function wrappedLines(value: string, chars: number) {
@@ -47,120 +63,144 @@ function wrappedLines(value: string, chars: number) {
   return Math.max(1, Math.ceil(value.length / Math.max(chars, 1)))
 }
 
+export function pjkm911Period(month: string) {
+  const [year, monthNo] = month.split('-')
+  return { bulan: PJKM_911_MONTHS[Number(monthNo) - 1] ?? '', tahun: year ?? '' }
+}
+
 export function pjkm911Widths(columnCount: number) {
-  const fixedTotal = Object.values(FIXED_MM).reduce((sum, value) => sum + value, 0)
-  const leftover = 186 - fixedTotal
-  const courier = columnCount ? Math.min(18, leftover / columnCount) : 0
-  const spare = leftover - courier * columnCount
-  return {
-    tarikh: FIXED_MM.tarikh,
-    courier,
-    total: FIXED_MM.total,
-    parcel: FIXED_MM.parcel,
-    jenis: FIXED_MM.jenis + spare / 2,
-    plate: FIXED_MM.plate + spare / 2,
-    suhu: FIXED_MM.suhu,
-    keadaan: FIXED_MM.keadaan,
+  const count = Math.max(columnCount, 1)
+  const courier = (186 - FIXED_MM.tarikh - FIXED_MM.butiran - FIXED_MM.total) / count
+  return { tarikh: FIXED_MM.tarikh, butiran: FIXED_MM.butiran, courier, total: FIXED_MM.total, table: 186 }
+}
+
+export function pjkm911DetailValue(block: Pjkm911Block, column: DispatchCourierKey, detail: Pjkm911DetailKey) {
+  const cell = block.cells[column]
+  if (!cell) return ''
+  if (detail === 'parcel') return String(cell.parcelQty)
+  if (detail === 'vehicle') return cell.vehicleType
+  if (detail === 'plate') return cell.plateNumber
+  if (detail === 'suhu') return ''
+  return 'BAIK'
+}
+
+function blockMm(block: Pjkm911Block, columns: DispatchCourierKey[]) {
+  const widths = pjkm911Widths(columns.length)
+  const chars = Math.max(1, Math.floor((widths.courier - 1.2) / 1.9))
+  let vehicleLines = 2
+  let plateLines = 2
+  for (const column of columns) {
+    const cell = block.cells[column]
+    if (!cell) continue
+    vehicleLines = Math.max(vehicleLines, wrappedLines(cell.vehicleType, chars))
+    plateLines = Math.max(plateLines, wrappedLines(cell.plateNumber, chars))
   }
-}
-
-function pageHeight(rows: Pjkm911Row[], columnCount: number) {
-  return rows.reduce((sum, row) => sum + rowLines(row, columnCount) * LINE_MM, 0)
-}
-
-function balanceSingleRowTail(pages: Pjkm911Row[][], columnCount: number, firstMm: number, nextMm: number) {
-  if (pages.length < 2 || pages[pages.length - 1].length !== 1) return pages
-  const previousIndex = pages.length - 2
-  const previousBudget = previousIndex === 0 ? firstMm : nextMm
-  const pool = [...pages[previousIndex], ...pages[pages.length - 1]]
-  let splitAt = pages[previousIndex].length
-  let closest = Number.POSITIVE_INFINITY
-  for (let split = 1; split < pool.length; split += 1) {
-    const left = pool.slice(0, split)
-    const right = pool.slice(split)
-    if (right.length < 2) continue
-    if (pageHeight(left, columnCount) > previousBudget) continue
-    if (pageHeight(right, columnCount) > nextMm) continue
-    const gap = Math.abs(left.length - right.length)
-    if (gap < closest) {
-      closest = gap
-      splitAt = split
-    }
-  }
-  if (splitAt === pages[previousIndex].length) return pages
-  const next = pages.slice()
-  next[previousIndex] = pool.slice(0, splitAt)
-  next[next.length - 1] = pool.slice(splitAt)
-  return next
-}
-
-function rowLines(row: Pjkm911Row, columnCount: number) {
-  const widths = pjkm911Widths(columnCount)
-  return Math.max(
-    1,
-    wrappedLines(row.dateLabel, Math.floor(widths.tarikh * 0.85)),
-    wrappedLines(row.vehicleType, Math.floor(widths.jenis * 0.85)),
-    wrappedLines(row.plateNumber, Math.floor(widths.plate * 0.85)),
-  )
+  const lines = [2, vehicleLines, plateLines, 2, 1]
+  return lines.reduce((sum, count) => sum + count * LINE_MM + ROW_PAD_MM, 0)
 }
 
 export function paginatePjkm911(
-  rows: Pjkm911Row[],
+  blocks: Pjkm911Block[],
   columns: DispatchCourierKey[],
+  period: { bulan: string; tahun: string },
   limits?: { firstMm?: number; nextMm?: number },
 ): Pjkm911Page[] {
   const firstMm = limits?.firstMm ?? PAGE_INNER_MM - SHEET_PAD_MM - FIRST_CHROME_MM - TABLE_HEAD_MM
   const nextMm = limits?.nextMm ?? PAGE_INNER_MM - SHEET_PAD_MM - NEXT_CHROME_MM - TABLE_HEAD_MM
-  const pages: Pjkm911Row[][] = []
-  let current: Pjkm911Row[] = []
+  const pages: Pjkm911Block[][] = []
+  let current: Pjkm911Block[] = []
   let used = 0
   let budget = firstMm
-  for (const row of rows) {
-    const height = rowLines(row, columns.length) * LINE_MM
+  for (const block of blocks) {
+    const height = blockMm(block, columns)
     if (current.length && used + height > budget) {
       pages.push(current)
       current = []
       used = 0
       budget = nextMm
     }
-    current.push(row)
+    current.push(block)
     used += height
+    if (height > budget) {
+      pages.push(current)
+      current = []
+      used = 0
+      budget = nextMm
+    }
   }
   if (current.length || pages.length === 0) pages.push(current)
-  const balanced = balanceSingleRowTail(pages, columns.length, firstMm, nextMm)
-  const count = Math.max(balanced.length, 1)
-  return balanced.map((pageRows, index) => ({
+  const count = Math.max(pages.length, 1)
+  return pages.map((pageBlocks, index) => ({
     page: index + 1,
     pages: count,
     label: `${index + 1} of ${count}`,
-    rows: pageRows,
+    blocks: pageBlocks,
     columns,
+    bulan: period.bulan,
+    tahun: period.tahun,
   }))
 }
 
-export function buildPjkm911(input: { month: string; dispatches: DispatchRecord[] }) {
-  const confirmed = input.dispatches
-    .filter((row) => row.status === 'confirmed' && row.dispatchDate.startsWith(`${input.month}-`))
-    .sort((a, b) => a.dispatchDate.localeCompare(b.dispatchDate) || a.vehicleCode.localeCompare(b.vehicleCode) || a.id.localeCompare(b.id))
-  const rows: Pjkm911Row[] = confirmed.map((row) => {
-    const totals = dispatchAwbTotals(row.lines)
+function cellsFor(dispatches: DispatchRecord[]) {
+  const cells: Pjkm911Block['cells'] = {}
+  const lines = dispatches.flatMap((row) => row.lines)
+  for (const key of DISPATCH_COURIER_ORDER) {
+    const owners = dispatches.filter((row) => dispatchCourierKeys(row).includes(key))
+    if (owners.length !== 1) continue
+    const parcelQty = lines.filter((line) => line.courierKey === key).reduce((sum, line) => sum + line.parcelQty, 0)
+    cells[key] = { parcelQty, vehicleType: owners[0].vehicleType, plateNumber: owners[0].plateNumber }
+  }
+  return { cells, totalAwb: dispatchAwbTotals(lines).totalAwb }
+}
+
+function clusters(dispatches: DispatchRecord[], groups?: InspectionGroup[]) {
+  const confirmedIds = groups ? new Set(groups.filter((group) => group.status === 'confirmed').map((group) => group.id)) : null
+  const buckets = new Map<string, DispatchRecord[]>()
+  const singles: DispatchRecord[] = []
+  for (const row of dispatches) {
+    const groupId = row.inspectionGroupId
+    if (groupId && (confirmedIds == null || confirmedIds.has(groupId))) {
+      buckets.set(groupId, [...(buckets.get(groupId) ?? []), row])
+    } else singles.push(row)
+  }
+  const result: Array<{ id: string; dateKey: string; confirmedAt: string; dispatches: DispatchRecord[] }> = []
+  for (const [id, rows] of buckets) {
+    const dates = new Set(rows.map((row) => row.dispatchDate))
+    if (dates.size !== 1 || inspectionCourierConflict(rows)) {
+      singles.push(...rows)
+      continue
+    }
+    const confirmedAt = rows.map((row) => row.confirmedAt || row.createdAt).sort()[0]
+    result.push({ id, dateKey: rows[0].dispatchDate, confirmedAt, dispatches: rows })
+  }
+  for (const row of singles) {
+    result.push({ id: row.id, dateKey: row.dispatchDate, confirmedAt: row.confirmedAt || row.createdAt, dispatches: [row] })
+  }
+  return result.sort((a, b) => a.dateKey.localeCompare(b.dateKey) || a.confirmedAt.localeCompare(b.confirmedAt) || a.id.localeCompare(b.id))
+}
+
+export function buildPjkm911(input: { month: string; dispatches: DispatchRecord[]; groups?: InspectionGroup[] }) {
+  const confirmed = input.dispatches.filter((row) => row.status === 'confirmed' && row.dispatchDate.startsWith(`${input.month}-`))
+  const period = pjkm911Period(input.month)
+  const blocks: Pjkm911Block[] = clusters(confirmed, input.groups).map((cluster, index) => {
+    const built = cellsFor(cluster.dispatches)
     return {
-      dispatchId: row.id,
-      dateKey: row.dispatchDate,
-      dateLabel: pjkmDate(`${row.dispatchDate}T12:00:00+08:00`),
-      counts: totals.counts,
-      totalAwb: totals.totalAwb,
-      parcelQty: totals.parcelQty,
-      vehicleType: row.vehicleType,
-      plateNumber: row.plateNumber,
-      condition: 'BAIK',
+      id: cluster.id,
+      bil: index + 1,
+      dateKey: cluster.dateKey,
+      cells: built.cells,
+      totalAwb: built.totalAwb,
+      dispatchIds: cluster.dispatches.map((row) => row.id),
     }
   })
-  const columns = activeCourierColumns(rows)
+  const columns = DISPATCH_COURIER_ORDER.filter((key) => blocks.some((block) => block.cells[key]))
   return {
-    rows,
+    month: input.month,
+    bulan: period.bulan,
+    tahun: period.tahun,
     columns,
-    pages: paginatePjkm911(rows, columns),
-    unknown: rows.some((row) => (row.counts.UNKNOWN ?? 0) > 0),
+    blocks,
+    pages: paginatePjkm911(blocks, columns, period),
+    unknown: columns.includes('UNKNOWN'),
   }
 }

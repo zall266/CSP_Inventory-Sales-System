@@ -55,7 +55,7 @@ export function PjkmRecordsPage() {
     warehouses: state.warehouses,
     sessions: state.productionSessions ?? [],
   })
-  const inspections = buildPjkm911({ month, dispatches: state.dispatches ?? [] })
+  const inspections = buildPjkm911({ month, dispatches: state.dispatches ?? [], groups: state.inspectionGroups ?? [] })
   const previewPath = record === '10.1.1' ? `/pjkm/10.1.1?month=${month}` : record === '9.1.1' ? `/pjkm/9.1.1?month=${month}` : `/pjkm/5.1.1?month=${month}`
   return (
     <div className="min-w-0 overflow-x-hidden">
@@ -78,7 +78,7 @@ export function PjkmRecordsPage() {
         {record === '10.1.1' ? (
           <p className="mt-4 text-sm text-slate-800">Movement lines found: {distributor.rows.length}</p>
         ) : record === '9.1.1' ? (
-          <p className="mt-4 text-sm text-slate-800">Confirmed handovers: {inspections.rows.length}</p>
+          <p className="mt-4 text-sm text-slate-800">Inspection blocks: {inspections.blocks.length}</p>
         ) : (
           <p className="mt-4 text-sm text-slate-800">Receiving lines found: {receiving.rows.length}</p>
         )}
