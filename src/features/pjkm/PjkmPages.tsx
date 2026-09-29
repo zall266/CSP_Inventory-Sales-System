@@ -4,6 +4,7 @@ import { Button, Card, PageHeader, Select } from '@/components/ui'
 import { PermissionDenied } from '@/features/documents/A4Sheet'
 import { PJKM_511, buildPjkm511, type PjkmPage, type PjkmRow } from '@/features/pjkm/pjkm511'
 import { PJKM_1011, buildPjkm1011, pjkm1011QtyText, type Pjkm1011Page } from '@/features/pjkm/pjkm1011'
+import { buildPjkm911 } from '@/features/pjkm/pjkm911'
 import { hasPermission } from '@/features/settings/permissions'
 import { useStore } from '@/store/hooks'
 import { PROTOTYPE_TODAY, systemDateKey } from '@/utils/format'
@@ -54,7 +55,8 @@ export function PjkmRecordsPage() {
     warehouses: state.warehouses,
     sessions: state.productionSessions ?? [],
   })
-  const previewPath = record === '10.1.1' ? `/pjkm/10.1.1?month=${month}` : `/pjkm/5.1.1?month=${month}`
+  const inspections = buildPjkm911({ month, dispatches: state.dispatches ?? [] })
+  const previewPath = record === '10.1.1' ? `/pjkm/10.1.1?month=${month}` : record === '9.1.1' ? `/pjkm/9.1.1?month=${month}` : `/pjkm/5.1.1?month=${month}`
   return (
     <div className="min-w-0 overflow-x-hidden">
       <PageHeader title="PJKM Records" subtitle="Generate the official monthly compliance records from confirmed transactions." />
@@ -69,15 +71,18 @@ export function PjkmRecordsPage() {
           Record
           <Select className="mt-1" value={record} onChange={(event) => setRecord(event.target.value)}>
             <option value="5.1.1">5.1.1 — Penerimaan Bahan Mentah</option>
+            <option value="9.1.1">9.1.1 — Pemeriksaan Kenderaan</option>
             <option value="10.1.1">10.1.1 — Pengedar / Penjual</option>
           </Select>
         </label>
         {record === '10.1.1' ? (
           <p className="mt-4 text-sm text-slate-800">Movement lines found: {distributor.rows.length}</p>
+        ) : record === '9.1.1' ? (
+          <p className="mt-4 text-sm text-slate-800">Confirmed handovers: {inspections.rows.length}</p>
         ) : (
           <p className="mt-4 text-sm text-slate-800">Receiving lines found: {receiving.rows.length}</p>
         )}
-        {record !== '10.1.1' && receiving.attention.length > 0 && (
+        {record === '5.1.1' && receiving.attention.length > 0 && (
           <div className="mt-3 text-sm text-amber-900">
             <p>{receiving.attention.length} line{receiving.attention.length === 1 ? '' : 's'} need attention</p>
             <ul className="mt-1 list-disc pl-5">
@@ -87,6 +92,9 @@ export function PjkmRecordsPage() {
         )}
         {record === '10.1.1' && distributor.attention.length > 0 && (
           <p className="mt-3 text-sm text-amber-900">Some fields require manual review.</p>
+        )}
+        {record === '9.1.1' && inspections.unknown && (
+          <p className="mt-3 text-sm text-amber-900">Some courier labels need review.</p>
         )}
         <Button className="mt-4" onClick={() => navigate(previewPath)}>Preview</Button>
       </Card>

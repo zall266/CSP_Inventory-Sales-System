@@ -1338,6 +1338,8 @@ export function createSeedData(): AppData {
     salesImportLines: [],
     salesImportMappings: [],
     salesImportShipments: [],
+    vehicles: [],
+    dispatches: [],
     manufacturers: [],
     halalCertificates: [],
     halalCompliances: [],

@@ -65,6 +65,7 @@ import {
 import { clearAttachmentBlobs, deleteAttachmentBlob, putAttachmentBlob } from '@/store/attachmentBlobs'
 import { applyBomCosts, hydrateProducts, normalizeUnit, parseNonNegativeMoney, productHasBom, productIsSellable, productIsUsed, purchaseQtyToBaseQty, qtyToBaseUnit, resolveProductSku, skuIsUnique, validatePurchaseConversion } from '@/features/products/masterData'
 import { inactiveSalesComponent, salesComponentSnapshot, salesComponentsOf, validateSalesComponents } from '@/features/products/salesComponents'
+import { isDispatchDate, snapshotDispatchLines, validateDispatchLines } from '@/features/dispatch/dispatchModel'
 import { parseAwb } from '@/features/salesImport/parseAwb'
 import { parsePickingList, type TextItem } from '@/features/salesImport/parsePickingList'
 import { reconcileAwbLines, shipmentLinkStatus } from '@/features/salesImport/reconcileAwb'
@@ -133,6 +134,7 @@ import type {
   DeliveryOrder,
   DeliveryOrderInput,
   DeliveryOrderStatus,
+  DispatchCourierKey,
   DocumentAuditAction,
   DocumentAuditLog,
   DrawerState,
@@ -196,7 +198,7 @@ import type {
   ProductionMaterialAllocationSource,
 } from '@/types'
 import { mergeUsahaoneUatProducts } from '@/data/usahaoneProductImport'
-import { nextDatedDocNo, nextDocNo, PROTOTYPE_TODAY, formatMoney, formatQty, round2, stockStatus, uid } from '@/utils/format'
+import { nextDatedDocNo, nextDocNo, PROTOTYPE_TODAY, formatMoney, formatQty, round2, stockStatus, systemDateKey, uid } from '@/utils/format'
 
 const STORAGE_KEY = 'stockflow-prototype-v8'
 
@@ -331,6 +333,8 @@ function hydrateData(data: AppData): AppData {
     salesImportLines: data.salesImportLines ?? [],
     salesImportMappings: data.salesImportMappings ?? [],
     salesImportShipments: data.salesImportShipments ?? [],
+    vehicles: data.vehicles ?? [],
+    dispatches: data.dispatches ?? [],
     manufacturers: data.manufacturers ?? [],
     halalCertificates: data.halalCertificates ?? [],
     halalCompliances: data.halalCompliances ?? [],
@@ -8516,6 +8520,269 @@ export const db = {
     })
     toast(existingCompliance ? 'Halal compliance updated' : 'Halal compliance saved', product!.name)
     return compliance
+  },
+
+  createVehicle(input: { code: string; vehicleType: string; plateNumber: string }) {
+    if (!hasPermission(state, 'settings.edit')) {
+      toast('Permission denied', 'You cannot maintain vehicles.', 'danger')
+      return null
+    }
+    const code = input.code.trim()
+    const vehicleType = input.vehicleType.trim()
+    const plateNumber = input.plateNumber.trim()
+    if (!code || !vehicleType || !plateNumber) {
+      toast('Vehicle details required', 'Code, vehicle type, and plate number are required.', 'warning')
+      return null
+    }
+    if ((state.vehicles ?? []).some((row) => row.code.trim().toLowerCase() === code.toLowerCase())) {
+      toast('Vehicle code already exists', code, 'warning')
+      return null
+    }
+    const now = nowIso()
+    const vehicle = { id: uid('veh'), code, vehicleType, plateNumber, active: true, createdAt: now, updatedAt: now }
+    setData({
+      vehicles: [vehicle, ...(state.vehicles ?? [])],
+      documentAuditLogs: pushDocAudit(makeDocAudit({
+        action: 'vehicle_created',
+        documentType: 'vehicle',
+        documentId: vehicle.id,
+        documentNo: vehicle.code,
+        newValue: `${vehicle.vehicleType} ${vehicle.plateNumber}`,
+      })),
+    })
+    toast('Vehicle saved', vehicle.code)
+    return vehicle
+  },
+
+  updateVehicle(id: string, input: { code: string; vehicleType: string; plateNumber: string }) {
+    if (!hasPermission(state, 'settings.edit')) {
+      toast('Permission denied', 'You cannot maintain vehicles.', 'danger')
+      return null
+    }
+    const current = (state.vehicles ?? []).find((row) => row.id === id)
+    if (!current) return null
+    const code = input.code.trim()
+    const vehicleType = input.vehicleType.trim()
+    const plateNumber = input.plateNumber.trim()
+    if (!code || !vehicleType || !plateNumber) {
+      toast('Vehicle details required', 'Code, vehicle type, and plate number are required.', 'warning')
+      return null
+    }
+    if ((state.vehicles ?? []).some((row) => row.id !== id && row.code.trim().toLowerCase() === code.toLowerCase())) {
+      toast('Vehicle code already exists', code, 'warning')
+      return null
+    }
+    const vehicle = { ...current, code, vehicleType, plateNumber, updatedAt: nowIso() }
+    setData({
+      vehicles: (state.vehicles ?? []).map((row) => (row.id === id ? vehicle : row)),
+      documentAuditLogs: pushDocAudit(makeDocAudit({
+        action: 'vehicle_updated',
+        documentType: 'vehicle',
+        documentId: vehicle.id,
+        documentNo: vehicle.code,
+        oldValue: `${current.vehicleType} ${current.plateNumber}`,
+        newValue: `${vehicle.vehicleType} ${vehicle.plateNumber}`,
+      })),
+    })
+    toast('Vehicle updated', vehicle.code)
+    return vehicle
+  },
+
+  setVehicleActive(id: string, active: boolean) {
+    if (!hasPermission(state, 'settings.edit')) {
+      toast('Permission denied', 'You cannot maintain vehicles.', 'danger')
+      return false
+    }
+    const current = (state.vehicles ?? []).find((row) => row.id === id)
+    if (!current || current.active === active) return Boolean(current)
+    const vehicle = { ...current, active, updatedAt: nowIso() }
+    setData({
+      vehicles: (state.vehicles ?? []).map((row) => (row.id === id ? vehicle : row)),
+      documentAuditLogs: pushDocAudit(makeDocAudit({
+        action: 'vehicle_status_changed',
+        documentType: 'vehicle',
+        documentId: vehicle.id,
+        documentNo: vehicle.code,
+        oldValue: current.active ? 'active' : 'inactive',
+        newValue: active ? 'active' : 'inactive',
+      })),
+    })
+    toast(active ? 'Vehicle activated' : 'Vehicle deactivated', vehicle.code)
+    return true
+  },
+
+  createDispatch(input?: { dispatchDate?: string; vehicleId?: string }) {
+    if (!hasPermission(state, 'sales.delivery.create')) {
+      toast('Permission denied', 'You cannot create a dispatch.', 'danger')
+      return null
+    }
+    const dispatchDate = input?.dispatchDate ?? systemDateKey()
+    if (!isDispatchDate(dispatchDate)) {
+      toast('Choose a dispatch date', undefined, 'warning')
+      return null
+    }
+    const vehicle = input?.vehicleId ? (state.vehicles ?? []).find((row) => row.id === input.vehicleId) : undefined
+    if (input?.vehicleId && (!vehicle || !vehicle.active)) {
+      toast('Choose an active vehicle', undefined, 'warning')
+      return null
+    }
+    const dispatch = {
+      id: uid('dsp'),
+      dispatchDate,
+      vehicleId: vehicle?.id ?? '',
+      vehicleCode: '',
+      vehicleType: '',
+      plateNumber: '',
+      condition: '' as const,
+      status: 'draft' as const,
+      lines: [],
+      createdBy: currentUser(state).name,
+      createdAt: nowIso(),
+    }
+    setData({
+      dispatches: [dispatch, ...(state.dispatches ?? [])],
+      documentAuditLogs: pushDocAudit(makeDocAudit({
+        action: 'dispatch_created',
+        documentType: 'dispatch',
+        documentId: dispatch.id,
+        documentNo: dispatch.dispatchDate,
+        newValue: vehicle?.code ?? '',
+      })),
+    })
+    return dispatch
+  },
+
+  updateDispatch(id: string, input: { dispatchDate?: string; vehicleId?: string; lines?: Array<{ shipmentId: string; courierKey: DispatchCourierKey; parcelQty: number }> }) {
+    if (!hasPermission(state, 'sales.delivery.create') && !hasPermission(state, 'sales.delivery.edit')) {
+      toast('Permission denied', 'You cannot edit a dispatch.', 'danger')
+      return false
+    }
+    const current = (state.dispatches ?? []).find((row) => row.id === id)
+    if (!current || current.status !== 'draft') {
+      toast('Confirmed dispatch is locked', 'Void it and create a new dispatch.', 'warning')
+      return false
+    }
+    const dispatchDate = input.dispatchDate ?? current.dispatchDate
+    if (!isDispatchDate(dispatchDate)) {
+      toast('Choose a dispatch date', undefined, 'warning')
+      return false
+    }
+    const vehicleId = input.vehicleId ?? current.vehicleId
+    if (vehicleId) {
+      const vehicle = (state.vehicles ?? []).find((row) => row.id === vehicleId)
+      if (!vehicle || !vehicle.active) {
+        toast('Choose an active vehicle', undefined, 'warning')
+        return false
+      }
+    }
+    let lines = current.lines
+    if (input.lines) {
+      const prepared = input.lines.map((line) => ({
+        shipmentId: line.shipmentId,
+        courierKey: line.courierKey,
+        parcelQty: line.parcelQty,
+      }))
+      const error = validateDispatchLines({
+        lines: prepared,
+        shipments: state.salesImportShipments ?? [],
+        dispatches: state.dispatches ?? [],
+        dispatchId: id,
+      })
+      if (error) {
+        toast('Dispatch not saved', error, 'warning')
+        return false
+      }
+      lines = snapshotDispatchLines(prepared, state.salesImportShipments ?? [])
+    }
+    const selected = new Set(lines.map((line) => line.shipmentId))
+    setData({
+      dispatches: (state.dispatches ?? []).map((row) => {
+        if (row.id === id) return { ...current, dispatchDate, vehicleId, lines }
+        if (row.status === 'draft') return { ...row, lines: row.lines.filter((line) => !selected.has(line.shipmentId)) }
+        return row
+      }),
+    })
+    return true
+  },
+
+  confirmDispatch(id: string) {
+    if (!hasPermission(state, 'sales.delivery.create')) {
+      toast('Permission denied', 'You cannot confirm a dispatch.', 'danger')
+      return false
+    }
+    const current = (state.dispatches ?? []).find((row) => row.id === id)
+    if (!current || current.status !== 'draft') {
+      toast('Confirmed dispatch is locked', undefined, 'warning')
+      return false
+    }
+    if (!isDispatchDate(current.dispatchDate)) {
+      toast('Choose a dispatch date', undefined, 'warning')
+      return false
+    }
+    const vehicle = (state.vehicles ?? []).find((row) => row.id === current.vehicleId)
+    if (!vehicle || !vehicle.active) {
+      toast('Choose an active vehicle', undefined, 'warning')
+      return false
+    }
+    const error = validateDispatchLines({
+      lines: current.lines,
+      shipments: state.salesImportShipments ?? [],
+      dispatches: state.dispatches ?? [],
+      dispatchId: id,
+    })
+    if (error) {
+      toast('Dispatch not confirmed', error, 'warning')
+      return false
+    }
+    const confirmed = {
+      ...current,
+      vehicleCode: vehicle.code,
+      vehicleType: vehicle.vehicleType,
+      plateNumber: vehicle.plateNumber,
+      condition: 'BAIK' as const,
+      status: 'confirmed' as const,
+      lines: snapshotDispatchLines(current.lines, state.salesImportShipments ?? []),
+      confirmedBy: currentUser(state).name,
+      confirmedAt: nowIso(),
+    }
+    setData({
+      dispatches: (state.dispatches ?? []).map((row) => (row.id === id ? confirmed : row)),
+      documentAuditLogs: pushDocAudit(makeDocAudit({
+        action: 'dispatch_confirmed',
+        documentType: 'dispatch',
+        documentId: confirmed.id,
+        documentNo: `${confirmed.dispatchDate} ${confirmed.vehicleCode}`,
+        newValue: confirmed.plateNumber,
+      })),
+    })
+    toast('Dispatch confirmed', `${confirmed.vehicleCode} · ${confirmed.dispatchDate}`)
+    return true
+  },
+
+  voidDispatch(id: string) {
+    if (!hasPermission(state, 'sales.delivery.edit')) {
+      toast('Permission denied', 'You cannot void a dispatch.', 'danger')
+      return false
+    }
+    const current = (state.dispatches ?? []).find((row) => row.id === id)
+    if (!current || current.status !== 'confirmed') {
+      toast('Only a confirmed dispatch can be voided', undefined, 'warning')
+      return false
+    }
+    const voided = { ...current, status: 'void' as const, voidedBy: currentUser(state).name, voidedAt: nowIso() }
+    setData({
+      dispatches: (state.dispatches ?? []).map((row) => (row.id === id ? voided : row)),
+      documentAuditLogs: pushDocAudit(makeDocAudit({
+        action: 'dispatch_voided',
+        documentType: 'dispatch',
+        documentId: voided.id,
+        documentNo: `${voided.dispatchDate} ${voided.vehicleCode}`,
+        oldValue: 'confirmed',
+        newValue: 'void',
+      })),
+    })
+    toast('Dispatch voided', voided.vehicleCode)
+    return true
   },
 
   async purgeExpiredSalesReturnEvidence(now = nowIso()) {

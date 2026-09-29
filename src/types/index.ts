@@ -552,11 +552,17 @@ export type DocumentAuditAction =
   | 'halal_certificate_updated'
   | 'halal_compliance_created'
   | 'halal_compliance_updated'
+  | 'vehicle_created'
+  | 'vehicle_updated'
+  | 'vehicle_status_changed'
+  | 'dispatch_created'
+  | 'dispatch_confirmed'
+  | 'dispatch_voided'
 
 export type DocumentAuditLog = {
   id: string
   action: DocumentAuditAction
-  documentType: 'quotation' | 'invoice' | 'delivery' | 'agent_sale' | 'agent_withdrawal' | 'staff_task' | 'staff_task_category' | 'opening_balance' | 'sales_return' | 'customer_wholesale_price' | 'stock_order' | 'stock_usage' | 'sales_import' | 'manufacturer' | 'halal_certificate' | 'halal_compliance'
+  documentType: 'quotation' | 'invoice' | 'delivery' | 'agent_sale' | 'agent_withdrawal' | 'staff_task' | 'staff_task_category' | 'opening_balance' | 'sales_return' | 'customer_wholesale_price' | 'stock_order' | 'stock_usage' | 'sales_import' | 'manufacturer' | 'halal_certificate' | 'halal_compliance' | 'vehicle' | 'dispatch'
   documentId: string
   documentNo: string
   field: string
@@ -1453,9 +1459,59 @@ export type AppData = {
   salesImportLines: SalesImportLine[]
   salesImportMappings: SalesImportMapping[]
   salesImportShipments: SalesImportShipment[]
+  vehicles: Vehicle[]
+  dispatches: DispatchRecord[]
   manufacturers: Manufacturer[]
   halalCertificates: HalalCertificate[]
   halalCompliances: RawMaterialHalalCompliance[]
+}
+
+export type DispatchCourierKey =
+  | 'JNT'
+  | 'JNT CARGO'
+  | 'SPX'
+  | 'FLASH'
+  | 'GDEX'
+  | 'INSTANT'
+  | 'POS'
+  | 'NINJAVAN'
+  | 'UNKNOWN'
+
+export type DispatchStatus = 'draft' | 'confirmed' | 'void'
+
+export type Vehicle = {
+  id: string
+  code: string
+  vehicleType: string
+  plateNumber: string
+  active: boolean
+  createdAt: string
+  updatedAt: string
+}
+
+export type DispatchLine = {
+  shipmentId: string
+  trackingNumber: string
+  courierKey: DispatchCourierKey
+  parcelQty: number
+}
+
+export type DispatchRecord = {
+  id: string
+  dispatchDate: string
+  vehicleId: string
+  vehicleCode: string
+  vehicleType: string
+  plateNumber: string
+  condition: 'BAIK' | ''
+  status: DispatchStatus
+  lines: DispatchLine[]
+  createdBy: string
+  createdAt: string
+  confirmedBy?: string
+  confirmedAt?: string
+  voidedBy?: string
+  voidedAt?: string
 }
 
 export type HalalVerificationStatus = 'pending' | 'verified'
