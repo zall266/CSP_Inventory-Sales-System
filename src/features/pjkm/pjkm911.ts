@@ -31,7 +31,7 @@ const NEXT_CHROME_MM = 0
 const TABLE_HEAD_MM = 11
 const LINE_MM = 3.3
 const ROW_PAD_MM = 1.8
-const FIXED_MM = { tarikh: 8, butiran: 24, total: 16 }
+const FIXED_MM = { tarikh: 14, butiran: 22, total: 16 }
 
 export type Pjkm911Cell = {
   parcelQty: number
