@@ -2,25 +2,44 @@ import { useMemo, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { Button, Card, Field, Input, PageHeader, Select } from '@/components/ui'
 import { PermissionDenied } from '@/features/documents/A4Sheet'
-import { DISPATCH_COURIER_ORDER, courierKeyFromSource, vehicleLabel } from '@/features/dispatch/dispatchModel'
+import { DISPATCH_COURIER_ORDER, courierKeyFromSource, dispatchCourierKeys, validateInspectionGroup, vehicleLabel } from '@/features/dispatch/dispatchModel'
 import { hasPermission } from '@/features/settings/permissions'
 import { useApi, useStore } from '@/store/hooks'
-import type { DispatchCourierKey, DispatchRecord, Vehicle } from '@/types'
+import type { DispatchCourierKey, DispatchRecord, InspectionGroup, Vehicle } from '@/types'
 import { systemDateKey } from '@/utils/format'
 
 function canOpenDispatch(state: ReturnType<typeof useStore>) {
   return hasPermission(state, 'sales.delivery.view') || hasPermission(state, 'sales.delivery.create') || hasPermission(state, 'sales.delivery.edit')
 }
 
+function displayDate(value: string) {
+  const [year, month, day] = value.split('-')
+  return year && month && day ? `${day}/${month}/${year}` : value
+}
+
+function courierSummary(row: DispatchRecord) {
+  return dispatchCourierKeys(row).join(' · ') || 'No courier'
+}
+
 export function DispatchListPage() {
   const state = useStore()
   const api = useApi()
   const navigate = useNavigate()
+  const [selected, setSelected] = useState<string[]>([])
   if (!canOpenDispatch(state)) return <PermissionDenied title="Dispatch" subtitle="You do not have permission to view dispatch." />
   const rows = [...(state.dispatches ?? [])].sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+  const confirmed = rows.filter((row) => row.status === 'confirmed')
+  const canGroup = hasPermission(state, 'sales.delivery.edit')
+  const picked = confirmed.filter((row) => selected.includes(row.id) && !row.inspectionGroupId)
+  const issue = picked.length ? validateInspectionGroup(state.dispatches ?? [], picked.map((row) => row.id)) : ''
   const open = () => {
     const created = api.createDispatch({ dispatchDate: systemDateKey() })
     if (created) navigate(`/sales/dispatch/${created.id}`)
+  }
+  const toggle = (id: string) => setSelected((current) => current.includes(id) ? current.filter((item) => item !== id) : [...current, id])
+  const confirmGroup = () => {
+    const group = api.createInspectionGroup(picked.map((row) => row.id))
+    if (group) setSelected([])
   }
   return (
     <div>
@@ -30,9 +49,110 @@ export function DispatchListPage() {
         actions={hasPermission(state, 'sales.delivery.create') ? <Button onClick={open}>New Dispatch</Button> : undefined}
       />
       <DispatchTable title="Drafts" rows={rows.filter((row) => row.status === 'draft')} vehicles={state.vehicles ?? []} />
-      <DispatchTable title="Confirmed" rows={rows.filter((row) => row.status === 'confirmed')} vehicles={state.vehicles ?? []} />
+      <Card className="mb-4 p-4">
+        <div className="mb-2 text-sm font-semibold text-slate-900">Confirmed</div>
+        <div className="sf-table-wrap">
+          <table>
+            <thead>
+              <tr>
+                {canGroup ? <th>Group</th> : null}
+                <th>Date</th>
+                <th>Vehicle</th>
+                <th>Couriers</th>
+                <th>Shipments</th>
+                <th>Inspection group</th>
+              </tr>
+            </thead>
+            <tbody>
+              {confirmed.map((row) => (
+                <tr key={row.id}>
+                  {canGroup ? (
+                    <td>
+                      {row.inspectionGroupId ? '—' : (
+                        <input
+                          type="checkbox"
+                          aria-label={`${displayDate(row.dispatchDate)} ${courierSummary(row)} ${row.plateNumber}`}
+                          checked={selected.includes(row.id)}
+                          onChange={() => toggle(row.id)}
+                        />
+                      )}
+                    </td>
+                  ) : null}
+                  <td><Link className="text-indigo-700" to={`/sales/dispatch/${row.id}`}>{displayDate(row.dispatchDate)}</Link></td>
+                  <td>{dispatchVehicleLabel(row, state.vehicles ?? [])}</td>
+                  <td>{courierSummary(row)}</td>
+                  <td>{row.lines.length}</td>
+                  <td>{groupNo(state.inspectionGroups ?? [], row.inspectionGroupId)}</td>
+                </tr>
+              ))}
+              {confirmed.length === 0 ? <tr><td colSpan={canGroup ? 6 : 5} className="text-slate-500">None</td></tr> : null}
+            </tbody>
+          </table>
+        </div>
+        {canGroup ? (
+          <div className="mt-4 border-t border-slate-200 pt-3">
+            <div className="text-sm font-semibold text-slate-900">Create Inspection Group</div>
+            <p className="mt-1 text-sm text-slate-600">Select confirmed dispatches from the same date. Courier, parcels, vehicle, and plate come from each dispatch.</p>
+            {picked.length > 0 ? (
+              <div className="mt-3 space-y-1 text-sm">
+                {picked.map((row) => (
+                  <div key={row.id}>{displayDate(row.dispatchDate)} — {courierSummary(row)} — {row.plateNumber}</div>
+                ))}
+                {issue ? <p className="text-red-700">{issue}</p> : <p className="text-slate-600">These dispatches will print as one inspection block.</p>}
+                <Button disabled={Boolean(issue)} onClick={confirmGroup}>Confirm Group</Button>
+              </div>
+            ) : <p className="mt-2 text-sm text-slate-500">No dispatches selected.</p>}
+          </div>
+        ) : null}
+      </Card>
+      <InspectionGroups groups={(state.inspectionGroups ?? []).filter((group) => group.status === 'confirmed')} dispatches={state.dispatches ?? []} canRelease={canGroup} onRelease={(id) => api.releaseInspectionGroup(id)} />
       <DispatchTable title="Voided" rows={rows.filter((row) => row.status === 'void')} vehicles={state.vehicles ?? []} />
     </div>
+  )
+}
+
+function groupNo(groups: InspectionGroup[], id?: string) {
+  if (!id) return '—'
+  return groups.find((group) => group.id === id)?.groupNo ?? '—'
+}
+
+function InspectionGroups({ groups, dispatches, canRelease, onRelease }: { groups: InspectionGroup[]; dispatches: DispatchRecord[]; canRelease: boolean; onRelease: (id: string) => void }) {
+  return (
+    <Card className="mb-4 p-4">
+      <div className="mb-2 text-sm font-semibold text-slate-900">Inspection Groups</div>
+      <div className="sf-table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Group</th>
+              <th>Date</th>
+              <th>Dispatches</th>
+              <th>Couriers</th>
+              <th>Status</th>
+              {canRelease ? <th></th> : null}
+            </tr>
+          </thead>
+          <tbody>
+            {groups.map((group) => {
+              const members = group.dispatchIds.map((id) => dispatches.find((row) => row.id === id)).filter((row): row is DispatchRecord => Boolean(row))
+              const present = new Set(members.flatMap((row) => dispatchCourierKeys(row)))
+              const couriers = DISPATCH_COURIER_ORDER.filter((key) => present.has(key)).join(' · ') || '—'
+              return (
+                <tr key={group.id}>
+                  <td>{group.groupNo}</td>
+                  <td>{displayDate(group.dispatchDate)}</td>
+                  <td>{members.length}</td>
+                  <td>{couriers}</td>
+                  <td className="capitalize">{group.status}</td>
+                  {canRelease ? <td><Button variant="secondary" onClick={() => onRelease(group.id)}>Release group</Button></td> : null}
+                </tr>
+              )
+            })}
+            {groups.length === 0 ? <tr><td colSpan={canRelease ? 6 : 5} className="text-slate-500">No inspection groups yet.</td></tr> : null}
+          </tbody>
+        </table>
+      </div>
+    </Card>
   )
 }
 
@@ -99,6 +219,7 @@ function DispatchLocked({ dispatch }: { dispatch: DispatchRecord }) {
       <PageHeader title="Dispatch" subtitle={`${dispatch.dispatchDate} · ${dispatch.status}`} actions={<Link className="text-sm text-indigo-600" to="/sales/dispatch">All dispatches</Link>} />
       <Card className="space-y-2 p-4 text-sm">
         <div>Vehicle: {dispatch.vehicleCode} — {dispatch.vehicleType} — {dispatch.plateNumber}</div>
+        <div>Inspection group: {groupNo(state.inspectionGroups ?? [], dispatch.inspectionGroupId)}</div>
         <div>Condition: {dispatch.condition || '—'}</div>
         <div>Temperature: blank</div>
         <div className="sf-table-wrap">

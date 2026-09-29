@@ -102,3 +102,36 @@ export function snapshotDispatchLines(
 export function vehicleLabel(vehicle: Pick<Vehicle, 'code' | 'vehicleType' | 'plateNumber'>) {
   return `${vehicle.code} — ${vehicle.vehicleType} — ${vehicle.plateNumber}`
 }
+
+export function dispatchCourierKeys(dispatch: DispatchRecord): DispatchCourierKey[] {
+  const present = new Set(dispatch.lines.map((line) => line.courierKey))
+  return DISPATCH_COURIER_ORDER.filter((key) => present.has(key))
+}
+
+export function inspectionCourierConflict(dispatches: DispatchRecord[]): DispatchCourierKey | '' {
+  const seen = new Set<DispatchCourierKey>()
+  for (const dispatch of dispatches) {
+    for (const key of dispatchCourierKeys(dispatch)) {
+      if (seen.has(key)) return key
+      seen.add(key)
+    }
+  }
+  return ''
+}
+
+export function validateInspectionGroup(dispatches: DispatchRecord[], dispatchIds: string[]) {
+  if (dispatchIds.length < 1) return 'Select at least one confirmed dispatch.'
+  if (new Set(dispatchIds).size !== dispatchIds.length) return 'Select each dispatch once.'
+  const selected = dispatchIds.map((id) => dispatches.find((row) => row.id === id))
+  if (selected.some((row) => !row)) return 'A selected dispatch was not found.'
+  const rows = selected as DispatchRecord[]
+  if (rows.some((row) => row.status === 'draft')) return 'A draft dispatch cannot join an inspection group.'
+  if (rows.some((row) => row.status === 'void')) return 'A voided dispatch cannot join an inspection group.'
+  if (rows.some((row) => row.status !== 'confirmed')) return 'Only a confirmed dispatch can join an inspection group.'
+  if (rows.some((row) => row.inspectionGroupId)) return 'That dispatch is already in an inspection group.'
+  const date = rows[0].dispatchDate
+  if (rows.some((row) => row.dispatchDate !== date)) return 'Inspection Group must contain Dispatch records from the same date.'
+  const conflict = inspectionCourierConflict(rows)
+  if (conflict) return `Courier ${conflict} already exists in this inspection group. Use another Inspection Group.`
+  return ''
+}

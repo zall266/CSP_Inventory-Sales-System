@@ -43,42 +43,57 @@
   white-space: nowrap;
 }
 
-.pjkm911-title,
-.pjkm911-month {
+.pjkm911-title {
   margin-top: 4px;
   text-align: center;
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 700;
 }
 
-.pjkm911-page {
-  margin: 0 0 4px;
-  text-align: right;
-  font-size: 9px;
+.pjkm911-period {
+  display: flex;
+  justify-content: space-between;
+  margin: 3px 0 4px;
+  font-size: 11px;
   font-weight: 700;
 }
 
 .pjkm911-grid {
   width: 100%;
-  margin-top: 4px;
   border-collapse: collapse;
   table-layout: fixed;
-  font-size: 7px;
+  font-size: 8px;
 }
 
 .pjkm911-grid th,
 .pjkm911-grid td {
   border: 1px solid #000;
-  padding: 1px;
-  vertical-align: top;
-  text-align: left;
+  padding: 0.7mm 0.5mm;
+  vertical-align: middle;
+  text-align: center;
+  line-height: 1.15;
   overflow-wrap: break-word;
-  line-height: 1.2;
 }
 
 .pjkm911-grid th {
   font-weight: 700;
-  text-align: center;
+  white-space: nowrap;
+}
+
+.pjkm911-label {
+  font-weight: 700;
+  text-align: left;
+}
+
+.pjkm911-bil,
+.pjkm911-total {
+  font-weight: 700;
+  font-size: 11px;
+}
+
+.pjkm911-block {
+  break-inside: avoid;
+  page-break-inside: avoid;
 }
 
 @page pjkm911 {
@@ -118,8 +133,8 @@
     break-after: auto;
     page-break-after: auto;
   }
-  .pjkm911-grid tr,
-  .pjkm911-grid thead {
+  .pjkm911-grid thead,
+  .pjkm911-block {
     break-inside: avoid;
     page-break-inside: avoid;
   }

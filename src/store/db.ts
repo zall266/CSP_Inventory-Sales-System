@@ -65,7 +65,7 @@ import {
 import { clearAttachmentBlobs, deleteAttachmentBlob, putAttachmentBlob } from '@/store/attachmentBlobs'
 import { applyBomCosts, hydrateProducts, normalizeUnit, parseNonNegativeMoney, productHasBom, productIsSellable, productIsUsed, purchaseQtyToBaseQty, qtyToBaseUnit, resolveProductSku, skuIsUnique, validatePurchaseConversion } from '@/features/products/masterData'
 import { inactiveSalesComponent, salesComponentSnapshot, salesComponentsOf, validateSalesComponents } from '@/features/products/salesComponents'
-import { isDispatchDate, snapshotDispatchLines, validateDispatchLines } from '@/features/dispatch/dispatchModel'
+import { isDispatchDate, snapshotDispatchLines, validateDispatchLines, validateInspectionGroup } from '@/features/dispatch/dispatchModel'
 import { parseAwb } from '@/features/salesImport/parseAwb'
 import { parsePickingList, type TextItem } from '@/features/salesImport/parsePickingList'
 import { reconcileAwbLines, shipmentLinkStatus } from '@/features/salesImport/reconcileAwb'
@@ -335,6 +335,7 @@ function hydrateData(data: AppData): AppData {
     salesImportShipments: data.salesImportShipments ?? [],
     vehicles: data.vehicles ?? [],
     dispatches: data.dispatches ?? [],
+    inspectionGroups: data.inspectionGroups ?? [],
     manufacturers: data.manufacturers ?? [],
     halalCertificates: data.halalCertificates ?? [],
     halalCompliances: data.halalCompliances ?? [],
@@ -8782,6 +8783,78 @@ export const db = {
       })),
     })
     toast('Dispatch voided', voided.vehicleCode)
+    return true
+  },
+
+  createInspectionGroup(dispatchIds: string[]) {
+    if (!hasPermission(state, 'sales.delivery.edit')) {
+      toast('Permission denied', 'You cannot group dispatch records.', 'danger')
+      return null
+    }
+    const issue = validateInspectionGroup(state.dispatches ?? [], dispatchIds)
+    if (issue) {
+      toast(issue, undefined, 'warning')
+      return null
+    }
+    const rows = dispatchIds.map((id) => (state.dispatches ?? []).find((row) => row.id === id)!)
+    const now = nowIso()
+    const actor = currentUser(state).name
+    const sequence = (state.inspectionGroups ?? []).reduce((max, group) => {
+      const value = Number(group.groupNo.replace(/\D/g, ''))
+      return Number.isFinite(value) ? Math.max(max, value) : max
+    }, 0) + 1
+    const group = {
+      id: uid('ig'),
+      groupNo: `IG-${String(sequence).padStart(4, '0')}`,
+      dispatchDate: rows[0].dispatchDate,
+      status: 'confirmed' as const,
+      dispatchIds: rows.map((row) => row.id),
+      createdAt: now,
+      createdBy: actor,
+      confirmedAt: now,
+      confirmedBy: actor,
+    }
+    const linked = new Set(group.dispatchIds)
+    setData({
+      inspectionGroups: [group, ...(state.inspectionGroups ?? [])],
+      dispatches: (state.dispatches ?? []).map((row) => (linked.has(row.id) ? { ...row, inspectionGroupId: group.id } : row)),
+      documentAuditLogs: pushDocAudit(makeDocAudit({
+        action: 'inspection_group_created',
+        documentType: 'inspection_group',
+        documentId: group.id,
+        documentNo: group.groupNo,
+        field: 'dispatchIds',
+        newValue: group.dispatchIds.join(','),
+      })),
+    })
+    toast('Inspection group confirmed', group.groupNo)
+    return group
+  },
+
+  releaseInspectionGroup(id: string) {
+    if (!hasPermission(state, 'sales.delivery.edit')) {
+      toast('Permission denied', 'You cannot release an inspection group.', 'danger')
+      return false
+    }
+    const current = (state.inspectionGroups ?? []).find((group) => group.id === id)
+    if (!current || current.status !== 'confirmed') {
+      toast('Only a confirmed inspection group can be released', undefined, 'warning')
+      return false
+    }
+    const released = { ...current, status: 'released' as const }
+    setData({
+      inspectionGroups: (state.inspectionGroups ?? []).map((group) => (group.id === id ? released : group)),
+      dispatches: (state.dispatches ?? []).map((row) => (row.inspectionGroupId === id ? { ...row, inspectionGroupId: undefined } : row)),
+      documentAuditLogs: pushDocAudit(makeDocAudit({
+        action: 'inspection_group_released',
+        documentType: 'inspection_group',
+        documentId: released.id,
+        documentNo: released.groupNo,
+        oldValue: 'confirmed',
+        newValue: 'released',
+      })),
+    })
+    toast('Inspection group released', released.groupNo)
     return true
   },
 
