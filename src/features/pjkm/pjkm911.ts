@@ -5,11 +5,12 @@ import type { DispatchCourierKey, DispatchRecord } from '@/types'
 export const PJKM_911 = {
   company: 'COOL SLURPPY MARKETING',
   manual: 'MANUAL PJKM',
-  control: 'KAWALAN KEBOLEHKESANAN',
+  control: 'KAWALAN PENGEDARAN DAN PENGANGKUTAN',
+  subtopic: 'SUB TOPIK : PEMERIKSAAN KENDERAAN',
   documentNo: 'MGT/09',
-  effectiveDate: '01 April 2024',
+  effectiveDate: '1 Apr 2024',
   version: '1',
-  title: 'REKOD PEMERIKSAAN KENDERAAN',
+  title: 'REKOD 9.1.1 : REKOD PEMERIKSAAN KENDERAAN',
 } as const
 
 const PAGE_INNER_MM = 297 - 14 - 18
@@ -17,9 +18,9 @@ const SHEET_PAD_MM = 8
 const FIRST_CHROME_MM = 28
 const NEXT_CHROME_MM = 6
 const TABLE_HEAD_MM = 12
-const LINE_MM = 3.1
+const LINE_MM = 3.05
 
-const FIXED_MM = { tarikh: 16, total: 11, parcel: 13, jenis: 18, plate: 18, suhu: 18, keadaan: 14 }
+const FIXED_MM = { tarikh: 13, total: 9, parcel: 11, jenis: 14, plate: 12, suhu: 16, keadaan: 12 }
 
 export type Pjkm911Row = {
   dispatchId: string
@@ -63,6 +64,36 @@ export function pjkm911Widths(columnCount: number) {
   }
 }
 
+function pageHeight(rows: Pjkm911Row[], columnCount: number) {
+  return rows.reduce((sum, row) => sum + rowLines(row, columnCount) * LINE_MM, 0)
+}
+
+function balanceSingleRowTail(pages: Pjkm911Row[][], columnCount: number, firstMm: number, nextMm: number) {
+  if (pages.length < 2 || pages[pages.length - 1].length !== 1) return pages
+  const previousIndex = pages.length - 2
+  const previousBudget = previousIndex === 0 ? firstMm : nextMm
+  const pool = [...pages[previousIndex], ...pages[pages.length - 1]]
+  let splitAt = pages[previousIndex].length
+  let closest = Number.POSITIVE_INFINITY
+  for (let split = 1; split < pool.length; split += 1) {
+    const left = pool.slice(0, split)
+    const right = pool.slice(split)
+    if (right.length < 2) continue
+    if (pageHeight(left, columnCount) > previousBudget) continue
+    if (pageHeight(right, columnCount) > nextMm) continue
+    const gap = Math.abs(left.length - right.length)
+    if (gap < closest) {
+      closest = gap
+      splitAt = split
+    }
+  }
+  if (splitAt === pages[previousIndex].length) return pages
+  const next = pages.slice()
+  next[previousIndex] = pool.slice(0, splitAt)
+  next[next.length - 1] = pool.slice(splitAt)
+  return next
+}
+
 function rowLines(row: Pjkm911Row, columnCount: number) {
   const widths = pjkm911Widths(columnCount)
   return Math.max(
@@ -96,8 +127,9 @@ export function paginatePjkm911(
     used += height
   }
   if (current.length || pages.length === 0) pages.push(current)
-  const count = Math.max(pages.length, 1)
-  return pages.map((pageRows, index) => ({
+  const balanced = balanceSingleRowTail(pages, columns.length, firstMm, nextMm)
+  const count = Math.max(balanced.length, 1)
+  return balanced.map((pageRows, index) => ({
     page: index + 1,
     pages: count,
     label: `${index + 1} of ${count}`,

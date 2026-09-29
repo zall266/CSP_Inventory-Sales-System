@@ -12,7 +12,7 @@ Object.defineProperty(globalThis, 'window', { value: globalThis })
 
 import { readFileSync } from 'node:fs'
 import { activeCourierColumns, courierKeyFromSource, dispatchAwbTotals, validateDispatchLines } from '@/features/dispatch/dispatchModel'
-import { buildPjkm911, paginatePjkm911 } from '@/features/pjkm/pjkm911'
+import { PJKM_911, buildPjkm911, paginatePjkm911 } from '@/features/pjkm/pjkm911'
 import type { TextItem } from '@/features/salesImport/parsePickingList'
 import { db } from '@/store/db'
 import type { DispatchLine } from '@/types'
@@ -175,7 +175,15 @@ const forced = paginatePjkm911(longRows, ['SPX'], { firstMm: 8, nextMm: 8 })
 check('A short report stays on one page and a long report continues', packed.length === 1 && forced.length > 1 && forced[0].label === `1 of ${forced.length}` && forced.at(-1)?.label === `${forced.length} of ${forced.length}`)
 const css = readFileSync('src/features/pjkm/pjkm911.css', 'utf8')
 check('Print layout is A4 portrait', css.includes('size: A4 portrait') && !css.includes('landscape') && css.includes('Page') === false)
-check('Header uses MGT/09 and the inspection title', readFileSync('src/features/pjkm/pjkm911.ts', 'utf8').includes('MGT/09') && readFileSync('src/features/pjkm/pjkm911.ts', 'utf8').includes('REKOD PEMERIKSAAN KENDERAAN') && readFileSync('src/features/pjkm/pjkm911.ts', 'utf8').includes('01 April 2024'))
+check('Main title matches the template', PJKM_911.title === 'REKOD 9.1.1 : REKOD PEMERIKSAAN KENDERAAN')
+check('Header names the distribution control and subtopic', PJKM_911.control === 'KAWALAN PENGEDARAN DAN PENGANGKUTAN' && PJKM_911.subtopic === 'SUB TOPIK : PEMERIKSAAN KENDERAAN')
+check('Document box keeps MGT/09, 1 Apr 2024, and version 1', PJKM_911.documentNo === 'MGT/09' && PJKM_911.effectiveDate === '1 Apr 2024' && PJKM_911.version === '1')
+const seventyOne = Array.from({ length: 71 }, (_, index) => ({ ...longRows[0], dispatchId: `fit-${index}` }))
+const fitted = paginatePjkm911(seventyOne, ['SPX'])
+check('71 one-line rows stay on one measured page', fitted.length === 1 && fitted[0].rows.length === 71 && fitted[0].label === '1 of 1')
+const widowRows = Array.from({ length: 11 }, (_, index) => ({ ...longRows[0], dispatchId: `widow-${index}` }))
+const widow = paginatePjkm911(widowRows, ['SPX'], { firstMm: 30.7, nextMm: 200 })
+check('A single-row last page is split by measured height', widow.length === 2 && widow[0].rows.length >= 2 && widow[1].rows.length >= 2 && widow[0].rows.length + widow[1].rows.length === 11)
 check('Column order helper does not sort alphabetically', activeCourierColumns([{ counts: { UNKNOWN: 1, GDEX: 1, JNT: 1 } }]).join(',') === 'JNT,GDEX,UNKNOWN')
 check('Suhu stays blank in the row model', firstRow != null && !('suhu' in firstRow))
 

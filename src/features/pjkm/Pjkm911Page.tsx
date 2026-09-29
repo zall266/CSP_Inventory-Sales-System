@@ -63,6 +63,7 @@ function Pjkm911Sheet({ page, monthLabel: period }: { page: Page; monthLabel: st
               <div className="pjkm911-company">{PJKM_911.company}</div>
               <div className="pjkm911-manual">{PJKM_911.manual}</div>
               <div className="pjkm911-manual">{PJKM_911.control}</div>
+              <div className="pjkm911-manual">{PJKM_911.subtopic}</div>
             </div>
             <table className="pjkm911-control">
               <tbody>
