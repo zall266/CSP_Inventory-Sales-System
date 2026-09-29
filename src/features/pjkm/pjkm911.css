@@ -1,0 +1,126 @@
+.pjkm911-sheet {
+  box-sizing: border-box;
+  width: 186mm;
+  height: 265mm;
+  margin: 0 auto 16px;
+  padding: 4mm 0;
+  overflow: hidden;
+  background: #fff;
+  color: #000;
+  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.12);
+  font-family: Arial, Helvetica, sans-serif;
+}
+
+.pjkm911-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  align-items: flex-start;
+}
+
+.pjkm911-company {
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.pjkm911-manual {
+  margin-top: 1px;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.pjkm911-control {
+  border-collapse: collapse;
+  font-size: 9px;
+}
+
+.pjkm911-control th,
+.pjkm911-control td {
+  border: 1px solid #000;
+  padding: 1px 4px;
+  text-align: left;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.pjkm911-title,
+.pjkm911-month {
+  margin-top: 4px;
+  text-align: center;
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.pjkm911-page {
+  margin: 0 0 4px;
+  text-align: right;
+  font-size: 9px;
+  font-weight: 700;
+}
+
+.pjkm911-grid {
+  width: 100%;
+  margin-top: 4px;
+  border-collapse: collapse;
+  table-layout: fixed;
+  font-size: 7px;
+}
+
+.pjkm911-grid th,
+.pjkm911-grid td {
+  border: 1px solid #000;
+  padding: 1px 2px;
+  vertical-align: top;
+  text-align: left;
+  overflow-wrap: break-word;
+  line-height: 1.2;
+}
+
+.pjkm911-grid th {
+  font-weight: 700;
+  text-align: center;
+}
+
+@page pjkm911 {
+  size: A4 portrait;
+  margin: 14mm 12mm 18mm;
+}
+
+@media (max-width: 800px) {
+  .pjkm911-sheet {
+    zoom: 0.42;
+    margin-bottom: 12px;
+  }
+}
+
+@media print {
+  .pjkm911-root {
+    page: pjkm911;
+    min-height: 0 !important;
+    background: #fff !important;
+  }
+  .pjkm911-root,
+  .pjkm911-root > div {
+    margin: 0 !important;
+    padding: 0 !important;
+    min-height: 0 !important;
+  }
+  .pjkm911-sheet {
+    width: 186mm;
+    height: 265mm;
+    margin: 0;
+    zoom: 1;
+    box-shadow: none;
+    break-after: page;
+    page-break-after: always;
+  }
+  .pjkm911-sheet:last-child {
+    break-after: auto;
+    page-break-after: auto;
+  }
+  .pjkm911-grid tr,
+  .pjkm911-grid thead {
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+}

@@ -18,6 +18,8 @@ import { LegacySalesReturnsRedirect, SalesReturnDetailPage, SalesReturnEditorPag
 import { ExpensesPage, PayablesPage, PaymentsPage, ReceivablesPage } from '@/features/finance/FinancePages'
 import { InventoryReportPage, ProfitReportPage, PurchaseReportPage, SalesReportPage } from '@/features/reports/ReportsPages'
 import { BusinessSettingsPage, InventorySettingsPage, SalesSettingsPage, UsersSettingsPage } from '@/features/settings/SettingsPages'
+import { VehiclesPage } from '@/features/settings/VehiclesPage'
+import { DispatchEditorPage, DispatchListPage } from '@/features/dispatch/DispatchPages'
 import { ManufacturingDashboardPage } from '@/features/manufacturing/ManufacturingDashboardPage'
 import { BomListPage } from '@/features/manufacturing/BomPages'
 import { NewProductionOrderPage, ProductionOrderDetailPage, ProductionOrdersPage } from '@/features/manufacturing/ProductionOrdersPage'
@@ -40,6 +42,7 @@ import { AgentDetailPage, AgentsPage } from '@/features/agent/AgentPages'
 import { MyTasksPage, TaskCategoriesPage, TaskDetailPage, TaskEditorPage, TaskManagePage } from '@/features/tasks/TaskPages'
 import { NewReceivingPage, ReceivingDetailPage, ReceivingListPage } from '@/features/receiving/ReceivingPages'
 import { Pjkm1011PreviewPage, Pjkm511PreviewPage, PjkmRecordsPage } from '@/features/pjkm/PjkmPages'
+import { Pjkm911PreviewPage } from '@/features/pjkm/Pjkm911Page'
 import { OpeningBalancePage } from '@/features/openingBalance/OpeningBalancePages'
 import { HalalCompliancePage } from '@/features/halal/HalalCompliancePage'
 
@@ -52,6 +55,7 @@ export default function App() {
         <Route path="/print/delivery/:id" element={<DeliveryPrintPage />} />
         <Route path="/pjkm/5.1.1" element={<Pjkm511PreviewPage />} />
         <Route path="/pjkm/10.1.1" element={<Pjkm1011PreviewPage />} />
+        <Route path="/pjkm/9.1.1" element={<Pjkm911PreviewPage />} />
         <Route path="/manufacturing/bmr/:sessionId" element={<BmrPrintPage />} />
         <Route element={<AppLayout />}>
           <Route path="/" element={<DashboardPage />} />
@@ -65,6 +69,8 @@ export default function App() {
           <Route path="/sales/quotations/:id" element={<QuotationDetailPage />} />
           <Route path="/sales/invoices/:id" element={<InvoiceDetailPage />} />
           <Route path="/sales/delivery-orders" element={<DeliveryOrdersPage />} />
+          <Route path="/sales/dispatch" element={<DispatchListPage />} />
+          <Route path="/sales/dispatch/:id" element={<DispatchEditorPage />} />
           <Route path="/sales/delivery-orders/new" element={<DeliveryEditorPage />} />
           <Route path="/sales/delivery-orders/:id/edit" element={<DeliveryEditorPage />} />
           <Route path="/sales/delivery-orders/:id" element={<DeliveryDetailPage />} />
@@ -134,6 +140,7 @@ export default function App() {
           <Route path="/settings/business" element={<BusinessSettingsPage />} />
           <Route path="/settings/inventory" element={<InventorySettingsPage />} />
           <Route path="/settings/sales" element={<SalesSettingsPage />} />
+          <Route path="/settings/vehicles" element={<VehiclesPage />} />
           <Route path="/settings/payments" element={<SalesSettingsPage />} />
           <Route path="/tasks" element={<MyTasksPage />} />
           <Route path="/tasks/manage/new" element={<TaskEditorPage />} />

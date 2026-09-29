@@ -27,6 +27,7 @@ import {
   ShoppingCart,
   Store,
   Tags,
+  Car,
   Truck,
   Users,
   Wallet,
@@ -60,6 +61,7 @@ export const navGroups: NavGroup[] = [
       { to: '/sales/import', label: 'Sales Import', icon: FileUp },
       { to: '/sales/quotations', label: 'Quotations', icon: FileText },
       { to: '/sales/delivery-orders', label: 'Delivery Orders', icon: Truck },
+      { to: '/sales/dispatch', label: 'Dispatch', icon: Truck },
       { to: '/pos', label: 'POS', icon: ShoppingCart },
       { to: '/sales/returns', label: 'Returns', icon: PackageMinus },
       { to: '/sales/agents', label: 'Agents', icon: Contact },
@@ -162,6 +164,7 @@ export const navGroups: NavGroup[] = [
       { to: '/settings/business', label: 'Business Settings', icon: Settings },
       { to: '/settings/inventory', label: 'Inventory Settings', icon: Warehouse },
       { to: '/settings/sales', label: 'Sales Settings', icon: ShoppingCart },
+      { to: '/settings/vehicles', label: 'Vehicles', icon: Car },
     ],
   },
 ]
@@ -196,6 +199,8 @@ function navItemVisible(state: ReturnType<typeof useStore>, item: NavItem) {
   if (item.to === '/compliance/bmr') return hasPermission(state, 'manufacturing.history.view')
   if (item.to === '/sales/returns') return hasPermission(state, 'sales_return.view')
   if (item.to === '/sales/import') return hasPermission(state, 'sales.view') || hasPermission(state, 'sales.create')
+  if (item.to === '/sales/dispatch') return hasPermission(state, 'sales.delivery.view') || hasPermission(state, 'sales.delivery.create') || hasPermission(state, 'sales.delivery.edit')
+  if (item.to === '/settings/vehicles') return hasPermission(state, 'settings.edit')
   return true
 }
 
