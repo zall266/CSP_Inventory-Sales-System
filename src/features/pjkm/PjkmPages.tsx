@@ -78,7 +78,7 @@ export function PjkmRecordsPage() {
         {record === '10.1.1' ? (
           <p className="mt-4 text-sm text-slate-800">Movement lines found: {distributor.rows.length}</p>
         ) : record === '9.1.1' ? (
-          <p className="mt-4 text-sm text-slate-800">Inspection blocks: {inspections.blocks.length}</p>
+          <p className="mt-4 text-sm text-slate-800">Daily summaries: {inspections.blocks.length}</p>
         ) : (
           <p className="mt-4 text-sm text-slate-800">Receiving lines found: {receiving.rows.length}</p>
         )}

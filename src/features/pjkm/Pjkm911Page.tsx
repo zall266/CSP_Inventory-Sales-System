@@ -24,7 +24,7 @@ export function Pjkm911PreviewPage() {
       <div className="no-print sticky top-0 z-10 flex flex-wrap items-center justify-between gap-3 border-b border-slate-300 bg-white px-4 py-3">
         <div className="min-w-0">
           <div className="text-sm font-semibold text-slate-900">PJKM 9.1.1 preview</div>
-          <div className="text-xs text-slate-500">BULAN : {report.bulan} · TAHUN : {report.tahun} · {report.blocks.length} inspection blocks · {filename}</div>
+          <div className="text-xs text-slate-500">BULAN : {report.bulan} · TAHUN : {report.tahun} · {report.blocks.length} daily summaries · {filename}</div>
         </div>
         <div className="flex flex-wrap gap-2">
           <Button variant="secondary" onClick={() => navigate('/pjkm')}>Back</Button>
@@ -90,7 +90,7 @@ function Pjkm911Sheet({ page }: { page: Page }) {
           <tbody key={block.id} className="pjkm911-block">
             {PJKM_911_DETAILS.map((detail, index) => (
               <tr key={detail.key}>
-                {index === 0 ? <td className="pjkm911-bil" rowSpan={PJKM_911_DETAILS.length}>{block.bil}</td> : null}
+                {index === 0 ? <td className="pjkm911-bil" rowSpan={PJKM_911_DETAILS.length}>{block.day}</td> : null}
                 <td className="pjkm911-label">{detail.lines.map((line) => <Fragment key={line}>{line}{line !== detail.lines.at(-1) ? <br /> : null}</Fragment>)}</td>
                 {page.columns.map((column) => <td key={column}>{pjkm911DetailValue(block, column, detail.key)}</td>)}
                 {index === 0 ? <td className="pjkm911-total" rowSpan={PJKM_911_DETAILS.length}>{block.totalAwb}</td> : null}
