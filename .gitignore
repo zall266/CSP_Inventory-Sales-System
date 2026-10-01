@@ -27,3 +27,7 @@ dist-ssr
 .env
 .env.*
 !.env.example
+
+# Apps Script local credentials
+.clasprc.json
+**/.clasprc.json
