@@ -1,0 +1,12 @@
+**/**
+!**/appsscript.json
+!**/*.gs
+!**/*.js
+!**/*.ts
+!**/*.html
+.git/**
+node_modules/**
+tests/**
+**/*.md
+.clasprc.json
+**/.clasprc.json
