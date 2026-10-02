@@ -1,4 +1,4 @@
-import { DISPATCH_COURIER_ORDER, dispatchAwbTotals, dispatchCourierKeys, inspectionCourierConflict } from '@/features/dispatch/dispatchModel'
+import { DISPATCH_COURIER_ORDER, dispatchAwbTotals, dispatchCourierKeys } from '@/features/dispatch/dispatchModel'
 import type { DispatchCourierKey, DispatchRecord, InspectionGroup } from '@/types'
 
 export const PJKM_911 = {
@@ -26,11 +26,12 @@ export type Pjkm911DetailKey = (typeof PJKM_911_DETAILS)[number]['key']
 
 const PAGE_INNER_MM = 297 - 14 - 18
 const SHEET_PAD_MM = 8
-const FIRST_CHROME_MM = 38
+const FIRST_CHROME_MM = 30.7
 const NEXT_CHROME_MM = 0
-const TABLE_HEAD_MM = 11
-const LINE_MM = 3.3
-const ROW_PAD_MM = 1.8
+const TABLE_HEAD_MM = 4.5
+const PAGE_SAFETY_MM = 4
+const LINE_MM = 2.3
+const ROW_PAD_MM = 1.93
 const FIXED_MM = { tarikh: 14, butiran: 22, total: 16 }
 
 export type Pjkm911Cell = {
@@ -41,7 +42,7 @@ export type Pjkm911Cell = {
 
 export type Pjkm911Block = {
   id: string
-  bil: number
+  day: number
   dateKey: string
   cells: Partial<Record<DispatchCourierKey, Pjkm911Cell>>
   totalAwb: number
@@ -105,8 +106,8 @@ export function paginatePjkm911(
   period: { bulan: string; tahun: string },
   limits?: { firstMm?: number; nextMm?: number },
 ): Pjkm911Page[] {
-  const firstMm = limits?.firstMm ?? PAGE_INNER_MM - SHEET_PAD_MM - FIRST_CHROME_MM - TABLE_HEAD_MM
-  const nextMm = limits?.nextMm ?? PAGE_INNER_MM - SHEET_PAD_MM - NEXT_CHROME_MM - TABLE_HEAD_MM
+  const firstMm = limits?.firstMm ?? PAGE_INNER_MM - SHEET_PAD_MM - FIRST_CHROME_MM - TABLE_HEAD_MM - PAGE_SAFETY_MM
+  const nextMm = limits?.nextMm ?? PAGE_INNER_MM - SHEET_PAD_MM - NEXT_CHROME_MM - TABLE_HEAD_MM - PAGE_SAFETY_MM
   const pages: Pjkm911Block[][] = []
   let current: Pjkm911Block[] = []
   let used = 0
@@ -141,56 +142,47 @@ export function paginatePjkm911(
   }))
 }
 
+function agreed(values: string[]) {
+  return values.every((value) => value === values[0]) ? values[0] : ''
+}
+
 function cellsFor(dispatches: DispatchRecord[]) {
   const cells: Pjkm911Block['cells'] = {}
   const lines = dispatches.flatMap((row) => row.lines)
   for (const key of DISPATCH_COURIER_ORDER) {
     const owners = dispatches.filter((row) => dispatchCourierKeys(row).includes(key))
-    if (owners.length !== 1) continue
+    if (!owners.length) continue
     const parcelQty = lines.filter((line) => line.courierKey === key).reduce((sum, line) => sum + line.parcelQty, 0)
-    cells[key] = { parcelQty, vehicleType: owners[0].vehicleType, plateNumber: owners[0].plateNumber }
+    cells[key] = {
+      parcelQty,
+      vehicleType: agreed(owners.map((row) => row.vehicleType)),
+      plateNumber: agreed(owners.map((row) => row.plateNumber)),
+    }
   }
   return { cells, totalAwb: dispatchAwbTotals(lines).totalAwb }
 }
 
-function clusters(dispatches: DispatchRecord[], groups?: InspectionGroup[]) {
-  const confirmedIds = groups ? new Set(groups.filter((group) => group.status === 'confirmed').map((group) => group.id)) : null
-  const buckets = new Map<string, DispatchRecord[]>()
-  const singles: DispatchRecord[] = []
-  for (const row of dispatches) {
-    const groupId = row.inspectionGroupId
-    if (groupId && (confirmedIds == null || confirmedIds.has(groupId))) {
-      buckets.set(groupId, [...(buckets.get(groupId) ?? []), row])
-    } else singles.push(row)
-  }
-  const result: Array<{ id: string; dateKey: string; confirmedAt: string; dispatches: DispatchRecord[] }> = []
-  for (const [id, rows] of buckets) {
-    const dates = new Set(rows.map((row) => row.dispatchDate))
-    if (dates.size !== 1 || inspectionCourierConflict(rows)) {
-      singles.push(...rows)
-      continue
-    }
-    const confirmedAt = rows.map((row) => row.confirmedAt || row.createdAt).sort()[0]
-    result.push({ id, dateKey: rows[0].dispatchDate, confirmedAt, dispatches: rows })
-  }
-  for (const row of singles) {
-    result.push({ id: row.id, dateKey: row.dispatchDate, confirmedAt: row.confirmedAt || row.createdAt, dispatches: [row] })
-  }
-  return result.sort((a, b) => a.dateKey.localeCompare(b.dateKey) || a.confirmedAt.localeCompare(b.confirmedAt) || a.id.localeCompare(b.id))
+function dayOfMonth(dateKey: string) {
+  return Number(dateKey.slice(8, 10))
 }
 
 export function buildPjkm911(input: { month: string; dispatches: DispatchRecord[]; groups?: InspectionGroup[] }) {
   const confirmed = input.dispatches.filter((row) => row.status === 'confirmed' && row.dispatchDate.startsWith(`${input.month}-`))
   const period = pjkm911Period(input.month)
-  const blocks: Pjkm911Block[] = clusters(confirmed, input.groups).map((cluster, index) => {
-    const built = cellsFor(cluster.dispatches)
+  const byDate = new Map<string, DispatchRecord[]>()
+  for (const row of confirmed) {
+    byDate.set(row.dispatchDate, [...(byDate.get(row.dispatchDate) ?? []), row])
+  }
+  const blocks: Pjkm911Block[] = [...byDate.keys()].sort().map((dateKey) => {
+    const rows = byDate.get(dateKey) ?? []
+    const built = cellsFor(rows)
     return {
-      id: cluster.id,
-      bil: index + 1,
-      dateKey: cluster.dateKey,
+      id: dateKey,
+      day: dayOfMonth(dateKey),
+      dateKey,
       cells: built.cells,
       totalAwb: built.totalAwb,
-      dispatchIds: cluster.dispatches.map((row) => row.id),
+      dispatchIds: rows.map((row) => row.id),
     }
   })
   const columns = DISPATCH_COURIER_ORDER.filter((key) => blocks.some((block) => block.cells[key]))

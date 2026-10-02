@@ -35,3 +35,7 @@ Create a sale in POS and inventory, sales lists, and dashboard KPIs update toget
 ## Reset demo data
 
 Business Settings → **Reset demo data**.
+
+## Backend foundation
+
+Phase 1 adds an Apps Script foundation under `apps-script/`. The React prototype still uses `localStorage` and is unchanged. See `apps-script/README.md`. Backend Bible V1.1 remains the roadmap.

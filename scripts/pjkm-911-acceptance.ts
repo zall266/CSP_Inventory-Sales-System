@@ -137,33 +137,33 @@ check('A free shipment can join the second vehicle', db.updateDispatch(second!.i
 
 db.updateVehicle(v001!.id, { code: 'V001', vehicleType: 'Bus', plateNumber: 'JQK 9999' })
 const september = buildPjkm911({ month: '2026-09', dispatches: snap().dispatches, groups: snap().inspectionGroups })
-const firstBlock = september.blocks.find((block) => block.dispatchIds.includes(draft!.id))
-const secondBlock = september.blocks.find((block) => block.dispatchIds.includes(second!.id))
+const firstBlock = september.blocks.find((block) => block.dateKey === '2026-09-12')
 check('September keeps the snapshotted plate', firstBlock?.cells.JNT?.plateNumber === 'JQK 1234' && firstBlock.cells.JNT.vehicleType === 'Van')
-check('Ungrouped dispatches on the same date stay separate blocks', september.blocks.filter((block) => block.dateKey === '2026-09-12').length === 2)
+check('Multiple dispatches on the same date aggregate into one daily summary', september.blocks.filter((block) => block.dateKey === '2026-09-12').length === 1 && firstBlock?.dispatchIds.includes(draft!.id) === true && firstBlock.dispatchIds.includes(second!.id))
 check('One vehicle keeps several couriers on one block', firstBlock?.cells.JNT?.parcelQty === 1 && firstBlock.cells.SPX?.parcelQty === 2 && firstBlock.cells.INSTANT?.parcelQty === 2 && firstBlock.cells.UNKNOWN?.parcelQty === 3)
-check('TOTAL AWB counts distinct tracking numbers and parcels stay per courier', firstBlock?.totalAwb === 7 && Object.values(firstBlock.cells).reduce((sum, cell) => sum + cell.parcelQty, 0) === 8)
-check('GDEX appears from the second dispatch', secondBlock?.cells.GDEX?.parcelQty === 4 && secondBlock.cells.GDEX.plateNumber === 'JTR 5678' && secondBlock.cells.GDEX.vehicleType === 'Lorry')
+check('Daily courier quantities are summed and TOTAL AWB counts distinct tracking numbers', firstBlock?.cells.GDEX?.parcelQty === 4 && firstBlock.totalAwb === 8 && Object.values(firstBlock.cells).reduce((sum, cell) => sum + cell.parcelQty, 0) === 12)
+check('GDEX keeps the second dispatch snapshot on the same daily block', firstBlock?.cells.GDEX?.plateNumber === 'JTR 5678' && firstBlock.cells.GDEX.vehicleType === 'Lorry')
 check('Courier columns follow the fixed order and hide unused couriers', september.columns.join(',') === 'JNT,SPX,GDEX,INSTANT,UNKNOWN')
 check('October does not show September couriers', buildPjkm911({ month: '2026-10', dispatches: snap().dispatches }).columns.length === 0)
 check('BULAN and TAHUN are separate', september.bulan === 'SEP' && september.tahun === '2026')
-check('TARIKH uses the Bil sequence', september.blocks.map((block) => block.bil).join(',') === '1,2')
+check('TARIKH uses the dispatch day of the month', firstBlock?.day === 12 && firstBlock.id === '2026-09-12')
 
 const october = db.createDispatch({ dispatchDate: '2026-10-02', vehicleId: v001!.id })
 const octoberShipment = shipments().find((row) => row.trackingNumber === 'SPXMY300002')!
 db.updateDispatch(october!.id, { lines: [{ shipmentId: octoberShipment.id, courierKey: 'GDEX', parcelQty: 1 }] })
 db.confirmDispatch(october!.id)
 const octoberReport = buildPjkm911({ month: '2026-10', dispatches: snap().dispatches, groups: snap().inspectionGroups })
-check('October shows GDEX and September does not gain it as a new block', octoberReport.columns.join(',') === 'GDEX' && buildPjkm911({ month: '2026-09', dispatches: snap().dispatches }).blocks.length === 2)
+check('October shows GDEX and September does not gain it as a new block', octoberReport.columns.join(',') === 'GDEX' && octoberReport.blocks[0]?.day === 2 && buildPjkm911({ month: '2026-09', dispatches: snap().dispatches }).blocks.length === 1)
 
 check('Void removes the dispatch from PJKM and releases the shipment', db.voidDispatch(second!.id) === true && !buildPjkm911({ month: '2026-09', dispatches: snap().dispatches }).blocks.some((block) => block.dispatchIds.includes(second!.id)))
 const reused = db.createDispatch({ dispatchDate: '2026-09-20', vehicleId: v002!.id })
 check('A voided shipment can be dispatched again', db.updateDispatch(reused!.id, { lines: [{ shipmentId: other.id, courierKey: 'POS', parcelQty: 1 }] }) && db.confirmDispatch(reused!.id))
+check('A later date keeps its own day and is not a sequence number', buildPjkm911({ month: '2026-09', dispatches: snap().dispatches }).blocks.map((block) => block.day).join(',') === '12,20')
 check('Draft dispatch is excluded', buildPjkm911({ month: '2026-09', dispatches: [{ ...confirmed, status: 'draft', lines: confirmed.lines }] }).blocks.length === 0)
 check('A voided dispatch cannot be grouped', validateInspectionGroup(snap().dispatches, [second!.id]) === 'A voided dispatch cannot join an inspection group.')
 
 function sampleBlock(id: string, plate = 'JQK 1234'): Pjkm911Block {
-  return { id, bil: 1, dateKey: '2026-09-01', cells: { SPX: { parcelQty: 1, vehicleType: 'Van', plateNumber: plate } }, totalAwb: 1, dispatchIds: [id] }
+  return { id, day: 1, dateKey: '2026-09-01', cells: { SPX: { parcelQty: 1, vehicleType: 'Van', plateNumber: plate } }, totalAwb: 1, dispatchIds: [id] }
 }
 const period = { bulan: 'SEP', tahun: '2026' }
 const shortBlocks = [sampleBlock('one')]
@@ -185,7 +185,10 @@ check('Footer page numbers come from the shared print rule', printCss.includes("
 check('Main title matches the template', PJKM_911.title === 'REKOD 9.1.1 : REKOD PEMERIKSAAN KENDERAAN')
 check('Header names the distribution control and subtopic', PJKM_911.control === 'KAWALAN PENGEDARAN DAN PENGANGKUTAN' && PJKM_911.subtopic === 'SUB TOPIK : PEMERIKSAAN KENDERAAN')
 check('Document box keeps MGT/09, 1 Apr 2024, and version 1', PJKM_911.documentNo === 'MGT/09' && PJKM_911.effectiveDate === '1 Apr 2024' && PJKM_911.version === '1')
-check('The sheet repeats the table header and merges Bil and TOTAL AWB', pageSource.includes('TARIKH') && pageSource.includes('BUTIRAN') && pageSource.includes('rowSpan={PJKM_911_DETAILS.length}') && pageSource.includes('BULAN :'))
+check('The sheet repeats the table header and merges TARIKH and TOTAL AWB', pageSource.includes('TARIKH') && pageSource.includes('BUTIRAN') && pageSource.includes('{block.day}') && !pageSource.includes('{block.bil}') && pageSource.includes('rowSpan={PJKM_911_DETAILS.length}') && pageSource.includes('BULAN :'))
+const tableAt = pageSource.indexOf('<table className="pjkm911-grid">')
+const firstChrome = pageSource.slice(0, tableAt)
+check('Continuation pages keep the table header and omit the letterhead, BULAN, and TAHUN', pageSource.includes('const first = page.page === 1') && firstChrome.includes('BULAN :') && firstChrome.includes('PJKM_911.company') && !pageSource.slice(tableAt).includes('BULAN') && !pageSource.slice(tableAt).includes('TAHUN'))
 check('BUTIRAN rows are the five template labels', PJKM_911_DETAILS.map((detail) => detail.lines.join(' ')).join('|') === 'QUANTITI PARCEL|JENIS KENDERAAN|PLATE NUMBER|SUHU KENDERAAN|KEADAAN')
 const eight = pjkm911Widths(8)
 const nine = pjkm911Widths(9)
@@ -231,10 +234,10 @@ const group = db.createInspectionGroup([groupedJnt!.id, groupedSpx!.id, groupedG
 check('Three dispatches with different vehicles become one group', group?.groupNo === 'IG-0001' && group.dispatchDate === '2026-11-12')
 check('An already grouped dispatch cannot be grouped again', db.createInspectionGroup([groupedJnt!.id, standaloneInstant!.id]) === null && validateInspectionGroup(snap().dispatches, [groupedJnt!.id, standaloneInstant!.id]) === 'That dispatch is already in an inspection group.')
 const november = buildPjkm911({ month: '2026-11', dispatches: snap().dispatches, groups: snap().inspectionGroups })
-const groupedBlock = november.blocks.find((block) => block.id === group!.id)
-check('Grouped dispatches render as one Bil and an ungrouped dispatch stays separate', november.blocks.length === 2 && groupedBlock?.dispatchIds.length === 3 && november.blocks.some((block) => block.dispatchIds.length === 1 && block.dispatchIds[0] === standaloneInstant!.id))
-check('Parcel, vehicle, and plate stay with each courier', groupedBlock?.cells.JNT?.parcelQty === 26 && groupedBlock.cells.JNT.vehicleType === 'LORI' && groupedBlock.cells.JNT.plateNumber === 'VEK 7187' && groupedBlock.cells.SPX?.parcelQty === 79 && groupedBlock.cells.SPX.plateNumber === 'VQM 6404' && groupedBlock.cells.GDEX?.parcelQty === 1 && groupedBlock.cells.GDEX.vehicleType === 'LORI')
-check('TOTAL AWB counts the grouped tracking numbers once each', groupedBlock?.totalAwb === 4)
+const groupedBlock = november.blocks.find((block) => block.dateKey === '2026-11-12')
+check('One date prints one daily summary even when an inspection group and an ungrouped dispatch share it', november.blocks.length === 1 && groupedBlock?.day === 12 && groupedBlock.id !== group!.id && groupedBlock.dispatchIds.length === 4 && groupedBlock.dispatchIds.includes(standaloneInstant!.id))
+check('Parcel, vehicle, and plate stay with each courier', groupedBlock?.cells.JNT?.parcelQty === 26 && groupedBlock.cells.JNT.vehicleType === 'LORI' && groupedBlock.cells.JNT.plateNumber === 'VEK 7187' && groupedBlock.cells.SPX?.parcelQty === 79 && groupedBlock.cells.SPX.plateNumber === 'VQM 6404' && groupedBlock.cells.GDEX?.parcelQty === 1 && groupedBlock.cells.GDEX.vehicleType === 'LORI' && groupedBlock.cells.INSTANT?.parcelQty === 2 && groupedBlock.cells.INSTANT.plateNumber === 'VEK 7192')
+check('TOTAL AWB counts the date tracking numbers once each', groupedBlock?.totalAwb === 5)
 const blankReport = buildPjkm911({
   month: '2026-07',
   dispatches: [{
@@ -253,17 +256,18 @@ const blankReport = buildPjkm911({
   } as DispatchRecord],
 })
 check('A blank tracking number does not increase TOTAL AWB and duplicate tracking counts once', blankReport.blocks[0]?.totalAwb === 1 && blankReport.blocks[0].cells.POS?.parcelQty === 9)
-check('Condition is BAIK only on couriers in the Bil', groupedBlock != null && pjkm911DetailValue(groupedBlock, 'JNT', 'condition') === 'BAIK' && pjkm911DetailValue(groupedBlock, 'SPX', 'suhu') === '' && pjkm911DetailValue(groupedBlock, 'INSTANT', 'condition') === '')
+check('Condition is BAIK only on couriers with activity and temperature stays blank', groupedBlock != null && pjkm911DetailValue(groupedBlock, 'JNT', 'condition') === 'BAIK' && pjkm911DetailValue(groupedBlock, 'SPX', 'suhu') === '' && pjkm911DetailValue(groupedBlock, 'INSTANT', 'condition') === 'BAIK' && pjkm911DetailValue(groupedBlock, 'FLASH', 'condition') === '' && pjkm911DetailValue(groupedBlock, 'FLASH', 'parcel') === '')
 check('November columns omit couriers that are not in the month', november.columns.join(',') === 'JNT,SPX,GDEX,INSTANT')
 db.updateVehicle(loriA!.id, { code: 'L001', vehicleType: 'BUS', plateNumber: 'VEK 9999' })
-const afterVehicleEdit = buildPjkm911({ month: '2026-11', dispatches: snap().dispatches, groups: snap().inspectionGroups }).blocks.find((block) => block.id === group!.id)
+const afterVehicleEdit = buildPjkm911({ month: '2026-11', dispatches: snap().dispatches, groups: snap().inspectionGroups }).blocks.find((block) => block.dateKey === '2026-11-12')
 check('A later vehicle edit does not change the grouped snapshot', afterVehicleEdit?.cells.JNT?.plateNumber === 'VEK 7187' && afterVehicleEdit.cells.JNT.vehicleType === 'LORI')
 const laterJnt = confirmLines('2026-11-13', loriA!.id, [{ shipmentId: jntLater.id, courierKey: 'JNT', parcelQty: 3 }])
 const otherJnt = confirmLines('2026-11-13', loriB!.id, [{ shipmentId: jntOther.id, courierKey: 'JNT', parcelQty: 4 }])
 check('The same courier cannot be added twice', db.createInspectionGroup([laterJnt!.id, otherJnt!.id]) === null && validateInspectionGroup(snap().dispatches, [laterJnt!.id, otherJnt!.id]).includes('Courier JNT already exists'))
 const separate = buildPjkm911({ month: '2026-11', dispatches: snap().dispatches, groups: snap().inspectionGroups })
-check('The same courier on two vehicles stays two Bils', separate.blocks.filter((block) => block.dateKey === '2026-11-13').length === 2 && separate.blocks.filter((block) => block.cells.JNT).length === 3)
-check('Releasing a group returns each dispatch to its own Bil', db.releaseInspectionGroup(group!.id) === true && buildPjkm911({ month: '2026-11', dispatches: snap().dispatches, groups: snap().inspectionGroups }).blocks.filter((block) => block.dateKey === '2026-11-12').length === 4)
+const conflictDay = separate.blocks.find((block) => block.dateKey === '2026-11-13')
+check('The same courier on two vehicles stays one daily summary', separate.blocks.filter((block) => block.dateKey === '2026-11-13').length === 1 && conflictDay?.cells.JNT?.parcelQty === 7 && conflictDay.cells.JNT.vehicleType === '' && conflictDay.cells.JNT.plateNumber === '' && pjkm911DetailValue(conflictDay, 'JNT', 'condition') === 'BAIK')
+check('Releasing a group keeps one daily summary and leaves the inspection group record', db.releaseInspectionGroup(group!.id) === true && snap().inspectionGroups.some((row) => row.id === group!.id && row.status === 'released') && snap().dispatches.filter((row) => row.dispatchDate === '2026-11-12' && row.status === 'confirmed').every((row) => !row.inspectionGroupId) && buildPjkm911({ month: '2026-11', dispatches: snap().dispatches, groups: snap().inspectionGroups }).blocks.filter((block) => block.dateKey === '2026-11-12').length === 1)
 const mixed = {
   id: 'mixed',
   status: 'confirmed' as const,
@@ -287,8 +291,46 @@ const partner = {
   lines: [{ shipmentId: 'm3', trackingNumber: 'MIX-GDEX', courierKey: 'GDEX' as const, parcelQty: 1 }],
 }
 const august = buildPjkm911({ month: '2026-08', dispatches: [mixed, partner] as DispatchRecord[] })
-check('One dispatch can fill two courier columns in the same Bil', august.blocks.length === 1 && august.blocks[0].cells.JNT?.plateNumber === 'MIX 1000' && august.blocks[0].cells.SPX?.plateNumber === 'MIX 1000' && august.blocks[0].cells.GDEX?.plateNumber === 'MIX 2000' && august.blocks[0].totalAwb === 3)
+check('One dispatch can fill two courier columns in the same daily summary', august.blocks.length === 1 && august.blocks[0].day === 12 && august.blocks[0].cells.JNT?.plateNumber === 'MIX 1000' && august.blocks[0].cells.SPX?.plateNumber === 'MIX 1000' && august.blocks[0].cells.GDEX?.plateNumber === 'MIX 2000' && august.blocks[0].totalAwb === 3)
 check('PJKM 5.1.1 and 10.1.1 files were not edited for this layout', !readFileSync('src/features/pjkm/pjkm511.ts', 'utf8').includes('inspectionGroupId') && !readFileSync('src/features/pjkm/pjkm1011.ts', 'utf8').includes('inspectionGroupId'))
+
+function daily(id: string, date: string, courier: DispatchLine['courierKey'], parcelQty: number, tracking: string, vehicleType = 'LORI', plateNumber = 'AAA 1111'): DispatchRecord {
+  return {
+    id,
+    status: 'confirmed',
+    dispatchDate: date,
+    confirmedAt: `${date}T00:00:00.000Z`,
+    createdAt: `${date}T00:00:00.000Z`,
+    vehicleType,
+    plateNumber,
+    lines: [{ shipmentId: id, trackingNumber: tracking, courierKey: courier, parcelQty }],
+  } as DispatchRecord
+}
+const sparse = buildPjkm911({
+  month: '2026-09',
+  dispatches: [
+    daily('late', '2026-09-07', 'JNT', 2, 'LATE-1'),
+    daily('first', '2026-09-01', 'SPX', 3, 'FIRST-1'),
+    daily('fourth', '2026-09-04', 'GDEX', 1, 'FOURTH-1'),
+    daily('second', '2026-09-02', 'FLASH', 4, 'SECOND-1'),
+    daily('again', '2026-09-01', 'JNT', 5, 'FIRST-2'),
+  ],
+})
+check('Dates with no dispatch, including a Sunday and a public holiday, are omitted', sparse.blocks.map((block) => block.day).join(',') === '1,2,4,7' && !sparse.blocks.some((block) => [3, 5, 6, 16].includes(block.day)))
+check('The same date is not printed twice and quantities are summed', sparse.blocks.filter((block) => block.day === 1).length === 1 && sparse.blocks[0].cells.SPX?.parcelQty === 3 && sparse.blocks[0].cells.JNT?.parcelQty === 5 && sparse.blocks[0].totalAwb === 2)
+check('Daily summaries sort by dispatch date', sparse.blocks.map((block) => block.dateKey).join(',') === '2026-09-01,2026-09-02,2026-09-04,2026-09-07')
+const withGroups = buildPjkm911({ month: '2026-09', dispatches: [daily('late', '2026-09-07', 'JNT', 2, 'LATE-1'), daily('first', '2026-09-01', 'SPX', 3, 'FIRST-1')], groups: snap().inspectionGroups })
+const withoutGroups = buildPjkm911({ month: '2026-09', dispatches: [daily('late', '2026-09-07', 'JNT', 2, 'LATE-1'), daily('first', '2026-09-01', 'SPX', 3, 'FIRST-1')] })
+check('Inspection groups do not change the printed dates', withGroups.blocks.map((block) => block.day).join(',') === withoutGroups.blocks.map((block) => block.day).join(',') && withGroups.blocks.map((block) => block.day).join(',') === '1,7')
+const many = Array.from({ length: 20 }, (_, index) => sampleBlock(`fit-${index}`))
+const fitted = paginatePjkm911(many, ['SPX'], period)
+const fittedCount = fitted[0].blocks.length
+const exactFit = paginatePjkm911(many.slice(0, fittedCount), ['SPX'], period)
+const oneMore = paginatePjkm911(many.slice(0, fittedCount + 1), ['SPX'], period)
+check('Pagination is dynamic and fits more than five complete blocks on the first page', fittedCount > 5 && exactFit.length === 1 && oneMore.length === 2 && oneMore[0].blocks.length === fittedCount)
+check('No daily block is split across pages', fitted.flatMap((page) => page.blocks.map((block) => block.id)).join(',') === many.map((block) => block.id).join(','))
+check('A continuation page fits at least as many whole blocks as the first page', fitted[1] != null && fitted[1].blocks.length >= fittedCount && fitted.slice(1).every((page) => page.blocks.length > 0))
+check('Footer and sheet rules stay in place', css.includes('height: 265mm') && css.includes('overflow: hidden') && printCss.includes("content: 'Page ' counter(page) ' of ' counter(pages)"))
 
 const failed = results.filter((row) => !row.ok)
 console.log(`${results.length - failed.length}/${results.length} passed`)

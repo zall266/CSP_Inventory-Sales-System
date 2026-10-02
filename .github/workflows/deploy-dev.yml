@@ -1,0 +1,77 @@
+name: Deploy DEV
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    name: Push Apps Script source
+    runs-on: ubuntu-latest
+    environment: dev
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Check clasp target
+        working-directory: apps-script
+        run: |
+          node --input-type=module <<'EOF'
+          import fs from 'node:fs'
+          const cfg = JSON.parse(fs.readFileSync('.clasp.json', 'utf8'))
+          const expected = '1mkRzptY0mzHnzOFB8TA6AGIZyv6q2gJq-QdKPBWtV91oq5okHWVpY4Jj'
+          if (cfg.scriptId !== expected || cfg.rootDir !== '.') {
+            console.error('apps-script/.clasp.json does not target the existing DEV Apps Script project.')
+            process.exit(1)
+          }
+          console.log('clasp target confirmed')
+          EOF
+
+      - name: Write clasp credentials
+        env:
+          CSP_DEV_CLASP_CREDENTIALS: ${{ secrets.CSP_DEV_CLASP_CREDENTIALS }}
+        run: |
+          node --input-type=module <<'EOF'
+          import fs from 'node:fs'
+          import os from 'node:os'
+          import path from 'node:path'
+          const raw = process.env.CSP_DEV_CLASP_CREDENTIALS
+          if (!raw || !raw.trim()) {
+            console.error('CSP_DEV_CLASP_CREDENTIALS is empty.')
+            process.exit(1)
+          }
+          let parsed
+          try {
+            parsed = JSON.parse(raw)
+          } catch {
+            console.error('CSP_DEV_CLASP_CREDENTIALS is not valid JSON.')
+            process.exit(1)
+          }
+          const token = parsed.tokens && parsed.tokens.default
+          if (!token || token.type !== 'authorized_user' || !token.client_id || !token.client_secret || !token.refresh_token) {
+            console.error('CSP_DEV_CLASP_CREDENTIALS is missing the authorized_user token fields.')
+            process.exit(1)
+          }
+          for (const part of [token.client_id, token.client_secret, token.refresh_token]) {
+            process.stdout.write(`::add-mask::${part}\n`)
+          }
+          const dest = path.join(os.homedir(), '.clasprc.json')
+          fs.writeFileSync(dest, raw.endsWith('\n') ? raw : `${raw}\n`, { mode: 0o600 })
+          fs.chmodSync(dest, 0o600)
+          console.log('clasp credentials file created')
+          EOF
+
+      - name: Push Apps Script source
+        working-directory: apps-script
+        run: npx --yes @google/clasp@3.4.1 push --force
+
+      - name: Remove clasp credentials
+        if: always()
+        run: rm -f "$HOME/.clasprc.json"
