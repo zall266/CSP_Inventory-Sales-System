@@ -2,7 +2,7 @@
 
 Phase 1 backend for the CSP Inventory & Sales System. Backend Bible V1.1 is the roadmap. This folder does not replace it.
 
-The React app remains the prototype. It still stores business data in `localStorage`. No business module calls this backend yet.
+The React app remains the prototype. Modules other than identity still store their data in `localStorage`. Module 1 calls this backend only when `VITE_CSP_API_URL` is set.
 
 ## Shape
 
