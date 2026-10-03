@@ -2,6 +2,14 @@ name: Deploy DEV
 
 on:
   workflow_dispatch:
+  # Cloud agents authenticate as a GitHub App whose token can push this
+  # branch but cannot call the workflow-dispatch API (that call requires
+  # actions: write and returns 403). A push of this branch starts the same
+  # job. The job token stays contents: read. Clasp still uses the dev
+  # environment secret, not the GitHub token.
+  push:
+    branches:
+      - cursor/module-1-identity-settings-d9ac
 
 permissions:
   contents: read
