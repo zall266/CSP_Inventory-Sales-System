@@ -6,7 +6,8 @@ function defaultBackend() {
     drive: drive,
     system: createSystemService({ sheetRepository: sheets, driveStorage: drive }),
     idempotency: createIdempotencyService(sheets),
-    foundation: createFoundationService(sheets)
+    foundation: createFoundationService(sheets),
+    identity: createIdentityService({ sheetRepository: sheets, driveStorage: drive })
   };
 }
 
@@ -20,7 +21,7 @@ function handleRequest(request, backend) {
   var action = request && request.action ? String(request.action) : '';
   var requestId = request && request.requestId ? String(request.requestId) : '';
   try {
-    var router = createRouter(resolved.system);
+    var router = createRouter(resolved);
     var key = request && request.idempotencyKey ? String(request.idempotencyKey).trim() : '';
     var response = key
       ? resolved.idempotency.execute(key, request, function () { return router.dispatch(request); })

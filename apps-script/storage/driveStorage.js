@@ -28,6 +28,17 @@ function createDriveStorage(options) {
     return { id: created.getId(), name: created.getName(), created: true };
   }
 
+  function readFileBytes(fileId) {
+    var file = settings.getFileById ? settings.getFileById(fileId) : DriveApp.getFileById(fileId);
+    if (!file || !file.getBlob) throw appError('NOT_FOUND', 'File was not found.');
+    var blob = file.getBlob();
+    return {
+      mimeType: blob.getContentType(),
+      bytes: blob.getBytes(),
+      name: file.getName()
+    };
+  }
+
   function readFileMetadata(fileId) {
     var file = settings.getFileById ? settings.getFileById(fileId) : DriveApp.getFileById(fileId);
     if (!file) throw appError('NOT_FOUND', 'File was not found.');
@@ -69,6 +80,7 @@ function createDriveStorage(options) {
     getChildFolder: getChildFolder,
     verifyFileExists: verifyFileExists,
     createChildFolder: createChildFolder,
+    readFileBytes: readFileBytes,
     readFileMetadata: readFileMetadata,
     uploadFile: uploadFile,
     replaceFile: replaceFile,

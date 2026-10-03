@@ -57,7 +57,9 @@ Set these Script Properties on that existing project. Keep the values out of Rea
 { "v": 1, "requestId": "...", "action": "system.ping", "payload": {} }
 ```
 
-Optional `idempotencyKey` replays a stored success. A different action with the same key returns `DUPLICATE_REQUEST`. Any other action, including sales and inventory, returns `UNKNOWN_ACTION`.
+Optional `idempotencyKey` replays a stored success. A different action with the same key returns `DUPLICATE_REQUEST`. Sales, inventory, and every module after identity still return `UNKNOWN_ACTION`.
+
+Module 1 adds `identity.get`, `identity.bootstrap`, `settings.get`, `settings.update`, `users.list`, `users.create`, `users.update`, `roles.create`, `roles.update`, `roles.setStatus`, `roles.savePermissions`, and `roles.updateMatrix`. These actions use the existing router, sheet repository, audit log, and Drive root. `actorUserId` is the prototype user switcher already stored in the UI. It is not a login session. `users.switch` and `settings.resetDemo` stay in the browser.
 
 Success and failure use `ok`, `data`, `error`, and `meta`. Clients do not receive stack traces, property values, or Drive URLs.
 
@@ -79,6 +81,6 @@ Shared-link access is not the security model. The script opens private ids. A la
 
 ## Tests
 
-`npm run test:backend` exercises the foundation with in-memory Sheet and Drive doubles. It does not touch Google.
+`npm run test:backend` exercises the foundation and Module 1 identity rules with in-memory Sheet and Drive doubles. It does not touch Google.
 
 Phase 2 is temporary CSP UAT access. It depends on this source being present in the existing Apps Script project, the four Script Properties being set, and `initializeFoundation` having been run.

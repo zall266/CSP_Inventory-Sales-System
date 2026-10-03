@@ -1,4 +1,5 @@
 import { createSeedData, CURRENT_USER } from '@/data/seed'
+import { queueIdentityWrite, queueSettingsPatch, startIdentityHydration } from '@/store/identitySync'
 import {
   applyDisplayDelta,
   createMainWarehouseLayout,
@@ -2734,6 +2735,14 @@ export const db = {
       changedBy: actor.name,
     })
     setData({ users: [user, ...state.users], userAuditLogs: [log, ...(state.userAuditLogs ?? [])] })
+    queueIdentityWrite('users.create', {
+      id: user.id,
+      name: user.name,
+      email: user.email,
+      roleId: user.roleId,
+      departmentId: user.departmentId,
+      status: user.status,
+    })
     toast('User created', user.name)
     return user
   },
@@ -2816,6 +2825,16 @@ export const db = {
       ),
       userAuditLogs: [...logs, ...(state.userAuditLogs ?? [])],
     })
+    queueIdentityWrite('users.update', {
+      id,
+      patch: {
+        name: nextName,
+        email: nextEmail,
+        roleId: nextRoleId,
+        departmentId: nextDepartmentId,
+        status: nextStatus,
+      },
+    })
     toast('User updated', nextName)
     return true
   },
@@ -2862,6 +2881,12 @@ export const db = {
       },
       userAuditLogs: [log, ...(state.userAuditLogs ?? [])],
     })
+    queueIdentityWrite('roles.create', {
+      id: role.id,
+      name: role.name,
+      description: role.description,
+      status: role.status,
+    })
     toast('Role created', role.name)
     return role
   },
@@ -2905,6 +2930,7 @@ export const db = {
       roles: state.roles.map((item) => (item.id === id ? { ...item, name: nextName, description: nextDescription, updatedAt: stamp } : item)),
       userAuditLogs: [...logs, ...(state.userAuditLogs ?? [])],
     })
+    queueIdentityWrite('roles.update', { id, patch: { name: nextName, description: nextDescription } })
     toast('Role updated', nextName)
     return true
   },
@@ -2941,6 +2967,7 @@ export const db = {
       roles: state.roles.map((item) => (item.id === id ? { ...item, status, updatedAt: stamp } : item)),
       userAuditLogs: [log, ...(state.userAuditLogs ?? [])],
     })
+    queueIdentityWrite('roles.setStatus', { id, status })
     toast(status === 'inactive' ? 'Role deactivated' : 'Role reactivated', assigned ? `${assigned} user(s) still reference this role.` : role.name)
     return true
   },
@@ -2979,6 +3006,7 @@ export const db = {
       settings: { ...state.settings, roleMatrix: { ...state.settings.roleMatrix, [roleId]: next } },
       userAuditLogs: [...logs, ...(state.userAuditLogs ?? [])],
     })
+    queueIdentityWrite('roles.savePermissions', { roleId, permissions: next })
     toast('Permissions saved', role.name)
     return true
   },
@@ -3019,10 +3047,12 @@ export const db = {
       userAuditLogs: logs.length ? [...logs, ...(state.userAuditLogs ?? [])] : state.userAuditLogs,
     })
     if (logs.length) toast('Permission matrix updated')
+    queueIdentityWrite('roles.updateMatrix', { matrix: nextMatrix })
   },
 
   updateSettings(patch: Partial<Settings>) {
     setData({ settings: { ...state.settings, ...patch } })
+    queueSettingsPatch(patch)
   },
 
   createQuotation(input: QuotationInput) {
@@ -8864,6 +8894,23 @@ export const db = {
     return result
   },
 }
+
+startIdentityHydration({
+  apply(slice) {
+    setData({
+      users: slice.users,
+      roles: slice.roles,
+      departments: slice.departments,
+      settings: slice.settings,
+      userAuditLogs: slice.userAuditLogs,
+    })
+  },
+  actorId: () => currentUser(state).id,
+  settings: () => state.settings,
+  onError(message) {
+    toast('Could not save to the server', message, 'danger')
+  },
+})
 
 void db.purgeExpiredSalesReturnEvidence()
 

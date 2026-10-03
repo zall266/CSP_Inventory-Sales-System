@@ -18,11 +18,14 @@ const files = [
   'repositories/idempotencyRepository.js',
   'repositories/counterRepository.js',
   'storage/driveStorage.js',
+  'identity/permissionCatalog.js',
+  'repositories/identityRepository.js',
   'services/auditService.js',
   'services/idempotencyService.js',
   'services/counterService.js',
   'services/systemService.js',
   'services/foundationService.js',
+  'services/identityService.js',
   'app/router.js',
   'app/main.js',
 ]
@@ -39,6 +42,8 @@ export function loadBackend(globals = {}) {
     Array,
     Intl,
     crypto,
+    Buffer,
+    Uint8Array,
     ...globals,
   }
   vm.createContext(context)
@@ -105,6 +110,13 @@ export function createFakeSpreadsheet(seed = {}) {
               }
             }
           },
+          clearContent() {
+            for (let r = 0; r < numRows; r += 1) {
+              const source = store[name][row - 1 + r]
+              if (!source) continue
+              for (let c = 0; c < numColumns; c += 1) source[column - 1 + c] = ''
+            }
+          },
         }
       },
       appendRow(row) {
@@ -131,21 +143,58 @@ export function createFakeSpreadsheet(seed = {}) {
 export function createFakeDrive(rootId) {
   const created = []
   const trashed = []
-  const folder = {
-    getId() {
-      return rootId
-    },
-    getName() {
-      return 'CSP Inventory & Sales System'
-    },
-    getFoldersByName() {
-      return { hasNext: () => false, next: () => null }
-    },
-    createFolder(name) {
-      created.push(name)
-      return { getId: () => `folder-${name}`, getName: () => name }
-    },
+  const files = new Map()
+  const children = new Map()
+
+  function makeFile(id, name, mime, bytes, parent) {
+    let fileName = name
+    const file = {
+      getId: () => id,
+      getName: () => fileName,
+      getMimeType: () => mime,
+      getBlob: () => ({
+        getContentType: () => mime,
+        getBytes: () => bytes,
+      }),
+      getParents: () => ({ hasNext: () => true, next: () => parent }),
+      setName(next) {
+        fileName = next
+      },
+      setTrashed(value) {
+        if (value) trashed.push(id)
+      },
+    }
+    files.set(id, file)
+    return file
   }
+
+  function makeFolder(id, name) {
+    const folder = {
+      getId: () => id,
+      getName: () => name,
+      getFoldersByName(childName) {
+        const child = children.get(childName) || null
+        return { hasNext: () => Boolean(child), next: () => child }
+      },
+      createFolder(childName) {
+        created.push(childName)
+        const child = makeFolder(`folder-${childName}`, childName)
+        children.set(childName, child)
+        return child
+      },
+      createFile(blob) {
+        const id = `file-${files.size + 2}`
+        const mime = blob && blob.getContentType ? blob.getContentType() : 'application/octet-stream'
+        const bytes = blob && blob.getBytes ? blob.getBytes() : new Uint8Array()
+        return makeFile(id, 'upload', mime, bytes, folder)
+      },
+    }
+    return folder
+  }
+
+  const folder = makeFolder(rootId, 'CSP Inventory & Sales System')
+  makeFile('file-1', 'note.txt', 'text/plain', new Uint8Array(), folder)
+
   return {
     created,
     trashed,
@@ -158,21 +207,7 @@ export function createFakeDrive(rootId) {
       return folder
     },
     getFileById(id) {
-      if (id === 'file-1') {
-        return {
-          getId: () => id,
-          getName: () => 'note.txt',
-          getMimeType: () => 'text/plain',
-          getParents: () => ({ hasNext: () => true, next: () => folder }),
-          setName() {},
-          setTrashed() {
-            trashed.push(id)
-          },
-          createFile() {
-            return null
-          },
-        }
-      }
+      if (files.has(id)) return files.get(id)
       throw new Error('File not found')
     },
   }
