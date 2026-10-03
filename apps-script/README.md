@@ -65,19 +65,21 @@ Success and failure use `ok`, `data`, `error`, and `meta`. Clients do not receiv
 
 ## Deployment
 
-This repository is the source. The live project is not updated until the owner runs the GitHub Action.
+This repository is the source. Project head is updated when the Deploy DEV GitHub Action runs.
 
-`.github/workflows/deploy-dev.yml` is a manual `workflow_dispatch` job. It checks out this repo, runs `npx --yes @google/clasp@3.4.1 push --force` from `apps-script/`, and targets script id `1mkRzptY0mzHnzOFB8TA6AGIZyv6q2gJq-QdKPBWtV91oq5okHWVpY4Jj`. `--force` is required because a non-interactive runner would otherwise skip the whole push when `appsscript.json` is part of the change. The job does not run `clasp create` and does not open a new Apps Script project.
+`.github/workflows/deploy-dev.yml` checks out this repo, confirms script id `1mkRzptY0mzHnzOFB8TA6AGIZyv6q2gJq-QdKPBWtV91oq5okHWVpY4Jj`, runs `npx --yes @google/clasp@3.4.1 push --force` from `apps-script/`, creates an Apps Script version whose description contains the Git commit SHA, and creates or redeploys the one DEV web app. `--force` is required because a non-interactive runner would otherwise skip the whole push when `appsscript.json` is part of the change. The job does not run `clasp create` and does not open a new Apps Script project. Production deployment is not part of this workflow.
 
-The job uses GitHub Environment `dev` and secret `CSP_DEV_CLASP_CREDENTIALS`. That secret is the clasp authorized-user JSON. It is written to `~/.clasprc.json` for the job and deleted afterward. Do not commit it, print it, or paste it into Cursor.
+Phase 1 foundation was push-only. Its README said not to deploy a web app in Phase 1. One controlled DEV web-app deployment on this existing project is now allowed for UI and Sheet/Drive UAT. `clasp push` updates project head and does not publish `/exec`. The Git commit SHA is not the Apps Script version number. The stable `/exec` is the deployment id in the GitHub Environment `dev` variable `CSP_DEV_WEBAPP_DEPLOYMENT_ID`. That variable is not a secret. The first run creates it. Later runs redeploy that same id. If a deployment already exists and the variable is empty, the job fails closed.
+
+The job uses GitHub Environment `dev` and secret `CSP_DEV_CLASP_CREDENTIALS`. That secret is the clasp authorized-user JSON. It is written to `~/.clasprc.json` for the job and deleted afterward. Do not commit it, print it, or paste it into Cursor. Publishing requires the existing clasp credential to include `script.projects`, `script.deployments`, and `script.webapp.deploy`. Those scopes are not added to the Apps Script runtime manifest.
 
 The Action does not set Script Properties and does not run `initializeFoundation`.
 
 `apps-script/.claspignore` keeps Node tests, markdown, and credential files out of the push. Apps Script source and `appsscript.json` stay included.
 
-After a successful Action run, set the four Script Properties if they are not set, then run `initializeFoundation` once from the Apps Script editor. Leave `TEMPORARY_CspAccessTest` in the Apps Script project until `system.health` reports `foundationReady: true`. Delete that temporary file after that check.
+After a successful Action run, set the four Script Properties if they are not set, then run `initializeFoundation` once from the Apps Script editor. Leave `TEMPORARY_CspAccessTest` in the Apps Script project until `system.health` reports `foundationReady: true`. Delete that temporary file after that check. After the first web-app deployment, store the printed deployment id in `CSP_DEV_WEBAPP_DEPLOYMENT_ID` before the next run.
 
-Shared-link access is not the security model. The script opens private ids. A later web app should execute as the deploying account. Do not deploy that web app in Phase 1.
+The web app executes as the deploying account. DEV access is anonymous so the existing Vite adapter can call `/exec`. The script still opens the private spreadsheet and Drive root. Shared-link access to those files is not the security model.
 
 ## Tests
 
