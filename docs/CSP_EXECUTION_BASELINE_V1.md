@@ -71,11 +71,11 @@ Reuse the Phase 1 foundation at the same commit:
 - AuditLogs, Idempotency, Counters
 - Sheet repository and Drive storage helper
 - DEV Script Properties and the existing DEV Sheet and Drive root
-- Deploy DEV workflow: `clasp push` only
+- DEV deployment flow: `clasp push --force`, then an Apps Script version, then create or redeploy the single stored DEV web-app deployment. The first deployment creates the deployment id. Later modules redeploy that same id. The version description contains the Git commit SHA. Source and runtime identity are verified from that version description. Production deployment remains prohibited.
 
 Business modules build on this foundation. Phase 1 is not rebuilt.
 
-Identified gap, not a second architecture: the React app does not call Apps Script. Any action other than health and ping returns `UNKNOWN_ACTION`. `localStorage` is still the prototype store. Phase 1 does not deploy a web app. This record does not change that deployment boundary.
+Identified gap, not a second architecture: the React app does not call Apps Script. Any action other than health and ping returns `UNKNOWN_ACTION`. `localStorage` is still the prototype store.
 
 ## 4. Bible
 
@@ -92,7 +92,7 @@ For each existing module, in dependency order already present in the product:
 1. Audit the existing UI, `db.ts`, calculations, validations, Phase 1 code, and the Bible.
 2. Implement only the backend and the adapter that module needs.
 3. Run the relevant automated tests.
-4. Deploy DEV with the established workflow and verify the deployed source.
+4. Deploy DEV with the established workflow. Verify the deployed source from the Apps Script version description, which contains the Git commit SHA.
 5. User UAT through the real UI and the real Sheet or Drive data.
 6. On pass, lock the module. On failure, fix only the failed behavior and retest.
 

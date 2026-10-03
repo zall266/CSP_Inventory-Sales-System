@@ -91,7 +91,7 @@ Already present and kept:
 - `withScriptLock` for idempotency and counters
 - Sheet repository and `storage/driveStorage.js`
 - DEV-only config via Script Properties
-- Deploy DEV = `clasp push` only
+- Deploy DEV = clasp push followed by create/redeploy of the single controlled DEV web-app deployment.
 
 New business actions are added to the existing router. Unknown actions remain `UNKNOWN_ACTION` until that module is implemented.
 
@@ -847,7 +847,7 @@ Sales-import PDF bytes were never stored. There is nothing to move. Data URLs th
 | Item | Class | Treatment |
 | --- | --- | --- |
 | Phase 2 session provider is not designed | NOT SPECIFIED | Do not invent one. Call the existing auth boundary. Identity module stores users and keys only |
-| How the SPA reaches `/exec` | NOT SPECIFIED | Phase 1 still does not deploy a web app. Module deploy uses clasp push. A callable web app is not decided here |
+| How the SPA reaches `/exec` | SPECIFIED for DEV | One controlled DEV web-app deployment on the existing Apps Script project. Deploy DEV is clasp push followed by create/redeploy of that single deployment. Production deployment remains prohibited. |
 | `costingMethod` is unused by posting | IMPLEMENTATION DETAIL | Store it. Do not invent costing |
 | Purchase `partial` means unpaid, not partial receipt | SOURCE | Do not add partial receipt |
 | Invoice computer-generated footer is on a side branch | HISTORICAL | Baseline keeps signature boxes |

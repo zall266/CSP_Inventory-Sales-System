@@ -2,13 +2,21 @@ name: Deploy DEV
 
 on:
   workflow_dispatch:
+  # Cloud agents authenticate as a GitHub App whose token can push this
+  # branch but cannot call the workflow-dispatch API (that call requires
+  # actions: write and returns 403). A push of this branch starts the same
+  # job. The job token stays contents: read. Clasp still uses the dev
+  # environment secret, not the GitHub token.
+  push:
+    branches:
+      - cursor/module-1-identity-settings-d9ac
 
 permissions:
   contents: read
 
 jobs:
   deploy:
-    name: Push Apps Script source
+    name: Push and publish DEV web app
     runs-on: ubuntu-latest
     environment: dev
     steps:
@@ -71,6 +79,16 @@ jobs:
       - name: Push Apps Script source
         working-directory: apps-script
         run: npx --yes @google/clasp@3.4.1 push --force
+
+      # Reads CSP_DEV_WEBAPP_DEPLOYMENT_ID from the dev environment variables.
+      # That value is not a secret. An empty value creates the one initial
+      # deployment only when the project has none. A later run redeploys that
+      # same id. If a deployment already exists and the variable is empty, the
+      # script fails closed and does not create another deployment.
+      - name: Publish the single DEV web app
+        env:
+          CSP_DEV_WEBAPP_DEPLOYMENT_ID: ${{ vars.CSP_DEV_WEBAPP_DEPLOYMENT_ID }}
+        run: node .github/scripts/devWebappDeployment.mjs
 
       - name: Remove clasp credentials
         if: always()

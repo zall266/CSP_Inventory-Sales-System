@@ -302,7 +302,7 @@ Shared-link access: ESTABLISHED. README says shared-link access is not the secur
 
 ## 7. Deployment boundary
 
-ESTABLISHED / CURRENT IMPLEMENTATION. `.github/workflows/deploy-dev.yml`:
+Recovered Phase 1 workflow. `.github/workflows/deploy-dev.yml` at the foundation lock:
 
 - trigger: `workflow_dispatch`
 - permissions: `contents: read`
@@ -316,14 +316,22 @@ ESTABLISHED / CURRENT IMPLEMENTATION. `.github/workflows/deploy-dev.yml`:
 
 ESTABLISHED. README: `--force` is required because a non-interactive runner would otherwise skip the whole push when `appsscript.json` is part of the change.
 
-These are different steps. This document does not collapse them:
+Phase 1 foundation originally used push-only deployment. The recovered sources kept these steps separate:
 
-| Step | What the recovered sources say |
+| Step | Recovered Phase 1 rule |
 | --- | --- |
-| Source push | CURRENT IMPLEMENTATION. `clasp push --force` updates project content. |
-| Apps Script version | NOT SPECIFIED. The workflow file does not create a version. |
-| Web app deployment | ESTABLISHED prohibition for Phase 1. README: “Do not deploy that web app in Phase 1.” The workflow does not run `clasp deploy`. |
-| `/exec` URL | NOT SPECIFIED / UNVERIFIED. No `/exec` URL is stored in the repository. How a deployment is retargeted: NOT SPECIFIED / UNVERIFIED. |
+| Source push | `clasp push --force` updates project content. |
+| Apps Script version | NOT SPECIFIED. The workflow file did not create a version. |
+| Web app deployment | ESTABLISHED prohibition for Phase 1. README: “Do not deploy that web app in Phase 1.” The workflow did not run `clasp deploy`. |
+| `/exec` URL | NOT SPECIFIED / UNVERIFIED. No `/exec` URL was stored in the repository. |
+
+Current rule. One controlled DEV web-app deployment is allowed on the existing Apps Script project for real UI and Sheet/Drive UAT. Production deployment remains prohibited. The job still does not run `clasp create`, does not set Script Properties, and does not run `initializeFoundation`.
+
+- `clasp push --force` updates Apps Script project head. It does not publish `/exec`.
+- A Git commit SHA is not the Apps Script version number. The workflow creates an immutable version whose description contains that exact Git commit SHA.
+- The stable `/exec` stays on one deployment id, stored as the GitHub Environment `dev` variable `CSP_DEV_WEBAPP_DEPLOYMENT_ID`. That variable is not a secret.
+- The first deployment creates that id. Later modules redeploy the same id instead of creating another deployment.
+- If a deployment already exists and the variable is missing, the workflow fails closed and does not create a second deployment.
 
 ---
 
@@ -523,7 +531,7 @@ ESTABLISHED for this recovery. The HR Staff Portal is a separate system. It is n
 | Agent stopped after Step 7 | Later agent pricing and POS commits are in `70b6a4b`. | Does not extend the module and does not pretend the later commits are absent. |
 | Live health JSON | Source envelope keeps `error` and `meta` beside `data`. A reported live paste placed `error: null` inside `data`. | Leaves the cause UNVERIFIED. |
 | Phase 0 and phases 3–12 and 14 detailed requirements | Names were supplied for this recovery. They are not in the recovered Bible file, because that file was not found. | Names only, plus prototype behavior where code exists. No new backend requirements. |
-| `/exec` versus clasp push | README forbids deploying the web app in Phase 1. The workflow only pushes source. No deployment id is in Git. | Deployment relationship to `/exec`: NOT SPECIFIED / UNVERIFIED. |
+| `/exec` versus clasp push | README forbids deploying the web app in Phase 1. The workflow only pushes source. No deployment id is in Git. | Historical conflict kept. Resolution: one controlled DEV web-app deployment on the existing project, specified in §7. `clasp push` updates head. The Git commit SHA is not the version number; the version description contains that SHA. The stable `/exec` is the stored deployment id. Later modules redeploy that id. Production deployment remains prohibited. |
 | Init and audit locking | README says run init once and says counters are locked. `initialize()` does not take the script lock. | Does not add a lock requirement that the source does not state. |
 
 ---
@@ -535,7 +543,6 @@ The following were looked for and are not given a invented answer:
 - Byte-for-byte text of the missing historical Backend Bible.
 - Phase 0, 3, 5, 6, 7, 8, 9, 10, 11, 12, and 14 backend requirement lists.
 - Unified identity design for Phase 13.
-- How an Apps Script deployment is pointed at `/exec`.
 - A concurrency contract for `initializeFoundation` or the audit append.
 - Whether the live health paste or the source envelope is the one a signed-in browser must show.
 - A fixed warehouse of exactly two CTN racks.
