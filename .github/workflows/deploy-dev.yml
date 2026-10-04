@@ -13,6 +13,7 @@ on:
       - cursor/module-2-warehouses-categories-d9ac
       - cursor/module-3-products-d9ac
       - cursor/module-4-parties-agents-d9ac
+      - cursor/module-5-inventory-ledger-d9ac
 
 permissions:
   contents: read

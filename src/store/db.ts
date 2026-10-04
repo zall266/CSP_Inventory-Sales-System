@@ -4,6 +4,7 @@ import { queueIdentityWrite, queueSettingsPatch, startIdentityHydration } from '
 import { queueMasterWrite, startMasterHydration } from '@/store/masterSync'
 import { queueProductWrite, startProductHydration } from '@/store/productSync'
 import { queuePartyWrite, startPartyHydration } from '@/store/partySync'
+import { queueInventoryWrite, refreshInventory, startInventoryHydration } from '@/store/inventorySync'
 import {
   applyDisplayDelta,
   createMainWarehouseLayout,
@@ -876,6 +877,16 @@ function postPackingAssembly(existing: PackingAssembly, options: { acceptSnapsho
 
 let agentSaleInFlight = false
 let openingBalanceInFlight = false
+let inventoryPostInFlight = false
+
+function beginInventoryPost() {
+  if (inventoryPostInFlight) {
+    toast('Already posting', 'Wait for the current inventory update to finish.', 'warning')
+    return false
+  }
+  inventoryPostInFlight = true
+  return true
+}
 let salesImportConfirmInFlight = false
 let salesReturnInFlight = false
 let packingConfirmInFlight = false
@@ -4322,6 +4333,19 @@ export const db = {
       toast('Not enough stock', `Current stock is ${current}.`, 'danger')
       return false
     }
+    if (identityApiUrl()) {
+      if (!beginInventoryPost()) return false
+      queueInventoryWrite('inventory.adjust', {
+        warehouseId: input.warehouseId,
+        productId: input.productId,
+        type: input.type,
+        qty: input.qty,
+        reason: input.reason,
+        notes: input.notes ?? '',
+        idempotencyKey: crypto.randomUUID(),
+      })
+      return true
+    }
     const applied = addMovement(state.stockMovements, state.inventory, {
       date: nowIso(),
       reference: nextDocNo(
@@ -4365,6 +4389,30 @@ export const db = {
     if (!state.settings.allowNegativeStock && qty > current) {
       toast('Not enough stock', `Current stock is ${current}.`, 'danger')
       return null
+    }
+    if (identityApiUrl()) {
+      if (!beginInventoryPost()) return null
+      queueInventoryWrite('inventory.usage', {
+        productId: input.productId,
+        warehouseId: input.warehouseId,
+        qty,
+        notes: input.notes ?? '',
+        reason: input.reason ?? '',
+        date: input.date ?? '',
+        idempotencyKey: crypto.randomUUID(),
+      })
+      return {
+        id: 'pending',
+        date: input.date || nowIso(),
+        reference: '',
+        productId: input.productId,
+        warehouseId: input.warehouseId,
+        type: 'stock_usage',
+        stockIn: 0,
+        stockOut: qty,
+        balance: current,
+        user: currentUser(state).name,
+      }
     }
     const reference = nextDocNo(
       state.stockMovements.filter((row) => row.reference.startsWith('USE-')).map((row) => row.reference),
@@ -4510,6 +4558,18 @@ export const db = {
     if (!state.settings.allowNegativeStock && input.qty > current) {
       toast('Not enough stock at source', `Available: ${current}.`, 'danger')
       return false
+    }
+    if (identityApiUrl()) {
+      if (!beginInventoryPost()) return false
+      queueInventoryWrite('inventory.transfer', {
+        fromWarehouseId: input.fromWarehouseId,
+        toWarehouseId: input.toWarehouseId,
+        productId: input.productId,
+        qty: input.qty,
+        notes: input.notes ?? '',
+        idempotencyKey: crypto.randomUUID(),
+      })
+      return true
     }
     applyWarehouseTransfer(input)
     toast('Transfer complete', `${input.qty} moved.`)
@@ -4673,6 +4733,15 @@ export const db = {
   },
 
   completeStockCount(input: { warehouseId: string; counts: Array<{ productId: string; countedQty: number }> }) {
+    if (identityApiUrl()) {
+      if (!beginInventoryPost()) return false
+      queueInventoryWrite('inventory.count', {
+        warehouseId: input.warehouseId,
+        counts: input.counts,
+        idempotencyKey: crypto.randomUUID(),
+      })
+      return true
+    }
     let inventory = state.inventory
     let movements = state.stockMovements
     const reference = nextDocNo(
@@ -9082,6 +9151,34 @@ startProductHydration({
       const count = Array.isArray(payload.rows) ? payload.rows.length : 0
       toast('Prices saved', `${count} product(s) updated.`)
     }
+    if (action === 'products.create') refreshInventory()
+  },
+})
+
+startInventoryHydration({
+  apply(slice) {
+    setData({ inventory: slice.inventory, stockMovements: slice.stockMovements })
+  },
+  actorId: () => currentUser(state).id,
+  onError(message) {
+    toast('Could not save to the server', message, 'danger')
+  },
+  onSaved(action, payload, data) {
+    if (action === 'inventory.adjust') {
+      toast('Stock adjusted', `${productById(String(payload.productId ?? ''))?.name ?? 'Product'} updated.`)
+    }
+    if (action === 'inventory.transfer') toast('Transfer complete', `${payload.qty ?? ''} moved.`)
+    if (action === 'inventory.usage') {
+      const product = productById(String(payload.productId ?? ''))
+      toast('Stock usage recorded', `${product?.name ?? 'Product'} −${formatQty(Number(payload.qty ?? 0))} ${product?.unit ?? ''}`.trim())
+    }
+    if (action === 'inventory.count') {
+      const changes = Number(data.changes ?? 0)
+      toast('Stock count complete', changes ? `${changes} SKUs adjusted.` : 'No differences found.', changes ? 'success' : 'info')
+    }
+  },
+  onSettled() {
+    inventoryPostInFlight = false
   },
 })
 
