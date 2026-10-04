@@ -2,6 +2,7 @@ import { identityApiUrl } from '@/api/identityApi'
 import { createSeedData, CURRENT_USER } from '@/data/seed'
 import { queueIdentityWrite, queueSettingsPatch, startIdentityHydration } from '@/store/identitySync'
 import { queueMasterWrite, startMasterHydration } from '@/store/masterSync'
+import { queueProductWrite, startProductHydration } from '@/store/productSync'
 import {
   applyDisplayDelta,
   createMainWarehouseLayout,
@@ -2179,6 +2180,10 @@ export const db = {
       accent: '#4F46E5',
       salesComponents: componentCheck.items,
     }
+    if (identityApiUrl()) {
+      queueProductWrite('products.create', { ...product, skuGenerated: skuResult.generated })
+      return product
+    }
     const inventory = [
       ...state.inventory,
       ...companyWarehouses(state.warehouses).map((warehouse) => ({ productId: product.id, warehouseId: warehouse.id, qty: 0 })),
@@ -2310,6 +2315,16 @@ export const db = {
       status: patch.status ?? current.status,
       salesComponents,
     }
+    if (identityApiUrl()) {
+      queueProductWrite('products.update', {
+        id,
+        ...patch,
+        name,
+        sku,
+        ...(Object.prototype.hasOwnProperty.call(patch, 'agentPrice') ? { agentPrice: patch.agentPrice ?? null } : {}),
+      })
+      return true
+    }
     setData({
       products: applyBomCosts(
         state.products.map((product) => (product.id === id ? next : product)),
@@ -2373,6 +2388,10 @@ export const db = {
         return false
       }
     }
+    if (identityApiUrl()) {
+      queueProductWrite('products.saveAgentPrices', { rows })
+      return true
+    }
     setData({
       products: applyBomCosts(
         state.products.map((product) => {
@@ -2393,6 +2412,12 @@ export const db = {
   },
 
   setProductStatus(id: string, status: ProductStatus) {
+    if (identityApiUrl()) {
+      const current = state.products.find((product) => product.id === id)
+      if (!current) return
+      queueProductWrite('products.setStatus', { id, status })
+      return
+    }
     setData({
       products: state.products.map((product) => (product.id === id ? { ...product, status } : product)),
     })
@@ -8937,6 +8962,30 @@ startMasterHydration({
   onSaved(action, payload) {
     if (action === 'categories.create') toast('Category added', String(payload.name ?? ''))
     if (action === 'categories.rename') toast('Category renamed')
+  },
+})
+
+startProductHydration({
+  apply(slice) {
+    setData({ products: hydrateProducts(slice.products, state.boms) })
+  },
+  actorId: () => currentUser(state).id,
+  onError(message) {
+    toast('Could not save to the server', message, 'danger')
+  },
+  onSaved(action, payload, products) {
+    if (action === 'products.create') {
+      const saved = products.find((product) => product.id === payload.id)
+      const name = saved?.name || String(payload.name ?? '')
+      const sku = saved?.sku || String(payload.sku ?? '')
+      toast('Product added', payload.skuGenerated ? `${name} · SKU ${sku}` : `${name} is now in the catalogue.`)
+    }
+    if (action === 'products.update') toast('Product updated')
+    if (action === 'products.setStatus') toast(payload.status === 'inactive' ? 'Product deactivated' : 'Product activated')
+    if (action === 'products.saveAgentPrices') {
+      const count = Array.isArray(payload.rows) ? payload.rows.length : 0
+      toast('Prices saved', `${count} product(s) updated.`)
+    }
   },
 })
 

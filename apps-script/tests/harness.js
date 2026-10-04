@@ -21,6 +21,7 @@ const files = [
   'identity/permissionCatalog.js',
   'repositories/identityRepository.js',
   'repositories/masterRepository.js',
+  'repositories/productRepository.js',
   'services/auditService.js',
   'services/idempotencyService.js',
   'services/counterService.js',
@@ -28,6 +29,7 @@ const files = [
   'services/foundationService.js',
   'services/identityService.js',
   'services/masterService.js',
+  'services/productService.js',
   'app/router.js',
   'app/main.js',
 ]
