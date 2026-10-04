@@ -5,6 +5,7 @@ import { queueMasterWrite, startMasterHydration } from '@/store/masterSync'
 import { queueProductWrite, startProductHydration } from '@/store/productSync'
 import { queuePartyWrite, startPartyHydration } from '@/store/partySync'
 import { queueInventoryWrite, refreshInventory, startInventoryHydration } from '@/store/inventorySync'
+import { queueWarehouseWrite, startWarehouseHydration } from '@/store/warehouseSync'
 import {
   applyDisplayDelta,
   createMainWarehouseLayout,
@@ -878,6 +879,7 @@ function postPackingAssembly(existing: PackingAssembly, options: { acceptSnapsho
 let agentSaleInFlight = false
 let openingBalanceInFlight = false
 let inventoryPostInFlight = false
+let warehousePostInFlight = false
 
 function beginInventoryPost() {
   if (inventoryPostInFlight) {
@@ -885,6 +887,15 @@ function beginInventoryPost() {
     return false
   }
   inventoryPostInFlight = true
+  return true
+}
+
+function beginWarehousePost() {
+  if (warehousePostInFlight) {
+    toast('Already posting', 'Wait for the current warehouse update to finish.', 'warning')
+    return false
+  }
+  warehousePostInFlight = true
   return true
 }
 let salesImportConfirmInFlight = false
@@ -7209,6 +7220,19 @@ export const db = {
       toast('Not enough unplaced stock', `${available} pack(s) left to place.`, 'warning')
       return false
     }
+    if (identityApiUrl()) {
+      if (!beginWarehousePost()) return false
+      queueWarehouseWrite('warehouse.place', {
+        slotId: input.slotId,
+        productId: input.productId,
+        qty,
+        batchRef: input.batchRef ?? '',
+        productionSessionRef: input.productionSessionRef ?? '',
+        reason: input.reason ?? '',
+        idempotencyKey: crypto.randomUUID(),
+      })
+      return true
+    }
     const actor = currentUser(state)
     const occupancy = {
       id: uid('occ'),
@@ -7279,6 +7303,18 @@ export const db = {
       toast('Keep cartons separate', 'Different production dates cannot share a slot.', 'warning')
       return false
     }
+    if (identityApiUrl()) {
+      if (!beginWarehousePost()) return false
+      queueWarehouseWrite('warehouse.move', {
+        fromSlotId: input.fromSlotId,
+        toSlotId: input.toSlotId,
+        qty,
+        action: input.action ?? 'MOVED',
+        reason: input.reason ?? '',
+        idempotencyKey: crypto.randomUUID(),
+      })
+      return true
+    }
     const actor = currentUser(state)
     const remaining = round2(source.quantityPacks - qty)
     let occupancies = state.slotOccupancies
@@ -7343,6 +7379,16 @@ export const db = {
       toast('Not enough in that position', `${source.quantityPacks} pack(s) available.`, 'warning')
       return false
     }
+    if (identityApiUrl()) {
+      if (!beginWarehousePost()) return false
+      queueWarehouseWrite('warehouse.topUp', {
+        fromSlotId: input.fromSlotId,
+        qty,
+        reason: input.reason ?? '',
+        idempotencyKey: crypto.randomUUID(),
+      })
+      return true
+    }
     const actor = currentUser(state)
     const remaining = round2(source.quantityPacks - qty)
     const occupancies =
@@ -7375,6 +7421,15 @@ export const db = {
     }
     const source = state.slotOccupancies.find((row) => row.slotId === slotId)
     if (!source) return false
+    if (identityApiUrl()) {
+      if (!beginWarehousePost()) return false
+      queueWarehouseWrite('warehouse.empty', {
+        slotId,
+        reason,
+        idempotencyKey: crypto.randomUUID(),
+      })
+      return true
+    }
     const actor = currentUser(state)
     const log = {
       id: uid('pl'),
@@ -7405,6 +7460,14 @@ export const db = {
       .sort((a, b) => a.slotNo - b.slotNo)
       .find((row) => !state.slotOccupancies.some((item) => item.slotId === row.id))
     if (empty) return empty
+    if (identityApiUrl()) {
+      if (!beginWarehousePost()) return null
+      queueWarehouseWrite('warehouse.ensurePalletSlot', {
+        locationId,
+        idempotencyKey: crypto.randomUUID(),
+      })
+      return null
+    }
     const slot = nextGenericSlot(locationId, state.storageSlots)
     setData({ storageSlots: [...state.storageSlots, slot] })
     return slot
@@ -7424,6 +7487,17 @@ export const db = {
     if (isAgentWarehouseId(state.warehouses, warehouseId)) {
       toast('Agent warehouses cannot have storage locations', undefined, 'warning')
       return null
+    }
+    if (identityApiUrl()) {
+      if (!beginWarehousePost()) return null
+      queueWarehouseWrite('warehouse.createTemporary', {
+        name,
+        type: input.type,
+        warehouseId,
+        slotCount: input.slotCount,
+        idempotencyKey: crypto.randomUUID(),
+      })
+      return { id: 'pending', name, type: input.type, warehouseId, active: true, createdAt: nowIso(), updatedAt: nowIso() }
     }
     const id = uid('loc')
     const location = {
@@ -7459,6 +7533,18 @@ export const db = {
       toast('Agent warehouses cannot have storage locations', undefined, 'warning')
       return null
     }
+    if (identityApiUrl()) {
+      if (!beginWarehousePost()) return null
+      queueWarehouseWrite('warehouse.createRack', {
+        name,
+        warehouseId,
+        levels: input.levels,
+        frontCount: input.frontCount,
+        backCount: input.backCount,
+        idempotencyKey: crypto.randomUUID(),
+      })
+      return { id: 'pending', name, type: 'RACK', warehouseId, active: true, createdAt: nowIso(), updatedAt: nowIso() }
+    }
     const id = uid('loc')
     const location = {
       id,
@@ -7485,6 +7571,15 @@ export const db = {
     }
     const next = name.trim()
     if (!next) return false
+    if (identityApiUrl()) {
+      if (!beginWarehousePost()) return false
+      queueWarehouseWrite('warehouse.rename', {
+        id,
+        name: next,
+        idempotencyKey: crypto.randomUUID(),
+      })
+      return true
+    }
     setData({
       storageLocations: state.storageLocations.map((row) => (row.id === id ? { ...row, name: next, updatedAt: nowIso() } : row)),
     })
@@ -7503,6 +7598,15 @@ export const db = {
     if (state.slotOccupancies.some((row) => slotIds.includes(row.slotId))) {
       toast('Location still has stock', 'Empty it before deactivating.', 'warning')
       return false
+    }
+    if (identityApiUrl()) {
+      if (!beginWarehousePost()) return false
+      queueWarehouseWrite('warehouse.deactivate', {
+        id,
+        name: location.name,
+        idempotencyKey: crypto.randomUUID(),
+      })
+      return true
     }
     setData({
       storageLocations: state.storageLocations.map((row) => (row.id === id ? { ...row, active: false, updatedAt: nowIso() } : row)),
@@ -7530,6 +7634,18 @@ export const db = {
     if (qty > balance.quantity) {
       toast('Quantity exceeds available balance.', `${formatQty(balance.quantity)}${balance.unit} available.`, 'warning')
       return false
+    }
+    if (identityApiUrl()) {
+      if (!beginWarehousePost()) return false
+      queueWarehouseWrite('warehouse.useBalance', {
+        balanceId: input.balanceId,
+        qty,
+        reason: input.reason,
+        notes: input.notes ?? '',
+        unit: balance.unit,
+        idempotencyKey: crypto.randomUUID(),
+      })
+      return true
     }
     const remaining = round2(balance.quantity - qty)
     const actor = currentUser(state)
@@ -9179,6 +9295,31 @@ startInventoryHydration({
   },
   onSettled() {
     inventoryPostInFlight = false
+  },
+})
+
+startWarehouseHydration({
+  apply(slice) {
+    setData(slice)
+  },
+  actorId: () => currentUser(state).id,
+  onError(message) {
+    toast('Could not save to the server', message, 'danger')
+  },
+  onSaved(action, payload) {
+    const qty = payload.qty ?? ''
+    if (action === 'warehouse.place') toast('Stock placed', `${qty} pack(s) placed.`)
+    if (action === 'warehouse.move') toast('Stock moved', `${qty} pack(s) moved.`)
+    if (action === 'warehouse.topUp') toast('Display topped up', `${qty} pack(s) moved to Display. Inventory total unchanged.`)
+    if (action === 'warehouse.empty') toast('Position emptied', 'Packs returned to Ready to Place.')
+    if (action === 'warehouse.createTemporary') toast('Temporary location added', String(payload.name ?? ''))
+    if (action === 'warehouse.createRack') toast('Rack added', String(payload.name ?? ''))
+    if (action === 'warehouse.rename') toast('Location renamed', String(payload.name ?? ''))
+    if (action === 'warehouse.deactivate') toast('Location deactivated', String(payload.name ?? ''))
+    if (action === 'warehouse.useBalance') toast('Balance used', `${qty}${payload.unit ?? ''} recorded. Inventory packs unchanged.`)
+  },
+  onSettled() {
+    warehousePostInFlight = false
   },
 })
 

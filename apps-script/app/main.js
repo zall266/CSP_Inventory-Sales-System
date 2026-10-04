@@ -11,7 +11,8 @@ function defaultBackend() {
     masters: createMasterService({ sheetRepository: sheets }),
     products: createProductService({ sheetRepository: sheets }),
     parties: createPartyService({ sheetRepository: sheets }),
-    inventory: createInventoryService({ sheetRepository: sheets })
+    inventory: createInventoryService({ sheetRepository: sheets }),
+    warehouse: createWarehouseService({ sheetRepository: sheets })
   };
 }
 
