@@ -3,6 +3,7 @@ import { createSeedData, CURRENT_USER } from '@/data/seed'
 import { queueIdentityWrite, queueSettingsPatch, startIdentityHydration } from '@/store/identitySync'
 import { queueMasterWrite, startMasterHydration } from '@/store/masterSync'
 import { queueProductWrite, startProductHydration } from '@/store/productSync'
+import { queuePartyWrite, startPartyHydration } from '@/store/partySync'
 import {
   applyDisplayDelta,
   createMainWarehouseLayout,
@@ -2452,6 +2453,10 @@ export const db = {
 
   createCustomer(input: { name: string; phone: string; email: string; address?: string }) {
     const customer = { id: uid('cus'), status: 'active' as const, address: input.address ?? '', ...input }
+    if (identityApiUrl()) {
+      queuePartyWrite('customers.create', customer)
+      return customer
+    }
     setData({ customers: [customer, ...state.customers] })
     toast('Customer added', customer.name)
     return customer
@@ -2498,6 +2503,18 @@ export const db = {
         : existing.active && !active
           ? ('customer_wholesale_price_deactivated' as const)
           : ('customer_wholesale_price_updated' as const)
+      if (identityApiUrl()) {
+        queuePartyWrite('customers.saveWholesalePrice', {
+          id: next.id,
+          customerId: customer.id,
+          productId: product.id,
+          price: parsed.value,
+          active,
+          customerName: customer.name,
+          productName: product.name,
+        })
+        return next
+      }
       setData({
         customerWholesalePrices: (state.customerWholesalePrices ?? []).map((row) => (row.id === existing.id ? next : row)),
         documentAuditLogs: pushDocAudit(
@@ -2525,6 +2542,18 @@ export const db = {
       updatedAt: now,
       createdBy: actor.id,
       updatedBy: actor.id,
+    }
+    if (identityApiUrl()) {
+      queuePartyWrite('customers.saveWholesalePrice', {
+        id: created.id,
+        customerId: customer.id,
+        productId: product.id,
+        price: parsed.value,
+        active,
+        customerName: customer.name,
+        productName: product.name,
+      })
+      return created
     }
     setData({
       customerWholesalePrices: [created, ...(state.customerWholesalePrices ?? [])],
@@ -2558,6 +2587,14 @@ export const db = {
     const product = state.products.find((item) => item.id === current.productId)
     const actor = currentUser(state)
     const next = { ...current, active: false, updatedAt: nowIso(), updatedBy: actor.id }
+    if (identityApiUrl()) {
+      queuePartyWrite('customers.deactivateWholesalePrice', {
+        id,
+        customerName: customer?.name ?? 'Customer',
+        productName: product?.name ?? 'Product',
+      })
+      return true
+    }
     setData({
       customerWholesalePrices: (state.customerWholesalePrices ?? []).map((row) => (row.id === id ? next : row)),
       documentAuditLogs: pushDocAudit(
@@ -2578,6 +2615,10 @@ export const db = {
 
   createSupplier(input: { name: string; contact: string; phone: string; email: string }) {
     const supplier = { id: uid('sup'), status: 'active' as const, ...input }
+    if (identityApiUrl()) {
+      queuePartyWrite('suppliers.create', supplier)
+      return supplier
+    }
     setData({ suppliers: [supplier, ...state.suppliers] })
     toast('Supplier added', supplier.name)
     return supplier
@@ -2647,6 +2688,19 @@ export const db = {
       createdAt: stamp,
       updatedAt: stamp,
     }
+    if (identityApiUrl()) {
+      queuePartyWrite('agents.create', {
+        id: agent.id,
+        name: agent.name,
+        code: agent.code,
+        warehouseId: agent.warehouseId,
+        userId: agent.userId ?? '',
+        bankName: agent.bankName,
+        accountHolder: agent.accountHolder,
+        bankAccount: agent.bankAccount,
+      })
+      return agent
+    }
     setData({
       agents: [agent, ...agents],
       warehouses: [...state.warehouses, warehouse],
@@ -2699,6 +2753,18 @@ export const db = {
       warehouseId: current.warehouseId,
       updatedAt: nowIso(),
     }
+    if (identityApiUrl()) {
+      queuePartyWrite('agents.update', {
+        id,
+        name: next.name,
+        code: next.code,
+        userId: next.userId ?? '',
+        bankName: next.bankName,
+        accountHolder: next.accountHolder,
+        bankAccount: next.bankAccount,
+      })
+      return true
+    }
     setData({
       agents: (state.agents ?? []).map((agent) => (agent.id === id ? next : agent)),
       warehouses: state.warehouses.map((warehouse) =>
@@ -2717,6 +2783,10 @@ export const db = {
     const current = (state.agents ?? []).find((agent) => agent.id === id)
     if (!current) return false
     if (current.status === status) return true
+    if (identityApiUrl()) {
+      queuePartyWrite('agents.setStatus', { id, status, name: current.name })
+      return true
+    }
     setData({
       agents: (state.agents ?? []).map((agent) =>
         agent.id === id ? { ...agent, status, updatedAt: nowIso() } : agent,
@@ -8962,6 +9032,32 @@ startMasterHydration({
   onSaved(action, payload) {
     if (action === 'categories.create') toast('Category added', String(payload.name ?? ''))
     if (action === 'categories.rename') toast('Category renamed')
+  },
+})
+
+startPartyHydration({
+  apply(slice) {
+    setData(slice)
+  },
+  actorId: () => currentUser(state).id,
+  onError(message) {
+    toast('Could not save to the server', message, 'danger')
+  },
+  onSaved(action, payload) {
+    if (action === 'customers.create') toast('Customer added', String(payload.name ?? ''))
+    if (action === 'suppliers.create') toast('Supplier added', String(payload.name ?? ''))
+    if (action === 'agents.create') toast('Agent added', String(payload.name ?? ''))
+    if (action === 'agents.update') toast('Agent updated', String(payload.name ?? ''))
+    if (action === 'agents.setStatus') {
+      toast(payload.status === 'inactive' ? 'Agent deactivated' : 'Agent activated', String(payload.name ?? ''))
+    }
+    if (action === 'customers.saveWholesalePrice') {
+      const label = `${payload.customerName ?? 'Customer'} · ${payload.productName ?? 'Product'}`
+      toast(payload.active === false ? 'Custom price removed' : 'Custom price saved', label)
+    }
+    if (action === 'customers.deactivateWholesalePrice') {
+      toast('Custom price removed', `${payload.customerName ?? 'Customer'} · ${payload.productName ?? 'Product'}`)
+    }
   },
 })
 

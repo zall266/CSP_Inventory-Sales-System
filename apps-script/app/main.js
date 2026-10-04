@@ -9,7 +9,8 @@ function defaultBackend() {
     foundation: createFoundationService(sheets),
     identity: createIdentityService({ sheetRepository: sheets, driveStorage: drive }),
     masters: createMasterService({ sheetRepository: sheets }),
-    products: createProductService({ sheetRepository: sheets })
+    products: createProductService({ sheetRepository: sheets }),
+    parties: createPartyService({ sheetRepository: sheets })
   };
 }
 

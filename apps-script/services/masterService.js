@@ -1,6 +1,6 @@
 // Module 2. The locked frontend reads warehouses and creates or renames categories.
 // There is no warehouse editor and neither type has a status field.
-// Agent warehouses stay with agents (later module). Map actions stay warehouse.* (later module).
+// Agent warehouses are written by agents.create and agents.update. Map actions stay warehouse.* (later module).
 
 var MASTER_ACTIONS = {
   'masters.get': true,
