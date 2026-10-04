@@ -27,6 +27,8 @@ dist-ssr
 .env
 .env.*
 !.env.example
+# Development mode only. Vite production builds do not load this file.
+!.env.development
 
 # Apps Script local credentials
 .clasprc.json
