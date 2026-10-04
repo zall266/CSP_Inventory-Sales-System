@@ -50,6 +50,21 @@ function createSheetRepository(options) {
     }));
   }
 
+  function replaceObjects(sheet, records) {
+    var headers = headerMap(sheet).filter(Boolean);
+    if (!headers.length) throw appError('VALIDATION_ERROR', 'Sheet headers are missing.');
+    var last = sheet.getLastRow();
+    if (last > 1) sheet.getRange(2, 1, last - 1, headers.length).clearContent();
+    if (!records.length) return;
+    var rows = records.map(function (record) {
+      return headers.map(function (header) {
+        var value = record[header];
+        return value === undefined || value === null ? '' : value;
+      });
+    });
+    sheet.getRange(2, 1, rows.length, headers.length).setValues(rows);
+  }
+
   function readObjects(sheet) {
     var headers = headerMap(sheet);
     var width = headers.filter(Boolean).length;
@@ -72,6 +87,7 @@ function createSheetRepository(options) {
     getSheet: getSheet,
     ensureSheet: ensureSheet,
     appendObject: appendObject,
+    replaceObjects: replaceObjects,
     readObjects: readObjects
   };
 }
