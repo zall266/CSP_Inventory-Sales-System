@@ -1,6 +1,7 @@
 function createRouter(backend) {
   var system = backend && typeof backend.health === 'function' ? backend : backend.system;
   var identity = backend && backend.identity ? backend.identity : null;
+  var masters = backend && backend.masters ? backend.masters : null;
 
   function dispatch(request) {
     if (!request || request.v !== 1 || typeof request.action !== 'string' || !request.action) {
@@ -17,6 +18,7 @@ function createRouter(backend) {
     if (request.action === 'system.health') return system.health(request);
     if (request.action === 'system.ping') return system.ping(request);
     if (identity && identity.canHandle(request.action)) return identity.dispatch(request);
+    if (masters && masters.canHandle(request.action)) return masters.dispatch(request);
     return errorEnvelope('UNKNOWN_ACTION', 'The action is not available.', { requestId: requestId });
   }
 

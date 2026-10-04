@@ -11,6 +11,7 @@ on:
     branches:
       - cursor/dev-frontend-github-pages-d9ac
       - cursor/module-1-dev-api-connect-d9ac
+      - cursor/module-2-warehouses-categories-d9ac
 
 permissions:
   contents: read

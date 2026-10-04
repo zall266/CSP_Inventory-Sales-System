@@ -1,5 +1,7 @@
+import { identityApiUrl } from '@/api/identityApi'
 import { createSeedData, CURRENT_USER } from '@/data/seed'
 import { queueIdentityWrite, queueSettingsPatch, startIdentityHydration } from '@/store/identitySync'
+import { queueMasterWrite, startMasterHydration } from '@/store/masterSync'
 import {
   applyDisplayDelta,
   createMainWarehouseLayout,
@@ -2398,15 +2400,27 @@ export const db = {
   },
 
   createCategory(name: string) {
-    const category = { id: uid('cat'), name }
+    const trimmed = name.trim()
+    if (!trimmed) return null
+    const category = { id: uid('cat'), name: trimmed }
+    if (identityApiUrl()) {
+      queueMasterWrite('categories.create', { id: category.id, name: category.name })
+      return category
+    }
     setData({ categories: [...state.categories, category] })
-    toast('Category added', name)
+    toast('Category added', trimmed)
     return category
   },
 
   renameCategory(id: string, name: string) {
+    const trimmed = name.trim()
+    if (!trimmed) return
+    if (identityApiUrl()) {
+      queueMasterWrite('categories.rename', { id, name: trimmed })
+      return
+    }
     setData({
-      categories: state.categories.map((category) => (category.id === id ? { ...category, name } : category)),
+      categories: state.categories.map((category) => (category.id === id ? { ...category, name: trimmed } : category)),
     })
     toast('Category renamed')
   },
@@ -8909,6 +8923,20 @@ startIdentityHydration({
   settings: () => state.settings,
   onError(message) {
     toast('Could not save to the server', message, 'danger')
+  },
+})
+
+startMasterHydration({
+  apply(slice) {
+    setData({ warehouses: slice.warehouses, categories: slice.categories })
+  },
+  actorId: () => currentUser(state).id,
+  onError(message) {
+    toast('Could not save to the server', message, 'danger')
+  },
+  onSaved(action, payload) {
+    if (action === 'categories.create') toast('Category added', String(payload.name ?? ''))
+    if (action === 'categories.rename') toast('Category renamed')
   },
 })
 

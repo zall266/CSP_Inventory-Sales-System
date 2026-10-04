@@ -8,7 +8,7 @@
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview --host",
     "lint": "tsc --noEmit --pretty false",
-    "test:backend": "node --test apps-script/tests/foundation.test.js apps-script/tests/identity.test.js"
+    "test:backend": "node --test apps-script/tests/foundation.test.js apps-script/tests/identity.test.js apps-script/tests/master.test.js"
   },
   "dependencies": {
     "clsx": "^2.1.1",

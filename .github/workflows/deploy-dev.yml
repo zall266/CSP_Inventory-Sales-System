@@ -10,6 +10,7 @@ on:
   push:
     branches:
       - cursor/module-1-identity-settings-d9ac
+      - cursor/module-2-warehouses-categories-d9ac
 
 permissions:
   contents: read
