@@ -46,9 +46,11 @@ import { Pjkm911PreviewPage } from '@/features/pjkm/Pjkm911Page'
 import { OpeningBalancePage } from '@/features/openingBalance/OpeningBalancePages'
 import { HalalCompliancePage } from '@/features/halal/HalalCompliancePage'
 
+const routerBasename = import.meta.env.BASE_URL.replace(/\/$/, '') || undefined
+
 export default function App() {
   return (
-    <BrowserRouter>
+    <BrowserRouter basename={routerBasename}>
       <Routes>
         <Route path="/print/quotation/:id" element={<QuotationPrintPage />} />
         <Route path="/print/invoice/:id" element={<InvoicePrintPage />} />
