@@ -25,6 +25,7 @@ const files = [
   'repositories/partyRepository.js',
   'repositories/inventoryRepository.js',
   'repositories/warehouseRepository.js',
+  'repositories/bomRepository.js',
   'services/auditService.js',
   'services/idempotencyService.js',
   'services/counterService.js',
@@ -36,6 +37,7 @@ const files = [
   'services/partyService.js',
   'services/inventoryService.js',
   'services/warehouseService.js',
+  'services/bomService.js',
   'app/router.js',
   'app/main.js',
 ]

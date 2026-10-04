@@ -6,6 +6,7 @@ import { queueProductWrite, startProductHydration } from '@/store/productSync'
 import { queuePartyWrite, startPartyHydration } from '@/store/partySync'
 import { queueInventoryWrite, refreshInventory, startInventoryHydration } from '@/store/inventorySync'
 import { queueWarehouseWrite, startWarehouseHydration } from '@/store/warehouseSync'
+import { bomCostsReady, markBomCostsReady, queueBomWrite, startBomHydration } from '@/store/bomSync'
 import {
   applyDisplayDelta,
   createMainWarehouseLayout,
@@ -880,6 +881,7 @@ let agentSaleInFlight = false
 let openingBalanceInFlight = false
 let inventoryPostInFlight = false
 let warehousePostInFlight = false
+let bomPostInFlight = false
 
 function beginInventoryPost() {
   if (inventoryPostInFlight) {
@@ -896,6 +898,15 @@ function beginWarehousePost() {
     return false
   }
   warehousePostInFlight = true
+  return true
+}
+
+function beginBomPost() {
+  if (bomPostInFlight) {
+    toast('Already posting', 'Wait for the current recipe update to finish.', 'warning')
+    return false
+  }
+  bomPostInFlight = true
   return true
 }
 let salesImportConfirmInFlight = false
@@ -5331,6 +5342,11 @@ export const db = {
       toast('Add components', 'A BOM needs a finished product and at least one material.', 'warning')
       return null
     }
+    if (identityApiUrl()) {
+      if (!beginBomPost()) return null
+      queueBomWrite('boms.create', { ...input, idempotencyKey: crypto.randomUUID() })
+      return null
+    }
     const product = productById(input.productId)
     const bom = {
       id: uid('bom'),
@@ -5359,6 +5375,11 @@ export const db = {
   updateBom(id: string, input: BomInput) {
     const existing = state.boms.find((bom) => bom.id === id)
     if (!existing) return
+    if (identityApiUrl()) {
+      if (!beginBomPost()) return
+      queueBomWrite('boms.update', { id, ...input, idempotencyKey: crypto.randomUUID() })
+      return
+    }
     const boms = state.boms.map((bom) =>
       bom.id === id
         ? {
@@ -5389,6 +5410,11 @@ export const db = {
   },
 
   setBomStatus(id: string, status: 'active' | 'inactive') {
+    if (identityApiUrl()) {
+      if (!beginBomPost()) return
+      queueBomWrite('boms.setStatus', { id, status, idempotencyKey: crypto.randomUUID() })
+      return
+    }
     const boms = state.boms.map((bom) => (bom.id === id ? { ...bom, status } : bom))
     setData({
       boms,
@@ -9248,7 +9274,14 @@ startPartyHydration({
 
 startProductHydration({
   apply(slice) {
-    setData({ products: hydrateProducts(slice.products, state.boms) })
+    const products = bomCostsReady()
+      ? slice.products.map((product) => {
+          const current = state.products.find((row) => row.id === product.id)
+          if (!current) return product
+          return { ...product, costPrice: current.costPrice, costSource: current.costSource }
+        })
+      : slice.products
+    setData({ products })
   },
   actorId: () => currentUser(state).id,
   onError(message) {
@@ -9320,6 +9353,35 @@ startWarehouseHydration({
   },
   onSettled() {
     warehousePostInFlight = false
+  },
+})
+
+startBomHydration({
+  apply(slice) {
+    markBomCostsReady()
+    const costs = new Map(slice.productCosts.map((row) => [row.id, row]))
+    setData({
+      boms: hydrateBoms(slice.boms),
+      products: state.products.map((product) => {
+        const cost = costs.get(product.id)
+        if (!cost) return product
+        const costSource = cost.costSource === 'bom' ? 'bom' as const : 'manual' as const
+        if (product.costPrice === cost.costPrice && product.costSource === costSource) return product
+        return { ...product, costPrice: cost.costPrice, costSource }
+      }),
+    })
+  },
+  actorId: () => currentUser(state).id,
+  onError(message) {
+    toast('Could not save to the server', message, 'danger')
+  },
+  onSaved(action, payload) {
+    if (action === 'boms.create') toast('BOM created', String(payload.name || ''))
+    if (action === 'boms.update') toast('BOM updated')
+    if (action === 'boms.setStatus') toast(payload.status === 'inactive' ? 'BOM deactivated' : 'BOM activated')
+  },
+  onSettled() {
+    bomPostInFlight = false
   },
 })
 
