@@ -1,0 +1,361 @@
+export type ProductStatus = 'active' | 'inactive'
+export type StockStatus = 'in_stock' | 'low_stock' | 'out_of_stock'
+export type PartyStatus = 'active' | 'inactive'
+export type SaleStatus = 'paid' | 'unpaid' | 'partial' | 'voided' | 'returned'
+export type PurchaseStatus = 'draft' | 'pending' | 'received' | 'partial' | 'paid'
+export type PaymentStatus = 'completed' | 'pending'
+export type PaymentMethod = 'cash' | 'bank_transfer' | 'duitnow' | 'card' | 'ewallet'
+export type MovementType =
+  | 'purchase'
+  | 'sale'
+  | 'sales_return'
+  | 'purchase_return'
+  | 'adjustment'
+  | 'transfer_in'
+  | 'transfer_out'
+  | 'opening_stock'
+  | 'stock_count'
+export type UserRole = 'owner' | 'admin' | 'manager' | 'staff' | 'cashier' | 'warehouse'
+export type UserStatus = 'active' | 'inactive'
+export type ExpenseCategory =
+  | 'Rent'
+  | 'Utilities'
+  | 'Salary'
+  | 'Transport'
+  | 'Packaging'
+  | 'Marketing'
+  | 'Maintenance'
+  | 'Office'
+  | 'Other'
+export type AdjustmentType = 'increase' | 'decrease'
+export type ToastTone = 'success' | 'info' | 'warning' | 'danger'
+export type DatePreset = '7d' | '30d' | '90d' | 'custom'
+
+export type Warehouse = {
+  id: string
+  name: string
+  code: string
+}
+
+export type Category = {
+  id: string
+  name: string
+}
+
+export type Product = {
+  id: string
+  name: string
+  sku: string
+  barcode: string
+  categoryId: string
+  unit: string
+  costPrice: number
+  sellingPrice: number
+  wholesalePrice: number
+  reorderLevel: number
+  trackBatch: boolean
+  trackExpiry: boolean
+  status: ProductStatus
+  accent: string
+}
+
+export type InventoryRow = {
+  productId: string
+  warehouseId: string
+  qty: number
+}
+
+export type Batch = {
+  id: string
+  productId: string
+  warehouseId: string
+  batchNo: string
+  qty: number
+  expiry?: string
+}
+
+export type Customer = {
+  id: string
+  name: string
+  phone: string
+  email: string
+  status: PartyStatus
+}
+
+export type Supplier = {
+  id: string
+  name: string
+  contact: string
+  phone: string
+  email: string
+  status: PartyStatus
+}
+
+export type LineItem = {
+  productId: string
+  qty: number
+  price: number
+  discount: number
+  total: number
+  returnedQty: number
+  batchNo?: string
+  expiry?: string
+}
+
+export type Sale = {
+  id: string
+  invoiceNo: string
+  date: string
+  customerId: string
+  warehouseId: string
+  salesperson: string
+  items: LineItem[]
+  subtotal: number
+  discount: number
+  tax: number
+  total: number
+  paid: number
+  balance: number
+  status: SaleStatus
+  paymentMethod?: PaymentMethod
+  notes?: string
+}
+
+export type Purchase = {
+  id: string
+  purchaseNo: string
+  date: string
+  supplierId: string
+  warehouseId: string
+  invoiceNumber: string
+  items: LineItem[]
+  subtotal: number
+  discount: number
+  tax: number
+  shipping: number
+  total: number
+  paid: number
+  balance: number
+  status: PurchaseStatus
+  notes?: string
+}
+
+export type SalesReturn = {
+  id: string
+  returnNo: string
+  date: string
+  saleId: string
+  warehouseId: string
+  items: Array<{ productId: string; qty: number; price: number }>
+  reason: string
+  total: number
+}
+
+export type PurchaseReturn = {
+  id: string
+  returnNo: string
+  date: string
+  purchaseId: string
+  warehouseId: string
+  items: Array<{ productId: string; qty: number; price: number }>
+  reason: string
+  total: number
+}
+
+export type StockMovement = {
+  id: string
+  date: string
+  reference: string
+  productId: string
+  warehouseId: string
+  type: MovementType
+  stockIn: number
+  stockOut: number
+  balance: number
+  user: string
+  notes?: string
+}
+
+export type Payment = {
+  id: string
+  paymentNo: string
+  date: string
+  partyType: 'customer' | 'supplier'
+  partyId: string
+  invoiceId: string
+  invoiceNo: string
+  method: PaymentMethod
+  amount: number
+  status: PaymentStatus
+}
+
+export type Expense = {
+  id: string
+  date: string
+  category: ExpenseCategory
+  description: string
+  amount: number
+  paymentMethod: PaymentMethod
+  notes: string
+}
+
+export type User = {
+  id: string
+  name: string
+  email: string
+  role: UserRole
+  status: UserStatus
+  lastLogin: string
+}
+
+export type AppNotification = {
+  id: string
+  type: 'low_stock' | 'out_of_stock' | 'payment' | 'info'
+  title: string
+  body: string
+  date: string
+  read: boolean
+  href?: string
+}
+
+export type PermissionKey =
+  | 'dashboard'
+  | 'pos'
+  | 'create_sale'
+  | 'void_sale'
+  | 'create_purchase'
+  | 'adjust_stock'
+  | 'transfer_stock'
+  | 'view_reports'
+  | 'manage_settings'
+  | 'manage_users'
+
+export type RoleMatrix = Record<UserRole, Record<PermissionKey, boolean>>
+
+export type Settings = {
+  businessName: string
+  phone: string
+  email: string
+  address: string
+  currency: string
+  defaultWarehouseId: string
+  allowNegativeStock: boolean
+  costingMethod: 'average' | 'fifo'
+  batchTracking: boolean
+  expiryTracking: boolean
+  defaultCustomerId: string
+  allowDiscount: boolean
+  allowReturns: boolean
+  enabledPaymentMethods: PaymentMethod[]
+  roleMatrix: RoleMatrix
+}
+
+export type Toast = {
+  id: string
+  title: string
+  description?: string
+  tone: ToastTone
+}
+
+export type DrawerState =
+  | { type: 'product'; id: string }
+  | { type: 'sale'; id: string }
+  | { type: 'purchase'; id: string }
+  | { type: 'customer'; id: string }
+  | { type: 'supplier'; id: string }
+  | { type: 'movement'; id: string }
+  | null
+
+export type QuickModal =
+  | 'product'
+  | 'customer'
+  | 'supplier'
+  | 'expense'
+  | 'user'
+  | 'payment'
+  | null
+
+export type UiState = {
+  toasts: Toast[]
+  drawer: DrawerState
+  quickModal: QuickModal
+  warehouseFilter: string
+  sidebarCollapsed: boolean
+  mobileNavOpen: boolean
+  datePreset: DatePreset
+  customFrom: string
+  customTo: string
+}
+
+export type AppData = {
+  warehouses: Warehouse[]
+  categories: Category[]
+  products: Product[]
+  inventory: InventoryRow[]
+  batches: Batch[]
+  customers: Customer[]
+  suppliers: Supplier[]
+  sales: Sale[]
+  purchases: Purchase[]
+  salesReturns: SalesReturn[]
+  purchaseReturns: PurchaseReturn[]
+  stockMovements: StockMovement[]
+  payments: Payment[]
+  expenses: Expense[]
+  users: User[]
+  notifications: AppNotification[]
+  settings: Settings
+}
+
+export type AppState = AppData & {
+  ui: UiState
+}
+
+export type ProductInput = {
+  name: string
+  sku: string
+  barcode: string
+  categoryId: string
+  unit: string
+  costPrice: number
+  sellingPrice: number
+  wholesalePrice: number
+  reorderLevel: number
+  trackBatch: boolean
+  trackExpiry: boolean
+  status: ProductStatus
+}
+
+export type SaleInput = {
+  customerId: string
+  warehouseId: string
+  salesperson?: string
+  items: Array<{ productId: string; qty: number; price: number; discount?: number }>
+  discount?: number
+  tax?: number
+  paymentMethod?: PaymentMethod
+  paidAmount?: number
+  notes?: string
+  date?: string
+}
+
+export type PurchaseInput = {
+  supplierId: string
+  warehouseId: string
+  invoiceNumber: string
+  items: Array<{
+    productId: string
+    qty: number
+    price: number
+    discount?: number
+    batchNo?: string
+    expiry?: string
+  }>
+  discount?: number
+  tax?: number
+  shipping?: number
+  receive: boolean
+  paidAmount?: number
+  date?: string
+  notes?: string
+}
