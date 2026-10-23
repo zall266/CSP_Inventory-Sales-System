@@ -8,6 +8,11 @@ import { queueInventoryWrite, refreshInventory, startInventoryHydration } from '
 import { queueWarehouseWrite, startWarehouseHydration } from '@/store/warehouseSync'
 import { bomCostsReady, markBomCostsReady, queueBomWrite, startBomHydration } from '@/store/bomSync'
 import {
+  markOpeningBalanceConfirmAfterSave,
+  queueOpeningBalanceWrite,
+  startOpeningBalanceHydration,
+} from '@/store/openingBalanceSync'
+import {
   applyDisplayDelta,
   createMainWarehouseLayout,
   DISPLAY_STOCK_DESTINATION,
@@ -879,6 +884,15 @@ function postPackingAssembly(existing: PackingAssembly, options: { acceptSnapsho
 
 let agentSaleInFlight = false
 let openingBalanceInFlight = false
+
+function beginOpeningBalancePost() {
+  if (openingBalanceInFlight) {
+    toast('Already posting', 'Wait for the current opening balance to finish.', 'warning')
+    return false
+  }
+  openingBalanceInFlight = true
+  return true
+}
 let inventoryPostInFlight = false
 let warehousePostInFlight = false
 let bomPostInFlight = false
@@ -4257,6 +4271,15 @@ export const db = {
         }),
       ),
     })
+    if (identityApiUrl()) {
+      queueOpeningBalanceWrite('openingBalances.save', {
+        clientId: doc.id,
+        type: input.type,
+        date: doc.date,
+        notes: input.notes ?? '',
+        items: input.items,
+      })
+    }
     toast('Opening balance saved', documentNo)
     return doc
   },
@@ -4290,6 +4313,15 @@ export const db = {
     setData({
       openingBalances: (state.openingBalances ?? []).map((row) => (row.id === id ? doc : row)),
     })
+    if (identityApiUrl()) {
+      queueOpeningBalanceWrite('openingBalances.update', {
+        id,
+        type: input.type,
+        date: doc.date,
+        notes: input.notes ?? '',
+        items: input.items,
+      })
+    }
     toast('Opening balance updated', doc.documentNo)
     return doc
   },
@@ -4312,6 +4344,11 @@ export const db = {
       toast('Already confirmed', `${doc.documentNo} is locked.`, 'info')
       return false
     }
+    if (identityApiUrl()) {
+      if (!beginOpeningBalancePost()) return false
+      queueOpeningBalanceWrite('openingBalances.confirm', { id }, crypto.randomUUID())
+      return true
+    }
     openingBalanceInFlight = true
     try {
       return postConfirmedOpeningBalance(doc)
@@ -4324,6 +4361,16 @@ export const db = {
     if (openingBalanceInFlight) {
       toast('Already posting', 'Wait for the current opening balance to finish.', 'warning')
       return null
+    }
+    if (identityApiUrl()) {
+      if (!beginOpeningBalancePost()) return null
+      const saved = this.saveOpeningBalance(input)
+      if (!saved) {
+        openingBalanceInFlight = false
+        return null
+      }
+      markOpeningBalanceConfirmAfterSave(saved.id)
+      return saved
     }
     openingBalanceInFlight = true
     try {
@@ -9353,6 +9400,36 @@ startWarehouseHydration({
   },
   onSettled() {
     warehousePostInFlight = false
+  },
+})
+
+startOpeningBalanceHydration({
+  apply(slice) {
+    setData({
+      openingBalances: slice.openingBalances,
+      ...(slice.inventory ? { inventory: slice.inventory } : {}),
+      ...(slice.stockMovements ? { stockMovements: slice.stockMovements } : {}),
+      ...(slice.displayStocks ? { displayStocks: slice.displayStocks } : {}),
+      ...(slice.productionBalances ? { productionBalances: slice.productionBalances } : {}),
+      ...(slice.storageSlots ? { storageSlots: slice.storageSlots } : {}),
+      ...(slice.slotOccupancies ? { slotOccupancies: slice.slotOccupancies } : {}),
+      ...(slice.placementLogs ? { placementLogs: slice.placementLogs } : {}),
+    })
+  },
+  actorId: () => currentUser(state).id,
+  onError(message) {
+    toast('Could not save to the server', message, 'danger')
+  },
+  onSaved(action, _payload, data) {
+    if (action === 'openingBalances.save') toast('Opening balance saved', String((data.openingBalance as OpeningBalance | undefined)?.documentNo ?? ''))
+    if (action === 'openingBalances.update') toast('Opening balance updated', String((data.openingBalance as OpeningBalance | undefined)?.documentNo ?? ''))
+    if (action === 'openingBalances.confirm') {
+      const doc = data.openingBalance as OpeningBalance | undefined
+      toast('Opening balance confirmed', doc?.documentNo ?? '')
+    }
+  },
+  onSettled() {
+    openingBalanceInFlight = false
   },
 })
 

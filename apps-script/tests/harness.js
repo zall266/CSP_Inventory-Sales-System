@@ -26,6 +26,7 @@ const files = [
   'repositories/inventoryRepository.js',
   'repositories/warehouseRepository.js',
   'repositories/bomRepository.js',
+  'repositories/openingBalanceRepository.js',
   'services/auditService.js',
   'services/idempotencyService.js',
   'services/counterService.js',
@@ -38,6 +39,7 @@ const files = [
   'services/inventoryService.js',
   'services/warehouseService.js',
   'services/bomService.js',
+  'services/openingBalanceService.js',
   'app/router.js',
   'app/main.js',
 ]

@@ -7,6 +7,7 @@ function createRouter(backend) {
   var inventory = backend && backend.inventory ? backend.inventory : null;
   var warehouse = backend && backend.warehouse ? backend.warehouse : null;
   var boms = backend && backend.boms ? backend.boms : null;
+  var openingBalances = backend && backend.openingBalances ? backend.openingBalances : null;
 
   function dispatch(request) {
     if (!request || request.v !== 1 || typeof request.action !== 'string' || !request.action) {
@@ -29,6 +30,7 @@ function createRouter(backend) {
     if (inventory && inventory.canHandle(request.action)) return inventory.dispatch(request);
     if (warehouse && warehouse.canHandle(request.action)) return warehouse.dispatch(request);
     if (boms && boms.canHandle(request.action)) return boms.dispatch(request);
+    if (openingBalances && openingBalances.canHandle(request.action)) return openingBalances.dispatch(request);
     return errorEnvelope('UNKNOWN_ACTION', 'The action is not available.', { requestId: requestId });
   }
 

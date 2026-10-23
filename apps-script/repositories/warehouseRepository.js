@@ -229,6 +229,11 @@ function createWarehouseRepository(sheetRepository) {
     sheetRepository.appendObject(sheet(spreadsheet, 'PlacementLogs'), row);
   }
 
+  function writeLogs(spreadsheet, rows) {
+    ensure(spreadsheet);
+    sheetRepository.replaceObjects(sheet(spreadsheet, 'PlacementLogs'), rows);
+  }
+
   function appendUsage(spreadsheet, row) {
     ensure(spreadsheet);
     sheetRepository.appendObject(sheet(spreadsheet, 'BalanceUsageLogs'), row);
@@ -249,6 +254,7 @@ function createWarehouseRepository(sheetRepository) {
     writeDisplay: writeDisplay,
     writeProductionBalances: writeProductionBalances,
     appendLog: appendLog,
+    writeLogs: writeLogs,
     appendUsage: appendUsage
   };
 }

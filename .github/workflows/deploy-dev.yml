@@ -16,6 +16,7 @@ on:
       - cursor/module-5-inventory-ledger-d9ac
       - cursor/module-6-warehouse-map-d9ac
       - cursor/module-7-bom-recipes-d9ac
+      - cursor/module-8-opening-balance-d9ac
 
 permissions:
   contents: read
