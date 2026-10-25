@@ -20,7 +20,11 @@ export function identityApiUrl() {
   return String(import.meta.env.VITE_CSP_API_URL ?? '').trim()
 }
 
-export async function postIdentityAction(action: string, payload: Record<string, unknown>): Promise<Envelope> {
+export async function postIdentityAction(
+  action: string,
+  payload: Record<string, unknown>,
+  idempotencyKey?: string,
+): Promise<Envelope> {
   const url = identityApiUrl()
   const response = await fetch(url, {
     method: 'POST',
@@ -30,6 +34,7 @@ export async function postIdentityAction(action: string, payload: Record<string,
       requestId: crypto.randomUUID(),
       action,
       payload,
+      ...(idempotencyKey ? { idempotencyKey } : {}),
     }),
   })
   const body = (await response.json()) as Envelope
