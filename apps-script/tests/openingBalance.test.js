@@ -148,11 +148,13 @@ test('opening balance draft save, confirm once, idempotency, conflict, and audit
 
   const saved = call(backend, 'openingBalances.save', {
     actorUserId: 'u-aina',
+    clientId: 'ob_uat_client_1',
     type: 'stock_item',
     items: [{ productId: 'prd-sugar', qty: 2, unit: 'BAG', warehouseId: 'wh-main' }],
   })
   assert.equal(saved.ok, true)
   const doc = saved.data.openingBalance
+  assert.equal(doc.id, 'ob_uat_client_1')
   assert.equal(doc.status, 'draft')
   assert.equal(doc.documentNo, 'OB-0001')
   assert.equal(qty(saved.data, 'prd-sugar', 'wh-main'), 0)

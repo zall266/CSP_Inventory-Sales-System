@@ -100,6 +100,13 @@ function createOpeningBalanceService(deps) {
     return prefix + '_' + createId().replace(/-/g, '').slice(0, 10);
   }
 
+  function clientId(value) {
+    var id = text(value).trim();
+    if (!id) return newId('ob');
+    if (!/^[A-Za-z0-9_-]{1,80}$/.test(id)) throw appError('VALIDATION_ERROR', 'Id is not valid.');
+    return id;
+  }
+
   function systemAudit(spreadsheet, entry) {
     sheets.ensureSheet(spreadsheet, 'AuditLogs', typeof AUDIT_HEADERS !== 'undefined' ? AUDIT_HEADERS : [
       'auditId', 'timestamp', 'userId', 'action', 'entityType', 'entityId', 'reference', 'before', 'after', 'requestId'
@@ -431,8 +438,12 @@ function createOpeningBalanceService(deps) {
     var lines = buildLines(spreadsheet, type, payload.items || []);
     repository.ensure(spreadsheet);
     var docs = repository.readDocuments(spreadsheet);
+    var id = clientId(payload.clientId || payload.id);
+    docs.forEach(function (row) {
+      if (row.id === id) throw appError('CONFLICT', 'Opening balance already exists.');
+    });
     var doc = {
-      id: newId('ob'),
+      id: id,
       documentNo: nextDocumentNo(docs),
       date: text(payload.date).trim() || nowIso(),
       type: type,
@@ -593,6 +604,14 @@ function createOpeningBalanceService(deps) {
       }
     });
 
+    movements.forEach(function (line) { inventoryRepo.appendMovement(spreadsheet, line); });
+    products.writeBalances(spreadsheet, balances);
+    warehouseRepo.writeDisplay(spreadsheet, displayStocks);
+    warehouseRepo.writeProductionBalances(spreadsheet, productionBalances);
+    warehouseRepo.writeSlots(spreadsheet, storageSlots);
+    warehouseRepo.writeOccupancies(spreadsheet, occupancies);
+    warehouseRepo.writeLogs(spreadsheet, placementLogs);
+
     var confirmed = {
       id: existing.id,
       documentNo: existing.documentNo,
@@ -611,13 +630,6 @@ function createOpeningBalanceService(deps) {
       return row.id === id ? confirmed : row;
     });
     repository.writeDocuments(spreadsheet, docs);
-    movements.forEach(function (line) { inventoryRepo.appendMovement(spreadsheet, line); });
-    products.writeBalances(spreadsheet, balances);
-    warehouseRepo.writeDisplay(spreadsheet, displayStocks);
-    warehouseRepo.writeProductionBalances(spreadsheet, productionBalances);
-    warehouseRepo.writeSlots(spreadsheet, storageSlots);
-    warehouseRepo.writeOccupancies(spreadsheet, occupancies);
-    warehouseRepo.writeLogs(spreadsheet, placementLogs);
 
     systemAudit(spreadsheet, {
       userId: actor.id,
