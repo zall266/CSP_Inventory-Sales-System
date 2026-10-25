@@ -12,6 +12,7 @@ import {
   queueOpeningBalanceWrite,
   startOpeningBalanceHydration,
 } from '@/store/openingBalanceSync'
+import { queuePurchaseWrite, startPurchaseHydration } from '@/store/purchaseSync'
 import {
   applyDisplayDelta,
   createMainWarehouseLayout,
@@ -166,8 +167,11 @@ import type {
   ProductStatus,
   ProductionInput,
   ProductionWastage,
+  Purchase,
   PurchaseInput,
+  PurchaseReturn,
   PurchaseStatus,
+  Payment,
   Receiving,
   ReceivingInput,
   QuickModal,
@@ -884,6 +888,16 @@ function postPackingAssembly(existing: PackingAssembly, options: { acceptSnapsho
 
 let agentSaleInFlight = false
 let openingBalanceInFlight = false
+let purchasePostInFlight = false
+
+function beginPurchasePost() {
+  if (purchasePostInFlight) {
+    toast('Already posting', 'Wait for the current purchase update to finish.', 'warning')
+    return false
+  }
+  purchasePostInFlight = true
+  return true
+}
 
 function beginOpeningBalancePost() {
   if (openingBalanceInFlight) {
@@ -4024,10 +4038,28 @@ export const db = {
       : state.receivings ?? []
 
     setData({ purchases: [purchase, ...state.purchases], inventory, stockMovements: movements, payments, receivings })
-    toast(
-      skipStock ? 'Purchase saved — stock already received' : input.receive ? 'Purchase received' : 'Draft saved',
-      purchaseNo,
-    )
+    if (identityApiUrl()) {
+      queuePurchaseWrite('purchases.create', {
+        clientId: purchase.id,
+        supplierId: input.supplierId,
+        warehouseId: input.warehouseId,
+        invoiceNumber: input.invoiceNumber,
+        date: purchase.date,
+        items: input.items,
+        discount: input.discount ?? 0,
+        tax: input.tax ?? 0,
+        shipping: input.shipping ?? 0,
+        receive: input.receive,
+        paidAmount: input.paidAmount ?? 0,
+        notes: input.notes ?? '',
+        receivingId: input.receivingId ?? '',
+      })
+    } else {
+      toast(
+        skipStock ? 'Purchase saved — stock already received' : input.receive ? 'Purchase received' : 'Draft saved',
+        purchaseNo,
+      )
+    }
     return purchase
   },
 
@@ -4035,6 +4067,11 @@ export const db = {
     const purchase = state.purchases.find((item) => item.id === id)
     if (!purchase || purchase.status !== 'draft') {
       toast('Already received', undefined, 'info')
+      return
+    }
+    if (identityApiUrl()) {
+      if (!beginPurchasePost()) return
+      queuePurchaseWrite('purchases.receive', { id }, crypto.randomUUID())
       return
     }
     let inventory = state.inventory
@@ -5243,6 +5280,7 @@ export const db = {
         return null
       }
     }
+    if (identityApiUrl() && !beginPurchasePost()) return null
     const returnNo = nextDocNo(state.purchaseReturns.map((item) => item.returnNo), 'PR-')
     const date = nowIso()
     let inventory = state.inventory
@@ -5290,7 +5328,15 @@ export const db = {
         ...state.purchaseReturns,
       ],
     })
-    toast('Purchase return processed', returnNo)
+    if (identityApiUrl()) {
+      queuePurchaseWrite(
+        'purchaseReturns.create',
+        { purchaseId: input.purchaseId, items: input.items, reason: input.reason },
+        crypto.randomUUID(),
+      )
+    } else {
+      toast('Purchase return processed', returnNo)
+    }
     return returnNo
   },
 
@@ -5340,6 +5386,15 @@ export const db = {
     if (!purchase || purchase.balance <= 0) {
       toast('Nothing to pay', undefined, 'info')
       return false
+    }
+    if (identityApiUrl()) {
+      if (!beginPurchasePost()) return false
+      queuePurchaseWrite(
+        'purchases.recordPayment',
+        { invoiceId: input.invoiceId, method: input.method, amount: input.amount },
+        crypto.randomUUID(),
+      )
+      return true
     }
     const amount = Math.min(input.amount, purchase.balance)
     const paid = round2(purchase.paid + amount)
@@ -9430,6 +9485,44 @@ startOpeningBalanceHydration({
   },
   onSettled() {
     openingBalanceInFlight = false
+  },
+})
+
+startPurchaseHydration({
+  apply(slice) {
+    setData({
+      purchases: slice.purchases,
+      purchaseReturns: slice.purchaseReturns,
+      payments: slice.payments,
+      ...(slice.inventory ? { inventory: slice.inventory } : {}),
+      ...(slice.stockMovements ? { stockMovements: slice.stockMovements } : {}),
+    })
+  },
+  actorId: () => currentUser(state).id,
+  onError(message) {
+    toast('Could not save to the server', message, 'danger')
+  },
+  onSaved(action, _payload, data) {
+    if (action === 'purchases.create') {
+      const doc = data.purchase as Purchase | undefined
+      toast(
+        doc?.receivingId ? 'Purchase saved — stock already received' : _payload.receive ? 'Purchase received' : 'Draft saved',
+        doc?.purchaseNo ?? '',
+      )
+    }
+    if (action === 'purchases.receive') {
+      const doc = data.purchase as Purchase | undefined
+      toast(doc?.receivingId ? 'Purchase marked received — stock already in' : 'Purchase received', doc?.purchaseNo ?? '')
+    }
+    if (action === 'purchases.recordPayment') {
+      toast('Supplier payment recorded', String((data.payment as Payment | undefined)?.paymentNo ?? ''))
+    }
+    if (action === 'purchaseReturns.create') {
+      toast('Purchase return processed', String((data.purchaseReturn as PurchaseReturn | undefined)?.returnNo ?? ''))
+    }
+  },
+  onSettled() {
+    purchasePostInFlight = false
   },
 })
 
