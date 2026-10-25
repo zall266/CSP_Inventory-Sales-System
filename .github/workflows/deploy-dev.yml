@@ -17,6 +17,7 @@ on:
       - cursor/module-6-warehouse-map-d9ac
       - cursor/module-7-bom-recipes-d9ac
       - cursor/module-8-opening-balance-d9ac
+      - cursor/module-9-purchases-returns-d9ac
 
 permissions:
   contents: read
