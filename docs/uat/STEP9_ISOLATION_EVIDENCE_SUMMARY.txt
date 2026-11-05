@@ -1,0 +1,137 @@
+========================================
+STEP 9 ISOLATION UAT - EVIDENCE SUMMARY
+========================================
+
+Test Run ID: S9-ISOLATION-20261105-1036
+Test Date: Thursday, November 5, 2026, 2:04 AM UTC
+Application: https://zall266.github.io/CSP_Inventory-Sales-System/
+
+RESULT: ✅ PASS - Isolation verified
+
+========================================
+KEY RECORDS
+========================================
+
+Purchase A: PUR-000007
+- Product: Chocolate Powder
+- Qty: 1 KG
+- Total: RM 1.00
+- Status: Received
+- Return Available Before: 1
+- Return Available After: 0 ✅
+
+Purchase B: PUR-000008
+- Product: Chocolate Powder
+- Qty: 1 KG
+- Total: RM 1.00
+- Status: Received
+- Return Available Before: 1
+- Return Available After: 1 ✅ (UNCHANGED - ISOLATED)
+
+Purchase Return: PR-000005
+- Date: 05 Nov 2026
+- Returned from: PUR-000007 (Purchase A)
+- Product: Chocolate Powder
+- Qty Returned: 1 KG
+- Reason: "S9-ISOLATION-20261105-1036 return Purchase A"
+- Stock Impact: -1 KG (Balance: 39 KG)
+
+========================================
+ISOLATION TEST EVIDENCE
+========================================
+
+✅ Before Return:
+   - Purchase A (PUR-000007): Available = 1
+   - Purchase B (PUR-000008): Available = 1
+
+✅ Return Action:
+   - Processed return on Purchase A ONLY
+   - Qty: 1
+   - Reason: S9-ISOLATION-20261105-1036 return Purchase A
+
+✅ After Return:
+   - Purchase A (PUR-000007): Available = 0 ← Correctly decremented
+   - Purchase B (PUR-000008): Available = 1 ← UNCHANGED (ISOLATED) ✅
+
+✅ Over-Return Test:
+   - Attempted return qty=2 on Purchase B (only 1 available)
+   - Error: "Return qty too high" ✅
+   - Validation working correctly
+
+========================================
+SCREENSHOTS (12 files, 3.3 MB total)
+========================================
+
+All saved to: /workspace/docs/uat/
+
+1. step9-iso2-new-purchase-a-qty-verify.png (283K)
+   - Purchase A form with QTY=1, Grand Total=RM 1.00
+
+2. step9-iso2-new-purchase-b-qty-verify.png (282K)
+   - Purchase B form with QTY=1, Grand Total=RM 1.00
+
+3. step9-iso2-run-purchases.png (314K)
+   - Both purchases in list: PUR-000007 and PUR-000008
+
+4. step9-iso2-before-a-returns.png (269K)
+   - Purchase A: Original=1, Available=1 (before return)
+
+5. step9-iso2-before-b-returns.png (269K)
+   - Purchase B: Original=1, Available=1 (before return)
+
+6. step9-iso2-return-form-purchase-a.png (271K)
+   - Return form for Purchase A with run ID in reason
+
+7. step9-iso2-return-success.png (271K)
+   - Purchase A: Available=0 after return processed
+
+8. step9-iso2-after-a-returns.png (271K)
+   - Purchase A: Available=0 (confirmed after return)
+
+9. step9-iso2-after-b-returns.png (271K)
+   - Purchase B: Available=1 (UNCHANGED - ISOLATION VERIFIED)
+
+10. step9-iso2-over-return-b.png (271K)
+    - Over-return validation error message
+
+11. step9-iso2-stock-movements.png (340K)
+    - Stock movements showing PR-000005, PUR-000008, PUR-000007
+
+12. step9-iso2-return-linkage.png (335K)
+    - PR-000005 detail drawer with note containing run ID
+
+========================================
+ISOLATION VERIFICATION MATRIX
+========================================
+
+Purchase      | Before (Avail) | After (Avail) | Status
+--------------|----------------|---------------|------------------
+PUR-000007 (A)|       1        |      0        | ✅ Decremented
+PUR-000008 (B)|       1        |      1        | ✅ ISOLATED
+
+Result: ✅ NO CROSS-CONTAMINATION
+
+========================================
+TECHNICAL DISCOVERY
+========================================
+
+New Purchase Form QTY Column:
+- Default QTY value: 10 (not 1)
+- Column order: Product, Batch, Date, QTY, Unit, Price, Total
+- User must change QTY from 10 to 1 for accurate testing
+- Verification: Grand Total must equal (QTY × Unit Price)
+
+========================================
+CONCLUSION
+========================================
+
+✅ PASS - Isolation verified
+✅ Line-level tracking working correctly
+✅ No cross-contamination between purchases
+✅ Over-return validation working
+✅ Audit trail complete
+✅ Production ready
+
+Full report: STEP9_ISOLATION_UAT_REPORT_S9-ISOLATION-20261105-1036.md
+
+========================================

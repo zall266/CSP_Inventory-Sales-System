@@ -1,9 +1,10 @@
 import { identityApiUrl, postIdentityAction } from '@/api/identityApi'
-import type { InventoryRow, StockMovement } from '@/types'
+import type { InventoryRow, StockMovement, StockOrder } from '@/types'
 
 type InventorySlice = {
   inventory: InventoryRow[]
   stockMovements: StockMovement[]
+  stockOrders?: StockOrder[]
 }
 
 type SyncOptions = {
@@ -24,9 +25,15 @@ let epoch = 0
 let ready = false
 const pending: PendingWrite[] = []
 
-function sliceFrom(data: { inventory?: InventoryRow[]; stockMovements?: StockMovement[] } | null): InventorySlice | null {
+function sliceFrom(
+  data: { inventory?: InventoryRow[]; stockMovements?: StockMovement[]; stockOrders?: StockOrder[] } | null,
+): InventorySlice | null {
   if (!data || !Array.isArray(data.inventory) || !Array.isArray(data.stockMovements)) return null
-  return { inventory: data.inventory, stockMovements: data.stockMovements }
+  return {
+    inventory: data.inventory,
+    stockMovements: data.stockMovements,
+    stockOrders: Array.isArray(data.stockOrders) ? data.stockOrders : undefined,
+  }
 }
 
 export function startInventoryHydration(next: SyncOptions) {
@@ -80,8 +87,9 @@ export function queueInventoryWrite(action: string, payload: Record<string, unkn
   epoch += 1
   const seen = epoch
   const actorUserId = options.actorId()
+  const needsKey = action !== 'inventory.markOrdered' && action !== 'inventory.cancelOrder'
   const rawKey = payload.idempotencyKey
-  const idempotencyKey = typeof rawKey === 'string' ? rawKey : crypto.randomUUID()
+  const idempotencyKey = needsKey ? (typeof rawKey === 'string' ? rawKey : crypto.randomUUID()) : undefined
   const body: Record<string, unknown> = { ...payload, actorUserId }
   delete body.idempotencyKey
   void (async () => {

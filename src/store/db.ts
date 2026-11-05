@@ -13,6 +13,7 @@ import {
   startOpeningBalanceHydration,
 } from '@/store/openingBalanceSync'
 import { queuePurchaseWrite, startPurchaseHydration } from '@/store/purchaseSync'
+import { queueReceivingWrite, startReceivingHydration } from '@/store/receivingSync'
 import {
   applyDisplayDelta,
   createMainWarehouseLayout,
@@ -889,6 +890,16 @@ function postPackingAssembly(existing: PackingAssembly, options: { acceptSnapsho
 let agentSaleInFlight = false
 let openingBalanceInFlight = false
 let purchasePostInFlight = false
+let receivingPostInFlight = false
+
+function beginReceivingPost() {
+  if (receivingPostInFlight) {
+    toast('Already posting', 'Wait for the current receiving update to finish.', 'warning')
+    return false
+  }
+  receivingPostInFlight = true
+  return true
+}
 
 function beginPurchasePost() {
   if (purchasePostInFlight) {
@@ -4226,7 +4237,25 @@ export const db = {
       toast('Receiving could not be saved', 'Storage is full or unavailable. Stock was not updated.', 'danger')
       return null
     }
-    toast('Receiving completed', `${receivingNo} — stock increased.`)
+    if (identityApiUrl()) {
+      if (!beginReceivingPost()) return null
+      queueReceivingWrite('receivings.create', {
+        clientId: receiving.id,
+        warehouseId: input.warehouseId,
+        source: input.source ?? 'other',
+        supplierId: input.supplierId ?? '',
+        supplierNote: input.supplierNote ?? '',
+        date: receiving.date,
+        notes: input.notes ?? '',
+        photoUrl: input.photoUrl ?? '',
+        photoName: input.photoName ?? '',
+        stockOrderId: input.stockOrderId ?? '',
+        items: input.items,
+        idempotencyKey: crypto.randomUUID(),
+      })
+    } else {
+      toast('Receiving completed', `${receivingNo} — stock increased.`)
+    }
     return receiving
   },
 
@@ -4265,7 +4294,16 @@ export const db = {
       toast('Link failed', 'Inventory must not change when linking a purchase.', 'danger')
       return false
     }
-    toast('Receiving linked', `${receiving.receivingNo} → ${purchase.purchaseNo}`)
+    if (identityApiUrl()) {
+      if (!beginReceivingPost()) return false
+      queueReceivingWrite('receivings.linkPurchase', {
+        receivingId,
+        purchaseId,
+        idempotencyKey: crypto.randomUUID(),
+      })
+    } else {
+      toast('Receiving linked', `${receiving.receivingNo} → ${purchase.purchaseNo}`)
+    }
     return true
   },
 
@@ -4607,7 +4645,17 @@ export const db = {
         }),
       ),
     })
-    toast('Marked as ordered', product.name)
+    if (identityApiUrl()) {
+      queueInventoryWrite('inventory.markOrdered', {
+        productId: input.productId,
+        warehouseId: input.warehouseId,
+        channel: input.channel ?? '',
+        remark: input.remark ?? '',
+        orderedQty: input.orderedQty ?? '',
+      })
+    } else {
+      toast('Marked as ordered', product.name)
+    }
     return order
   },
 
@@ -4647,7 +4695,11 @@ export const db = {
         }),
       ),
     })
-    toast('Order cancelled', cancelReason)
+    if (identityApiUrl()) {
+      queueInventoryWrite('inventory.cancelOrder', { id, reason: cancelReason ?? '' })
+    } else {
+      toast('Order cancelled', cancelReason)
+    }
     return true
   },
 
@@ -9408,7 +9460,11 @@ startProductHydration({
 
 startInventoryHydration({
   apply(slice) {
-    setData({ inventory: slice.inventory, stockMovements: slice.stockMovements })
+    setData({
+      inventory: slice.inventory,
+      stockMovements: slice.stockMovements,
+      ...(slice.stockOrders ? { stockOrders: slice.stockOrders } : {}),
+    })
   },
   actorId: () => currentUser(state).id,
   onError(message) {
@@ -9427,9 +9483,40 @@ startInventoryHydration({
       const changes = Number(data.changes ?? 0)
       toast('Stock count complete', changes ? `${changes} SKUs adjusted.` : 'No differences found.', changes ? 'success' : 'info')
     }
+    if (action === 'inventory.markOrdered') toast('Marked as ordered', String(payload.productId ?? ''))
+    if (action === 'inventory.cancelOrder') toast('Order cancelled', String(payload.reason ?? ''))
   },
   onSettled() {
     inventoryPostInFlight = false
+  },
+})
+
+startReceivingHydration({
+  apply(slice) {
+    setData({
+      receivings: slice.receivings,
+      stockOrders: slice.stockOrders,
+      ...(slice.inventory ? { inventory: slice.inventory } : {}),
+      ...(slice.stockMovements ? { stockMovements: slice.stockMovements } : {}),
+      ...(slice.purchases ? { purchases: slice.purchases } : {}),
+    })
+  },
+  actorId: () => currentUser(state).id,
+  onError(message) {
+    toast('Could not save to the server', message, 'danger')
+  },
+  onSaved(action, _payload, data) {
+    if (action === 'receivings.create') {
+      const doc = data.receiving as Receiving | undefined
+      toast('Receiving completed', doc ? `${doc.receivingNo} — stock increased.` : 'Stock increased.')
+    }
+    if (action === 'receivings.linkPurchase') {
+      const doc = data.receiving as Receiving | undefined
+      toast('Receiving linked', doc?.purchaseNo ? `${doc.receivingNo} → ${doc.purchaseNo}` : 'Purchase linked.')
+    }
+  },
+  onSettled() {
+    receivingPostInFlight = false
   },
 })
 

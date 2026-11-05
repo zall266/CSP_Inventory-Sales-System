@@ -11,12 +11,15 @@ var INVENTORY_ACTIONS = {
   'inventory.adjust': true,
   'inventory.usage': true,
   'inventory.transfer': true,
-  'inventory.count': true
+  'inventory.count': true,
+  'inventory.markOrdered': true,
+  'inventory.cancelOrder': true
 };
 
 function createInventoryService(deps) {
   var sheets = deps.sheetRepository;
   var repository = createInventoryRepository(sheets);
+  var stockOrders = createReceivingRepository(sheets);
   var products = createProductRepository(sheets);
   var masters = createMasterRepository(sheets);
   var audit = deps.audit || createAuditService(sheets);
@@ -198,14 +201,97 @@ function createInventoryService(deps) {
   }
 
   function snapshot(spreadsheet) {
+    stockOrders.ensure(spreadsheet);
     var movements = repository.readMovements(spreadsheet);
     movements.reverse();
     return {
       inventory: products.readBalances(spreadsheet).map(function (row) {
         return { productId: row.productId, warehouseId: row.warehouseId, qty: round2(row.qty) };
       }),
-      stockMovements: movements
+      stockMovements: movements,
+      stockOrders: stockOrders.readStockOrders(spreadsheet)
     };
+  }
+
+  function activeStockOrder(orders, productId, warehouseId) {
+    var pid = text(productId).trim();
+    var wid = text(warehouseId).trim();
+    for (var i = 0; i < orders.length; i += 1) {
+      var row = orders[i];
+      if (row.productId === pid && row.warehouseId === wid && row.status === 'ordered') return row;
+    }
+    return null;
+  }
+
+  function requireCompanyWarehouse(spreadsheet, warehouseId) {
+    var warehouse = warehouseById(spreadsheet, warehouseId);
+    if (!warehouse || warehouse.kind !== 'company') throw appError('VALIDATION_ERROR', 'Choose a company warehouse');
+    return warehouse;
+  }
+
+  function markOrdered(spreadsheet, payload, requestId, actor) {
+    requireCompanyWarehouse(spreadsheet, payload.warehouseId);
+    var product = requireProduct(spreadsheet, payload.productId);
+    var orders = stockOrders.readStockOrders(spreadsheet);
+    if (activeStockOrder(orders, product.id, payload.warehouseId)) {
+      throw appError('VALIDATION_ERROR', 'This item is already awaiting receiving.');
+    }
+    var qty = Number(payload.orderedQty);
+    var order = {
+      id: 'sord_' + createId().replace(/-/g, '').slice(0, 10),
+      productId: product.id,
+      warehouseId: text(payload.warehouseId).trim(),
+      status: 'ordered',
+      channel: text(payload.channel).trim() || undefined,
+      remark: text(payload.remark).trim() || undefined,
+      orderedQty: Number.isFinite(qty) && qty > 0 ? round2(qty) : undefined,
+      markedOrderedBy: actor.name,
+      markedOrderedAt: nowIso()
+    };
+    stockOrders.appendStockOrder(spreadsheet, order);
+    systemAudit(spreadsheet, {
+      userId: actor.id,
+      action: 'inventory.markOrdered',
+      entityType: 'stock_order',
+      entityId: order.id,
+      reference: product.sku || product.name,
+      before: 'low_stock',
+      after: 'ordered',
+      requestId: requestId
+    });
+    var state = snapshot(spreadsheet);
+    state.stockOrder = order;
+    return state;
+  }
+
+  function cancelOrder(spreadsheet, payload, requestId, actor) {
+    var id = text(payload.id).trim();
+    var orders = stockOrders.readStockOrders(spreadsheet);
+    var current = null;
+    orders.forEach(function (row) {
+      if (row.id === id) current = row;
+    });
+    if (!current || current.status !== 'ordered') throw appError('NOT_FOUND', 'Order not found');
+    var updated = Object.assign({}, current, {
+      status: 'cancelled',
+      cancelledBy: actor.name,
+      cancelledAt: nowIso(),
+      cancelReason: text(payload.reason).trim() || undefined
+    });
+    stockOrders.updateStockOrder(spreadsheet, updated);
+    systemAudit(spreadsheet, {
+      userId: actor.id,
+      action: 'inventory.cancelOrder',
+      entityType: 'stock_order',
+      entityId: current.id,
+      reference: current.productId,
+      before: 'ordered',
+      after: 'cancelled',
+      requestId: requestId
+    });
+    var state = snapshot(spreadsheet);
+    state.stockOrder = updated;
+    return state;
   }
 
   function systemAudit(spreadsheet, entry) {
@@ -428,6 +514,24 @@ function createInventoryService(deps) {
     var requestId = request.requestId ? String(request.requestId) : '';
     return locked(function (spreadsheet) {
       if (action === 'inventory.get') return okEnvelope(snapshot(spreadsheet));
+      if (action === 'inventory.markOrdered') {
+        var marked = markOrdered(
+          spreadsheet,
+          payload,
+          requestId,
+          requirePermission(spreadsheet, payload.actorUserId, 'inventory.adjust', 'You cannot mark items as ordered.')
+        );
+        return okEnvelope(marked);
+      }
+      if (action === 'inventory.cancelOrder') {
+        var cancelled = cancelOrder(
+          spreadsheet,
+          payload,
+          requestId,
+          requirePermission(spreadsheet, payload.actorUserId, 'inventory.adjust', 'You cannot cancel an ordered item.')
+        );
+        return okEnvelope(cancelled);
+      }
       requireKey(request);
       var result;
       if (action === 'inventory.adjust') {
