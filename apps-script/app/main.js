@@ -15,7 +15,8 @@ function defaultBackend() {
     warehouse: createWarehouseService({ sheetRepository: sheets }),
     boms: createBomService({ sheetRepository: sheets }),
     openingBalances: createOpeningBalanceService({ sheetRepository: sheets }),
-    purchases: createPurchaseService({ sheetRepository: sheets })
+    purchases: createPurchaseService({ sheetRepository: sheets }),
+    receivings: createReceivingService({ sheetRepository: sheets, driveStorage: drive })
   };
 }
 
