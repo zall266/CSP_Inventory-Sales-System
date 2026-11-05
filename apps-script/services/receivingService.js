@@ -106,8 +106,32 @@ function createReceivingService(deps) {
     return id;
   }
 
-  function movementId() {
-    return 'mv_' + createId().replace(/-/g, '').slice(0, 16);
+  // Deterministic ids let a retry find movements a failed attempt already posted.
+  // "." cannot appear in a client id, so one receiving's ids never prefix another's.
+  function movementIdFor(receivingId, index) {
+    return 'mv_' + receivingId + '.' + (index + 1);
+  }
+
+  function movementPrefix(receivingId) {
+    return 'mv_' + receivingId + '.';
+  }
+
+  function findCreateAudit(spreadsheet, receivingId) {
+    var found = null;
+    sheetRows(spreadsheet, 'AuditLogs').forEach(function (row) {
+      if (text(row.action).trim() === 'receivings.create' &&
+          text(row.entityType).trim() === 'receiving' &&
+          text(row.entityId).trim() === receivingId) found = row;
+    });
+    return found;
+  }
+
+  function auditIdempotencyKey(row) {
+    try {
+      return text(JSON.parse(text(row.after)).idempotencyKey).trim();
+    } catch (error) {
+      return '';
+    }
   }
 
   function nextDocNo(values, prefix, pad) {
@@ -270,37 +294,86 @@ function createReceivingService(deps) {
     };
   }
 
-  function createReceiving(spreadsheet, payload, requestId, actor) {
+  // Google Sheets offers no multi-sheet transaction. createReceiving writes in
+  // this order: StockMovements, InventoryBalances, Receivings header,
+  // ReceivingLines, StockOrders link, AuditLogs (last, as the completion marker).
+  // Every step is safe to repeat, so a retry after a partial failure finishes
+  // the remaining steps instead of posting stock a second time.
+  function createReceiving(spreadsheet, payload, requestId, actor, idempotencyKey) {
     requireCompanyWarehouse(spreadsheet, payload.warehouseId);
     var lines = buildLines(spreadsheet, payload.items);
     var docs = repository.readReceivings(spreadsheet);
     var id = clientId(payload.clientId || payload.id, 'rcv');
+    var warehouseId = text(payload.warehouseId).trim();
+    var existing = null;
     docs.forEach(function (row) {
-      if (row.id === id) throw appError('CONFLICT', 'Receiving already exists.');
+      if (row.id === id) existing = row;
     });
-    var receivingNo = nextDocNo(docs.map(function (row) { return row.receivingNo; }), 'RCV-', 6);
-    var date = text(payload.date).trim() || nowIso();
-    var photoFileId = '';
-    var photoName = '';
-    if (payload.photoUrl) {
+    if (existing) {
+      var completed = findCreateAudit(spreadsheet, id);
+      if (completed) {
+        if (idempotencyKey && auditIdempotencyKey(completed) === idempotencyKey) return existing;
+        throw appError('CONFLICT', 'Receiving already exists.');
+      }
+      if (existing.warehouseId !== warehouseId) throw appError('CONFLICT', 'Receiving already exists.');
+      existing.items.forEach(function (stored, index) {
+        var line = lines[index];
+        if (!line || line.productId !== stored.productId || round2(line.baseQty) !== round2(stored.baseQty)) {
+          throw appError('CONFLICT', 'Receiving already exists.');
+        }
+      });
+    }
+    var movements = inventoryRepo.readMovements(spreadsheet);
+    var posted = {};
+    movements.forEach(function (row, index) {
+      posted[row.id] = index;
+    });
+    var firstPosted = posted[movementIdFor(id, 0)] === undefined ? null : movements[posted[movementIdFor(id, 0)]];
+    if (!existing && firstPosted && docs.some(function (row) { return row.receivingNo === firstPosted.reference; })) {
+      throw appError('CONFLICT', 'Receiving number was reused after a failed attempt. An admin must reconcile it.');
+    }
+    var receivingNo = existing
+      ? existing.receivingNo
+      : firstPosted ? firstPosted.reference : nextDocNo(docs.map(function (row) { return row.receivingNo; }), 'RCV-', 6);
+    var date = existing
+      ? existing.date
+      : firstPosted ? firstPosted.date : (text(payload.date).trim() || nowIso());
+    var photoFileId = existing ? (existing.photoFileId || '') : '';
+    var photoName = existing ? (existing.photoName || '') : '';
+    if (!existing && payload.photoUrl) {
       var parsed = parsePhoto(payload.photoUrl, payload.photoName);
       photoFileId = uploadPhoto(parsed);
       photoName = parsed.name;
     }
     var stockOrderId = text(payload.stockOrderId).trim();
     var balances = products.readBalances(spreadsheet);
-    lines.forEach(function (line) {
-      var current = qtyOf(balances, line.productId, text(payload.warehouseId).trim());
+    var ownPrefix = movementPrefix(id);
+    lines.forEach(function (line, index) {
+      var movementId = movementIdFor(id, index);
+      if (posted[movementId] !== undefined) {
+        var prior = movements[posted[movementId]];
+        if (prior.type !== 'receiving' || prior.productId !== line.productId || prior.warehouseId !== warehouseId ||
+            round2(prior.stockIn) !== round2(line.baseQty)) {
+          throw appError('CONFLICT', 'Receiving already exists.');
+        }
+        var newer = movements.some(function (row, position) {
+          return position > posted[movementId] && row.productId === line.productId &&
+            row.warehouseId === warehouseId && row.id.indexOf(ownPrefix) !== 0;
+        });
+        if (!newer) balances = putQty(balances, line.productId, warehouseId, prior.balance);
+        return;
+      }
+      var current = qtyOf(balances, line.productId, warehouseId);
       var balance = round2(current + line.baseQty);
       var noteParts = [];
       if (line.batchNo) noteParts.push('Lot ' + line.batchNo);
       if (line.expiry) noteParts.push('Exp ' + line.expiry);
       inventoryRepo.appendMovement(spreadsheet, {
-        id: movementId(),
+        id: movementId,
         date: date,
         reference: receivingNo,
         productId: line.productId,
-        warehouseId: text(payload.warehouseId).trim(),
+        warehouseId: warehouseId,
         type: 'receiving',
         stockIn: line.baseQty,
         stockOut: 0,
@@ -308,15 +381,15 @@ function createReceivingService(deps) {
         user: actor.name,
         notes: noteParts.join(' · ')
       });
-      balances = putQty(balances, line.productId, text(payload.warehouseId).trim(), balance);
+      balances = putQty(balances, line.productId, warehouseId, balance);
     });
     products.writeBalances(spreadsheet, balances);
 
-    var receiving = {
+    var receiving = existing ? Object.assign({}, existing, { items: lines }) : {
       id: id,
       receivingNo: receivingNo,
       date: date,
-      warehouseId: text(payload.warehouseId).trim(),
+      warehouseId: warehouseId,
       source: text(payload.source).trim() || 'other',
       supplierId: text(payload.supplierId).trim() || undefined,
       supplierNote: text(payload.supplierNote).trim() || undefined,
@@ -329,7 +402,8 @@ function createReceivingService(deps) {
       status: 'completed',
       stockOrderId: stockOrderId || undefined
     };
-    repository.appendReceiving(spreadsheet, receiving);
+    if (!existing) repository.appendReceivingHeader(spreadsheet, receiving);
+    repository.appendMissingLines(spreadsheet, receiving);
 
     if (stockOrderId) {
       var orders = repository.readStockOrders(spreadsheet);
@@ -363,7 +437,7 @@ function createReceivingService(deps) {
       entityId: receiving.id,
       reference: receivingNo,
       before: '',
-      after: JSON.stringify({ lines: lines.length, stockOrderId: stockOrderId }),
+      after: JSON.stringify({ lines: lines.length, stockOrderId: stockOrderId, idempotencyKey: idempotencyKey || '' }),
       requestId: requestId
     });
     return receiving;
@@ -445,7 +519,8 @@ function createReceivingService(deps) {
           spreadsheet,
           payload,
           requestId,
-          requirePermission(spreadsheet, payload.actorUserId, 'receiving.create', 'You cannot receive raw materials.')
+          requirePermission(spreadsheet, payload.actorUserId, 'receiving.create', 'You cannot receive raw materials.'),
+          text(request.idempotencyKey).trim()
         );
         var afterCreate = snapshot(spreadsheet);
         afterCreate.receiving = created;
