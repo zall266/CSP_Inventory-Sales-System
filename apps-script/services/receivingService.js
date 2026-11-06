@@ -295,8 +295,10 @@ function createReceivingService(deps) {
   }
 
   // Google Sheets offers no multi-sheet transaction. createReceiving writes in
-  // this order: StockMovements, InventoryBalances, Receivings header,
-  // ReceivingLines, StockOrders link, AuditLogs (last, as the completion marker).
+  // this order: StockMovements, InventoryBalances, ReceivingLines,
+  // Receivings header, StockOrders link, AuditLogs (last, as the completion marker).
+  // Lines are written before the header so a found header always has the full
+  // line set; a retry can then require existing.items.length === lines.length.
   // Every step is safe to repeat, so a retry after a partial failure finishes
   // the remaining steps instead of posting stock a second time.
   function createReceiving(spreadsheet, payload, requestId, actor, idempotencyKey) {
@@ -316,6 +318,9 @@ function createReceivingService(deps) {
         throw appError('CONFLICT', 'Receiving already exists.');
       }
       if (existing.warehouseId !== warehouseId) throw appError('CONFLICT', 'Receiving already exists.');
+      if ((existing.items || []).length !== lines.length) {
+        throw appError('CONFLICT', 'Receiving already exists.');
+      }
       existing.items.forEach(function (stored, index) {
         var line = lines[index];
         if (!line || line.productId !== stored.productId || round2(line.baseQty) !== round2(stored.baseQty)) {
@@ -402,8 +407,8 @@ function createReceivingService(deps) {
       status: 'completed',
       stockOrderId: stockOrderId || undefined
     };
-    if (!existing) repository.appendReceivingHeader(spreadsheet, receiving);
     repository.appendMissingLines(spreadsheet, receiving);
+    if (!existing) repository.appendReceivingHeader(spreadsheet, receiving);
 
     if (stockOrderId) {
       var orders = repository.readStockOrders(spreadsheet);

@@ -361,6 +361,60 @@ test('a retry that changes the receiving after a partial failure is refused', ()
   assert.equal(state.receivings, 0)
 })
 
+function failOnceOnAudit(backend) {
+  const original = backend.sheets.appendObject
+  let failed = false
+  backend.sheets.appendObject = (sheet, record) => {
+    if (!failed && record && record.action === 'receivings.create') {
+      failed = true
+      throw new Error('simulated write failure')
+    }
+    return original(sheet, record)
+  }
+}
+
+function sheetSnapshot(backend) {
+  return JSON.parse(JSON.stringify({
+    StockMovements: backend.spreadsheet.store.StockMovements || [],
+    InventoryBalances: backend.spreadsheet.store.InventoryBalances || [],
+    Receivings: backend.spreadsheet.store.Receivings || [],
+    ReceivingLines: backend.spreadsheet.store.ReceivingLines || [],
+    StockOrders: backend.spreadsheet.store.StockOrders || [],
+    AuditLogs: backend.spreadsheet.store.AuditLogs || [],
+  }))
+}
+
+function rejectAlteredRetryAfterPartialCreate(label, mutateItems) {
+  const backend = faultReady()
+  const payload = twoLinePayload({ stockOrderId: backend.orderId })
+  failOnceOnAudit(backend)
+  assert.equal(post(backend, 'receivings.create', payload, { idempotencyKey: 'rcv-fault-key' }).ok, false)
+  const before = sheetSnapshot(backend)
+  assert.ok(before.Receivings.length > 1, `${label}: receiving header should exist after the partial write`)
+  assert.equal(before.ReceivingLines.filter((row) => row[1] === payload.clientId).length, 2, `${label}: both lines should exist after the partial write`)
+  const rejected = post(backend, 'receivings.create', {
+    ...payload,
+    items: mutateItems(payload.items),
+  }, { idempotencyKey: 'rcv-fault-key' })
+  assert.equal(rejected.error?.code, 'CONFLICT', label)
+  assert.deepEqual(sheetSnapshot(backend), before, `${label}: rejected retry must not write`)
+}
+
+test('a retry that removes an item after a partial failure is refused', () => {
+  rejectAlteredRetryAfterPartialCreate('remove item', (items) => [items[0]])
+})
+
+test('a retry that adds an item after a partial failure is refused', () => {
+  rejectAlteredRetryAfterPartialCreate('add item', (items) => [
+    ...items,
+    { productId: 'prd-sugar', qty: 1, condition: 'Baik' },
+  ])
+})
+
+test('a retry that reorders items after a partial failure is refused', () => {
+  rejectAlteredRetryAfterPartialCreate('reorder items', (items) => [items[1], items[0]])
+})
+
 test('a completed receiving is returned for its own key and refused for another key', () => {
   const backend = faultReady()
   const payload = twoLinePayload({ stockOrderId: backend.orderId })
