@@ -5,6 +5,7 @@ var CSP_ERROR_CODES = {
   FORBIDDEN: true,
   NOT_FOUND: true,
   VALIDATION_ERROR: true,
+  PRODUCT_MISMATCH: true,
   CONFLICT: true,
   DUPLICATE_REQUEST: true,
   INTERNAL_ERROR: true

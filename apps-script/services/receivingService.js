@@ -473,6 +473,7 @@ function createReceivingService(deps) {
     if (purchase.status !== 'draft' && purchase.receivingId !== receivingId) {
       throw appError('VALIDATION_ERROR', 'Link a draft purchase');
     }
+    requireCompatibleReceivingPurchase(receiving, purchase);
     var beforeInv = products.readBalances(spreadsheet).map(function (row) {
       return row.productId + ':' + row.warehouseId + ':' + row.qty;
     }).join('|');

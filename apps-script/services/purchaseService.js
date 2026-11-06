@@ -12,6 +12,7 @@ var PURCHASE_ACTIONS = {
 function createPurchaseService(deps) {
   var sheets = deps.sheetRepository;
   var repository = createPurchaseRepository(sheets);
+  var receivingRepo = createReceivingRepository(sheets);
   var products = createProductRepository(sheets);
   var inventoryRepo = createInventoryRepository(sheets);
   var partyRepo = createPartyRepository(sheets);
@@ -238,7 +239,10 @@ function createPurchaseService(deps) {
   function resolveReceiving(spreadsheet, receivingId) {
     var id = text(receivingId).trim();
     if (!id) return null;
-    var receiving = repository.readReceivingLink(spreadsheet, id);
+    var receiving = null;
+    receivingRepo.readReceivings(spreadsheet).forEach(function (row) {
+      if (row.id === id) receiving = row;
+    });
     if (!receiving) throw appError('NOT_FOUND', 'Receiving not found');
     if (receiving.purchaseId) {
       throw appError('VALIDATION_ERROR', receiving.receivingNo || 'Receiving already linked');
@@ -330,6 +334,12 @@ function createPurchaseService(deps) {
     requireSupplier(spreadsheet, payload.supplierId);
     requireCompanyWarehouse(spreadsheet, payload.warehouseId);
     var receiving = payload.receivingId ? resolveReceiving(spreadsheet, payload.receivingId) : null;
+    if (receiving) {
+      requireCompatibleReceivingPurchase(receiving, {
+        warehouseId: text(payload.warehouseId).trim(),
+        items: lines
+      });
+    }
     var docs = repository.readPurchases(spreadsheet);
     var id = clientId(payload.clientId || payload.id);
     docs.forEach(function (row) {

@@ -1,11 +1,16 @@
 import assert from 'node:assert/strict'
+import fs from 'node:fs'
+import path from 'node:path'
 import test from 'node:test'
+import { fileURLToPath } from 'node:url'
 import {
   createFakeDrive,
   createFakeSpreadsheet,
   devProperties,
   loadBackend,
 } from './harness.js'
+
+const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
 
 function app() {
   const spreadsheet = createFakeSpreadsheet()
@@ -104,7 +109,10 @@ function identityPayload() {
 
 function masterPayload() {
   return {
-    warehouses: [{ id: 'wh-main', name: 'Main Warehouse', code: 'MAIN', kind: 'company' }],
+    warehouses: [
+      { id: 'wh-main', name: 'Main Warehouse', code: 'MAIN', kind: 'company' },
+      { id: 'wh-shop', name: 'Shop', code: 'SHOP', kind: 'company' },
+    ],
     categories: [{ id: 'cat-ing', name: 'Ingredients' }],
   }
 }
@@ -543,3 +551,167 @@ test('a completed replay keeps the original timestamp', () => {
   assert.equal(dates.receivingDate, SERVER_DATE)
   dates.movementDates.forEach((date) => assert.equal(date, SERVER_DATE))
 })
+
+function addKgProduct(backend, id, name) {
+  assert.equal(call(backend, 'products.create', {
+    actorUserId: 'u-aina', id, name, categoryId: 'cat-ing', unit: 'KG',
+    purchaseUnit: 'KG', purchaseConversionQty: 1, purchaseCost: 22, sellingPrice: 35, trackExpiry: false,
+  }).ok, true)
+}
+
+function storeFingerprint(backend) {
+  return JSON.stringify(backend.spreadsheet.store)
+}
+
+function createReceivingDoc(backend, overrides = {}) {
+  const payload = {
+    actorUserId: 'u-aina',
+    clientId: overrides.clientId || `rcv_${Math.random().toString(36).slice(2, 10)}`,
+    warehouseId: overrides.warehouseId || 'wh-main',
+    source: 'other',
+    items: overrides.items || [{ productId: 'prd-sugar', qty: 1, condition: 'Baik' }],
+  }
+  const created = post(backend, 'receivings.create', payload, { idempotencyKey: overrides.key || `key-${payload.clientId}` })
+  assert.equal(created.ok, true, created.error?.message)
+  return created.data.receiving
+}
+
+function createDraftPurchase(backend, overrides = {}) {
+  const payload = {
+    actorUserId: 'u-aina',
+    clientId: overrides.clientId || `pur_${Math.random().toString(36).slice(2, 10)}`,
+    supplierId: 'sup-1',
+    warehouseId: overrides.warehouseId || 'wh-main',
+    invoiceNumber: overrides.invoiceNumber || 'INV-LINK',
+    items: overrides.items || [{ productId: 'prd-sugar', qty: 1, price: 50 }],
+    receive: overrides.receive ?? false,
+  }
+  const created = overrides.receive
+    ? post(backend, 'purchases.create', payload, { idempotencyKey: overrides.key || `pur-${payload.clientId}` })
+    : call(backend, 'purchases.create', payload)
+  assert.equal(created.ok, true, created.error?.message)
+  return created.data.purchase
+}
+
+test('linkPurchase accepts a matching product id', () => {
+  const backend = ready()
+  const receiving = createReceivingDoc(backend, { clientId: 'rcv_match' })
+  const purchase = createDraftPurchase(backend, { clientId: 'pur_match', items: [{ productId: 'prd-sugar', qty: 1, price: 50 }] })
+  const linked = post(backend, 'receivings.linkPurchase', {
+    actorUserId: 'u-aina', receivingId: receiving.id, purchaseId: purchase.id,
+  }, { idempotencyKey: 'link-match' })
+  assert.equal(linked.ok, true)
+  assert.equal(linked.data.purchase.receivingId, receiving.id)
+  assert.equal(linked.data.receiving.purchaseId, purchase.id)
+  assert.equal(linked.data.purchase.status, 'draft')
+})
+
+test('linkPurchase rejects different product ids with PRODUCT_MISMATCH and writes nothing', () => {
+  const backend = ready()
+  addKgProduct(backend, 'prd-choc', 'UAT Chocolate')
+  const receiving = createReceivingDoc(backend, { clientId: 'rcv_sugar' })
+  const purchase = createDraftPurchase(backend, {
+    clientId: 'pur_choc',
+    items: [{ productId: 'prd-choc', qty: 1, price: 22 }],
+  })
+  const before = storeFingerprint(backend)
+  const sugarQty = qty(call(backend, 'inventory.get', { actorUserId: 'u-aina' }).data, 'prd-sugar', 'wh-main')
+  const denied = post(backend, 'receivings.linkPurchase', {
+    actorUserId: 'u-aina', receivingId: receiving.id, purchaseId: purchase.id,
+  }, { idempotencyKey: 'link-mismatch' })
+  assert.equal(denied.ok, false)
+  assert.equal(denied.error.code, 'PRODUCT_MISMATCH')
+  assert.equal(denied.error.message, 'Receiving and purchase must share at least one product.')
+  assert.equal(storeFingerprint(backend), before)
+  const listed = call(backend, 'receivings.list', { actorUserId: 'u-aina' }).data
+  assert.equal(listed.receivings.find((row) => row.id === receiving.id)?.purchaseId, undefined)
+  const purchases = call(backend, 'purchases.list', { actorUserId: 'u-aina' }).data.purchases
+  assert.equal(purchases.find((row) => row.id === purchase.id)?.receivingId, undefined)
+  assert.equal(qty(call(backend, 'inventory.get', { actorUserId: 'u-aina' }).data, 'prd-sugar', 'wh-main'), sugarQty)
+})
+
+test('linkPurchase allows partial delivery, quantity difference, and extra lines when one product matches', () => {
+  const backend = ready()
+  addKgProduct(backend, 'prd-flour', 'UAT Flour')
+  addKgProduct(backend, 'prd-choc', 'UAT Chocolate')
+  const receiving = createReceivingDoc(backend, {
+    clientId: 'rcv_partial',
+    items: [
+      { productId: 'prd-sugar', qty: 1, condition: 'Baik' },
+      { productId: 'prd-flour', qty: 2, condition: 'Baik' },
+    ],
+  })
+  const purchase = createDraftPurchase(backend, {
+    clientId: 'pur_partial',
+    items: [
+      { productId: 'prd-sugar', qty: 9, price: 50 },
+      { productId: 'prd-choc', qty: 1, price: 22 },
+    ],
+  })
+  const linked = post(backend, 'receivings.linkPurchase', {
+    actorUserId: 'u-aina', receivingId: receiving.id, purchaseId: purchase.id,
+  }, { idempotencyKey: 'link-partial' })
+  assert.equal(linked.ok, true)
+  assert.equal(linked.data.purchase.receivingId, receiving.id)
+})
+
+test('linkPurchase rejects a warehouse mismatch before writes', () => {
+  const backend = ready()
+  const receiving = createReceivingDoc(backend, { clientId: 'rcv_wh', warehouseId: 'wh-main' })
+  const purchase = createDraftPurchase(backend, {
+    clientId: 'pur_wh',
+    warehouseId: 'wh-shop',
+    items: [{ productId: 'prd-sugar', qty: 1, price: 50 }],
+  })
+  const before = storeFingerprint(backend)
+  const denied = post(backend, 'receivings.linkPurchase', {
+    actorUserId: 'u-aina', receivingId: receiving.id, purchaseId: purchase.id,
+  }, { idempotencyKey: 'link-wh' })
+  assert.equal(denied.ok, false)
+  assert.equal(denied.error.code, 'VALIDATION_ERROR')
+  assert.equal(denied.error.message, 'Receiving and purchase must use the same warehouse.')
+  assert.equal(storeFingerprint(backend), before)
+})
+
+test('linkPurchase keeps duplicate-link and draft guards', () => {
+  const backend = ready()
+  const receiving = createReceivingDoc(backend, { clientId: 'rcv_dup' })
+  const purchase = createDraftPurchase(backend, { clientId: 'pur_dup' })
+  assert.equal(post(backend, 'receivings.linkPurchase', {
+    actorUserId: 'u-aina', receivingId: receiving.id, purchaseId: purchase.id,
+  }, { idempotencyKey: 'link-dup-1' }).ok, true)
+
+  const otherPurchase = createDraftPurchase(backend, { clientId: 'pur_dup_2' })
+  const relinkReceiving = post(backend, 'receivings.linkPurchase', {
+    actorUserId: 'u-aina', receivingId: receiving.id, purchaseId: otherPurchase.id,
+  }, { idempotencyKey: 'link-dup-2' })
+  assert.equal(relinkReceiving.error.message, 'Receiving already linked')
+
+  const otherReceiving = createReceivingDoc(backend, { clientId: 'rcv_dup_2' })
+  const relinkPurchase = post(backend, 'receivings.linkPurchase', {
+    actorUserId: 'u-aina', receivingId: otherReceiving.id, purchaseId: purchase.id,
+  }, { idempotencyKey: 'link-dup-3' })
+  assert.equal(relinkPurchase.error.message, 'Purchase already linked')
+
+  const posted = createDraftPurchase(backend, {
+    clientId: 'pur_received',
+    receive: true,
+    items: [{ productId: 'prd-sugar', qty: 1, price: 50 }],
+  })
+  const againstReceived = post(backend, 'receivings.linkPurchase', {
+    actorUserId: 'u-aina', receivingId: otherReceiving.id, purchaseId: posted.id,
+  }, { idempotencyKey: 'link-dup-4' })
+  assert.equal(againstReceived.error.message, 'Link a draft purchase')
+})
+
+test('frontend link picker and adapters guard product overlap and hydrate purchase status', () => {
+  const db = fs.readFileSync(path.join(root, 'src/store/db.ts'), 'utf8')
+  assert.equal(db.includes('receivingPurchaseMismatchMessage'), true)
+  assert.equal(db.includes('purchases: slice.purchases'), true)
+  const pages = fs.readFileSync(path.join(root, 'src/features/receiving/ReceivingPages.tsx'), 'utf8')
+  assert.equal(pages.includes('isCompatibleReceivingPurchase'), true)
+  assert.equal(pages.includes('incompatibleDraftCount'), true)
+  const drawers = fs.readFileSync(path.join(root, 'src/components/drawers/GlobalDrawers.tsx'), 'utf8')
+  assert.equal(drawers.includes('<StatusBadge status={purchase.status} />'), true)
+})
+
