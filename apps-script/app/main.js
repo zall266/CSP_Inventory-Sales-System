@@ -7,7 +7,17 @@ function defaultBackend() {
     system: createSystemService({ sheetRepository: sheets, driveStorage: drive }),
     idempotency: createIdempotencyService(sheets),
     foundation: createFoundationService(sheets),
-    identity: createIdentityService({ sheetRepository: sheets, driveStorage: drive })
+    identity: createIdentityService({ sheetRepository: sheets, driveStorage: drive }),
+    masters: createMasterService({ sheetRepository: sheets }),
+    products: createProductService({ sheetRepository: sheets }),
+    parties: createPartyService({ sheetRepository: sheets }),
+    inventory: createInventoryService({ sheetRepository: sheets }),
+    warehouse: createWarehouseService({ sheetRepository: sheets }),
+    boms: createBomService({ sheetRepository: sheets }),
+    openingBalances: createOpeningBalanceService({ sheetRepository: sheets }),
+    purchases: createPurchaseService({ sheetRepository: sheets }),
+    receivings: createReceivingService({ sheetRepository: sheets, driveStorage: drive }),
+    manufacturing: createManufacturingService({ sheetRepository: sheets })
   };
 }
 

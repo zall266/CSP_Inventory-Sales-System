@@ -59,7 +59,7 @@ Set these Script Properties on that existing project. Keep the values out of Rea
 
 Optional `idempotencyKey` replays a stored success. A different action with the same key returns `DUPLICATE_REQUEST`. Sales, inventory, and every module after identity still return `UNKNOWN_ACTION`.
 
-Module 1 adds `identity.get`, `identity.bootstrap`, `settings.get`, `settings.update`, `users.list`, `users.create`, `users.update`, `roles.create`, `roles.update`, `roles.setStatus`, `roles.savePermissions`, and `roles.updateMatrix`. These actions use the existing router, sheet repository, audit log, and Drive root. `actorUserId` is the prototype user switcher already stored in the UI. It is not a login session. `users.switch` and `settings.resetDemo` stay in the browser.
+Module 1 adds `identity.get`, `identity.bootstrap`, `settings.get`, `settings.update`, `users.list`, `users.create`, `users.update`, `roles.create`, `roles.update`, `roles.setStatus`, `roles.savePermissions`, and `roles.updateMatrix`. Module 8 adds `openingBalances.list`, `openingBalances.get`, `openingBalances.save`, `openingBalances.update`, and `openingBalances.confirm`. Confirm requires an idempotency key and posts opening stock once through the inventory ledger. Module 9 adds `purchases.list`, `purchases.get`, `purchases.create`, `purchases.receive`, `purchases.recordPayment`, and `purchaseReturns.create`. Receive, create-with-receive, supplier payment, and purchase return require an idempotency key and post through the inventory ledger. These actions use the existing router, sheet repository, audit log, and Drive root. `actorUserId` is the prototype user switcher already stored in the UI. It is not a login session. `users.switch` and `settings.resetDemo` stay in the browser.
 
 Success and failure use `ok`, `data`, `error`, and `meta`. Clients do not receive stack traces, property values, or Drive URLs.
 
@@ -83,6 +83,6 @@ The web app executes as the deploying account. DEV access is anonymous so the ex
 
 ## Tests
 
-`npm run test:backend` exercises the foundation and Module 1 identity rules with in-memory Sheet and Drive doubles. It does not touch Google.
+`npm run test:backend` exercises the foundation, Modules 1–8, and opening balance confirm rules with in-memory Sheet and Drive doubles. It does not touch Google.
 
 Phase 2 is temporary CSP UAT access. It depends on this source being present in the existing Apps Script project, the four Script Properties being set, and `initializeFoundation` having been run.

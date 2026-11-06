@@ -1,5 +1,20 @@
+import { identityApiUrl } from '@/api/identityApi'
 import { createSeedData, CURRENT_USER } from '@/data/seed'
 import { queueIdentityWrite, queueSettingsPatch, startIdentityHydration } from '@/store/identitySync'
+import { queueMasterWrite, startMasterHydration } from '@/store/masterSync'
+import { queueProductWrite, startProductHydration } from '@/store/productSync'
+import { queuePartyWrite, startPartyHydration } from '@/store/partySync'
+import { queueInventoryWrite, refreshInventory, startInventoryHydration } from '@/store/inventorySync'
+import { queueWarehouseWrite, startWarehouseHydration } from '@/store/warehouseSync'
+import { bomCostsReady, markBomCostsReady, queueBomWrite, startBomHydration } from '@/store/bomSync'
+import {
+  markOpeningBalanceConfirmAfterSave,
+  queueOpeningBalanceWrite,
+  startOpeningBalanceHydration,
+} from '@/store/openingBalanceSync'
+import { queuePurchaseWrite, startPurchaseHydration } from '@/store/purchaseSync'
+import { queueReceivingWrite, startReceivingHydration } from '@/store/receivingSync'
+import { queueManufacturingWrite, startManufacturingHydration } from '@/store/manufacturingSync'
 import {
   applyDisplayDelta,
   createMainWarehouseLayout,
@@ -45,6 +60,7 @@ import {
   RECEIVING_PERMISSION_KEYS,
   buildReceivingLines,
   parseReceivingPhoto,
+  receivingPurchaseMismatchMessage,
 } from '@/features/receiving/receivingModel'
 import { INVENTORY_USAGE_PERMISSION_KEYS, activeStockOrder } from '@/features/inventory/toOrderModel'
 import {
@@ -148,14 +164,18 @@ import type {
   OpeningBalanceInput,
   PackingAssembly,
   PackingInput,
+  ProductionOrder,
   PaymentMethod,
   PermissionKey,
   ProductInput,
   ProductStatus,
   ProductionInput,
   ProductionWastage,
+  Purchase,
   PurchaseInput,
+  PurchaseReturn,
   PurchaseStatus,
+  Payment,
   Receiving,
   ReceivingInput,
   QuickModal,
@@ -866,15 +886,84 @@ function postPackingAssembly(existing: PackingAssembly, options: { acceptSnapsho
     const qty = posted.inventory.find((row) => row.productId === line.productId && row.warehouseId === existing.warehouseId)?.qty ?? 0
     maybeStockAlerts(line.productId, existing.warehouseId, qty)
   }
-  toast('Packing confirmed', `${packing.packingNo} · ${formatQty(existing.actualQty)} ${existing.unit}`)
+  if (!identityApiUrl()) toast('Packing confirmed', `${packing.packingNo} · ${formatQty(existing.actualQty)} ${existing.unit}`)
   return packing
 }
 
 let agentSaleInFlight = false
 let openingBalanceInFlight = false
+let purchasePostInFlight = false
+let receivingPostInFlight = false
+
+function beginReceivingPost() {
+  if (receivingPostInFlight) {
+    toast('Already posting', 'Wait for the current receiving update to finish.', 'warning')
+    return false
+  }
+  receivingPostInFlight = true
+  return true
+}
+
+function beginPurchasePost() {
+  if (purchasePostInFlight) {
+    toast('Already posting', 'Wait for the current purchase update to finish.', 'warning')
+    return false
+  }
+  purchasePostInFlight = true
+  return true
+}
+
+function beginOpeningBalancePost() {
+  if (openingBalanceInFlight) {
+    toast('Already posting', 'Wait for the current opening balance to finish.', 'warning')
+    return false
+  }
+  openingBalanceInFlight = true
+  return true
+}
+let inventoryPostInFlight = false
+let warehousePostInFlight = false
+let bomPostInFlight = false
+
+function beginInventoryPost() {
+  if (inventoryPostInFlight) {
+    toast('Already posting', 'Wait for the current inventory update to finish.', 'warning')
+    return false
+  }
+  inventoryPostInFlight = true
+  return true
+}
+
+function beginWarehousePost() {
+  if (warehousePostInFlight) {
+    toast('Already posting', 'Wait for the current warehouse update to finish.', 'warning')
+    return false
+  }
+  warehousePostInFlight = true
+  return true
+}
+
+function beginBomPost() {
+  if (bomPostInFlight) {
+    toast('Already posting', 'Wait for the current recipe update to finish.', 'warning')
+    return false
+  }
+  bomPostInFlight = true
+  return true
+}
 let salesImportConfirmInFlight = false
 let salesReturnInFlight = false
 let packingConfirmInFlight = false
+let manufacturingPostInFlight = false
+
+function beginManufacturingPost() {
+  if (manufacturingPostInFlight || packingConfirmInFlight) {
+    toast('Already posting', 'Wait for the current manufacturing update to finish.', 'warning')
+    return false
+  }
+  manufacturingPostInFlight = true
+  return true
+}
 
 function postConfirmedOpeningBalance(doc: OpeningBalance) {
   const actor = currentUser(state)
@@ -2177,6 +2266,10 @@ export const db = {
       accent: '#4F46E5',
       salesComponents: componentCheck.items,
     }
+    if (identityApiUrl()) {
+      queueProductWrite('products.create', { ...product, skuGenerated: skuResult.generated })
+      return product
+    }
     const inventory = [
       ...state.inventory,
       ...companyWarehouses(state.warehouses).map((warehouse) => ({ productId: product.id, warehouseId: warehouse.id, qty: 0 })),
@@ -2308,6 +2401,16 @@ export const db = {
       status: patch.status ?? current.status,
       salesComponents,
     }
+    if (identityApiUrl()) {
+      queueProductWrite('products.update', {
+        id,
+        ...patch,
+        name,
+        sku,
+        ...(Object.prototype.hasOwnProperty.call(patch, 'agentPrice') ? { agentPrice: patch.agentPrice ?? null } : {}),
+      })
+      return true
+    }
     setData({
       products: applyBomCosts(
         state.products.map((product) => (product.id === id ? next : product)),
@@ -2371,6 +2474,10 @@ export const db = {
         return false
       }
     }
+    if (identityApiUrl()) {
+      queueProductWrite('products.saveAgentPrices', { rows })
+      return true
+    }
     setData({
       products: applyBomCosts(
         state.products.map((product) => {
@@ -2391,6 +2498,12 @@ export const db = {
   },
 
   setProductStatus(id: string, status: ProductStatus) {
+    if (identityApiUrl()) {
+      const current = state.products.find((product) => product.id === id)
+      if (!current) return
+      queueProductWrite('products.setStatus', { id, status })
+      return
+    }
     setData({
       products: state.products.map((product) => (product.id === id ? { ...product, status } : product)),
     })
@@ -2398,21 +2511,37 @@ export const db = {
   },
 
   createCategory(name: string) {
-    const category = { id: uid('cat'), name }
+    const trimmed = name.trim()
+    if (!trimmed) return null
+    const category = { id: uid('cat'), name: trimmed }
+    if (identityApiUrl()) {
+      queueMasterWrite('categories.create', { id: category.id, name: category.name })
+      return category
+    }
     setData({ categories: [...state.categories, category] })
-    toast('Category added', name)
+    toast('Category added', trimmed)
     return category
   },
 
   renameCategory(id: string, name: string) {
+    const trimmed = name.trim()
+    if (!trimmed) return
+    if (identityApiUrl()) {
+      queueMasterWrite('categories.rename', { id, name: trimmed })
+      return
+    }
     setData({
-      categories: state.categories.map((category) => (category.id === id ? { ...category, name } : category)),
+      categories: state.categories.map((category) => (category.id === id ? { ...category, name: trimmed } : category)),
     })
     toast('Category renamed')
   },
 
   createCustomer(input: { name: string; phone: string; email: string; address?: string }) {
     const customer = { id: uid('cus'), status: 'active' as const, address: input.address ?? '', ...input }
+    if (identityApiUrl()) {
+      queuePartyWrite('customers.create', customer)
+      return customer
+    }
     setData({ customers: [customer, ...state.customers] })
     toast('Customer added', customer.name)
     return customer
@@ -2459,6 +2588,18 @@ export const db = {
         : existing.active && !active
           ? ('customer_wholesale_price_deactivated' as const)
           : ('customer_wholesale_price_updated' as const)
+      if (identityApiUrl()) {
+        queuePartyWrite('customers.saveWholesalePrice', {
+          id: next.id,
+          customerId: customer.id,
+          productId: product.id,
+          price: parsed.value,
+          active,
+          customerName: customer.name,
+          productName: product.name,
+        })
+        return next
+      }
       setData({
         customerWholesalePrices: (state.customerWholesalePrices ?? []).map((row) => (row.id === existing.id ? next : row)),
         documentAuditLogs: pushDocAudit(
@@ -2486,6 +2627,18 @@ export const db = {
       updatedAt: now,
       createdBy: actor.id,
       updatedBy: actor.id,
+    }
+    if (identityApiUrl()) {
+      queuePartyWrite('customers.saveWholesalePrice', {
+        id: created.id,
+        customerId: customer.id,
+        productId: product.id,
+        price: parsed.value,
+        active,
+        customerName: customer.name,
+        productName: product.name,
+      })
+      return created
     }
     setData({
       customerWholesalePrices: [created, ...(state.customerWholesalePrices ?? [])],
@@ -2519,6 +2672,14 @@ export const db = {
     const product = state.products.find((item) => item.id === current.productId)
     const actor = currentUser(state)
     const next = { ...current, active: false, updatedAt: nowIso(), updatedBy: actor.id }
+    if (identityApiUrl()) {
+      queuePartyWrite('customers.deactivateWholesalePrice', {
+        id,
+        customerName: customer?.name ?? 'Customer',
+        productName: product?.name ?? 'Product',
+      })
+      return true
+    }
     setData({
       customerWholesalePrices: (state.customerWholesalePrices ?? []).map((row) => (row.id === id ? next : row)),
       documentAuditLogs: pushDocAudit(
@@ -2539,6 +2700,10 @@ export const db = {
 
   createSupplier(input: { name: string; contact: string; phone: string; email: string }) {
     const supplier = { id: uid('sup'), status: 'active' as const, ...input }
+    if (identityApiUrl()) {
+      queuePartyWrite('suppliers.create', supplier)
+      return supplier
+    }
     setData({ suppliers: [supplier, ...state.suppliers] })
     toast('Supplier added', supplier.name)
     return supplier
@@ -2608,6 +2773,19 @@ export const db = {
       createdAt: stamp,
       updatedAt: stamp,
     }
+    if (identityApiUrl()) {
+      queuePartyWrite('agents.create', {
+        id: agent.id,
+        name: agent.name,
+        code: agent.code,
+        warehouseId: agent.warehouseId,
+        userId: agent.userId ?? '',
+        bankName: agent.bankName,
+        accountHolder: agent.accountHolder,
+        bankAccount: agent.bankAccount,
+      })
+      return agent
+    }
     setData({
       agents: [agent, ...agents],
       warehouses: [...state.warehouses, warehouse],
@@ -2660,6 +2838,18 @@ export const db = {
       warehouseId: current.warehouseId,
       updatedAt: nowIso(),
     }
+    if (identityApiUrl()) {
+      queuePartyWrite('agents.update', {
+        id,
+        name: next.name,
+        code: next.code,
+        userId: next.userId ?? '',
+        bankName: next.bankName,
+        accountHolder: next.accountHolder,
+        bankAccount: next.bankAccount,
+      })
+      return true
+    }
     setData({
       agents: (state.agents ?? []).map((agent) => (agent.id === id ? next : agent)),
       warehouses: state.warehouses.map((warehouse) =>
@@ -2678,6 +2868,10 @@ export const db = {
     const current = (state.agents ?? []).find((agent) => agent.id === id)
     if (!current) return false
     if (current.status === status) return true
+    if (identityApiUrl()) {
+      queuePartyWrite('agents.setStatus', { id, status, name: current.name })
+      return true
+    }
     setData({
       agents: (state.agents ?? []).map((agent) =>
         agent.id === id ? { ...agent, status, updatedAt: nowIso() } : agent,
@@ -3795,6 +3989,16 @@ export const db = {
       toast('Receiving already linked', linkedReceiving.receivingNo, 'warning')
       return null
     }
+    if (linkedReceiving) {
+      const mismatch = receivingPurchaseMismatchMessage(linkedReceiving, {
+        warehouseId: input.warehouseId,
+        items: items.map((item) => ({ productId: item.productId, qty: item.qty, price: 0, discount: 0, total: 0, returnedQty: 0 })),
+      })
+      if (mismatch) {
+        toast('Cannot link purchase', mismatch, 'warning')
+        return null
+      }
+    }
     const subtotal = round2(items.reduce((sum, item) => sum + item.total, 0))
     const discount = input.discount ?? 0
     const tax = input.tax ?? 0
@@ -3868,10 +4072,28 @@ export const db = {
       : state.receivings ?? []
 
     setData({ purchases: [purchase, ...state.purchases], inventory, stockMovements: movements, payments, receivings })
-    toast(
-      skipStock ? 'Purchase saved — stock already received' : input.receive ? 'Purchase received' : 'Draft saved',
-      purchaseNo,
-    )
+    if (identityApiUrl()) {
+      queuePurchaseWrite('purchases.create', {
+        clientId: purchase.id,
+        supplierId: input.supplierId,
+        warehouseId: input.warehouseId,
+        invoiceNumber: input.invoiceNumber,
+        date: purchase.date,
+        items: input.items,
+        discount: input.discount ?? 0,
+        tax: input.tax ?? 0,
+        shipping: input.shipping ?? 0,
+        receive: input.receive,
+        paidAmount: input.paidAmount ?? 0,
+        notes: input.notes ?? '',
+        receivingId: input.receivingId ?? '',
+      })
+    } else {
+      toast(
+        skipStock ? 'Purchase saved — stock already received' : input.receive ? 'Purchase received' : 'Draft saved',
+        purchaseNo,
+      )
+    }
     return purchase
   },
 
@@ -3879,6 +4101,11 @@ export const db = {
     const purchase = state.purchases.find((item) => item.id === id)
     if (!purchase || purchase.status !== 'draft') {
       toast('Already received', undefined, 'info')
+      return
+    }
+    if (identityApiUrl()) {
+      if (!beginPurchasePost()) return
+      queuePurchaseWrite('purchases.receive', { id }, crypto.randomUUID())
       return
     }
     let inventory = state.inventory
@@ -3937,7 +4164,7 @@ export const db = {
       photoName = parsed.name
     }
     const actor = currentUser(state)
-    const date = input.date ?? nowIso()
+    const date = new Date().toISOString()
     const receivingNo = nextDocNo((state.receivings ?? []).map((row) => row.receivingNo), 'RCV-')
     const receiving: Receiving = {
       id: uid('rcv'),
@@ -4033,7 +4260,24 @@ export const db = {
       toast('Receiving could not be saved', 'Storage is full or unavailable. Stock was not updated.', 'danger')
       return null
     }
-    toast('Receiving completed', `${receivingNo} — stock increased.`)
+    if (identityApiUrl()) {
+      if (!beginReceivingPost()) return null
+      queueReceivingWrite('receivings.create', {
+        clientId: receiving.id,
+        warehouseId: input.warehouseId,
+        source: input.source ?? 'other',
+        supplierId: input.supplierId ?? '',
+        supplierNote: input.supplierNote ?? '',
+        notes: input.notes ?? '',
+        photoUrl: input.photoUrl ?? '',
+        photoName: input.photoName ?? '',
+        stockOrderId: input.stockOrderId ?? '',
+        items: input.items,
+        idempotencyKey: crypto.randomUUID(),
+      })
+    } else {
+      toast('Receiving completed', `${receivingNo} — stock increased.`)
+    }
     return receiving
   },
 
@@ -4060,6 +4304,11 @@ export const db = {
       toast('Link a draft purchase', 'This purchase already posted stock. Create a new purchase from the receiving instead.', 'warning')
       return false
     }
+    const mismatch = receivingPurchaseMismatchMessage(receiving, purchase)
+    if (mismatch) {
+      toast('Cannot link purchase', mismatch, 'warning')
+      return false
+    }
     const inventoryFingerprint = state.inventory.map((row) => `${row.productId}:${row.warehouseId}:${row.qty}`).join('|')
     setData({
       receivings: (state.receivings ?? []).map((row) =>
@@ -4072,7 +4321,16 @@ export const db = {
       toast('Link failed', 'Inventory must not change when linking a purchase.', 'danger')
       return false
     }
-    toast('Receiving linked', `${receiving.receivingNo} → ${purchase.purchaseNo}`)
+    if (identityApiUrl()) {
+      if (!beginReceivingPost()) return false
+      queueReceivingWrite('receivings.linkPurchase', {
+        receivingId,
+        purchaseId,
+        idempotencyKey: crypto.randomUUID(),
+      })
+    } else {
+      toast('Receiving linked', `${receiving.receivingNo} → ${purchase.purchaseNo}`)
+    }
     return true
   },
 
@@ -4115,6 +4373,15 @@ export const db = {
         }),
       ),
     })
+    if (identityApiUrl()) {
+      queueOpeningBalanceWrite('openingBalances.save', {
+        clientId: doc.id,
+        type: input.type,
+        date: doc.date,
+        notes: input.notes ?? '',
+        items: input.items,
+      })
+    }
     toast('Opening balance saved', documentNo)
     return doc
   },
@@ -4148,6 +4415,15 @@ export const db = {
     setData({
       openingBalances: (state.openingBalances ?? []).map((row) => (row.id === id ? doc : row)),
     })
+    if (identityApiUrl()) {
+      queueOpeningBalanceWrite('openingBalances.update', {
+        id,
+        type: input.type,
+        date: doc.date,
+        notes: input.notes ?? '',
+        items: input.items,
+      })
+    }
     toast('Opening balance updated', doc.documentNo)
     return doc
   },
@@ -4170,6 +4446,11 @@ export const db = {
       toast('Already confirmed', `${doc.documentNo} is locked.`, 'info')
       return false
     }
+    if (identityApiUrl()) {
+      if (!beginOpeningBalancePost()) return false
+      queueOpeningBalanceWrite('openingBalances.confirm', { id }, crypto.randomUUID())
+      return true
+    }
     openingBalanceInFlight = true
     try {
       return postConfirmedOpeningBalance(doc)
@@ -4182,6 +4463,16 @@ export const db = {
     if (openingBalanceInFlight) {
       toast('Already posting', 'Wait for the current opening balance to finish.', 'warning')
       return null
+    }
+    if (identityApiUrl()) {
+      if (!beginOpeningBalancePost()) return null
+      const saved = this.saveOpeningBalance(input)
+      if (!saved) {
+        openingBalanceInFlight = false
+        return null
+      }
+      markOpeningBalanceConfirmAfterSave(saved.id)
+      return saved
     }
     openingBalanceInFlight = true
     try {
@@ -4212,6 +4503,19 @@ export const db = {
     if (input.type === 'decrease' && !state.settings.allowNegativeStock && input.qty > current) {
       toast('Not enough stock', `Current stock is ${current}.`, 'danger')
       return false
+    }
+    if (identityApiUrl()) {
+      if (!beginInventoryPost()) return false
+      queueInventoryWrite('inventory.adjust', {
+        warehouseId: input.warehouseId,
+        productId: input.productId,
+        type: input.type,
+        qty: input.qty,
+        reason: input.reason,
+        notes: input.notes ?? '',
+        idempotencyKey: crypto.randomUUID(),
+      })
+      return true
     }
     const applied = addMovement(state.stockMovements, state.inventory, {
       date: nowIso(),
@@ -4256,6 +4560,30 @@ export const db = {
     if (!state.settings.allowNegativeStock && qty > current) {
       toast('Not enough stock', `Current stock is ${current}.`, 'danger')
       return null
+    }
+    if (identityApiUrl()) {
+      if (!beginInventoryPost()) return null
+      queueInventoryWrite('inventory.usage', {
+        productId: input.productId,
+        warehouseId: input.warehouseId,
+        qty,
+        notes: input.notes ?? '',
+        reason: input.reason ?? '',
+        date: input.date ?? '',
+        idempotencyKey: crypto.randomUUID(),
+      })
+      return {
+        id: 'pending',
+        date: input.date || nowIso(),
+        reference: '',
+        productId: input.productId,
+        warehouseId: input.warehouseId,
+        type: 'stock_usage',
+        stockIn: 0,
+        stockOut: qty,
+        balance: current,
+        user: currentUser(state).name,
+      }
     }
     const reference = nextDocNo(
       state.stockMovements.filter((row) => row.reference.startsWith('USE-')).map((row) => row.reference),
@@ -4344,7 +4672,17 @@ export const db = {
         }),
       ),
     })
-    toast('Marked as ordered', product.name)
+    if (identityApiUrl()) {
+      queueInventoryWrite('inventory.markOrdered', {
+        productId: input.productId,
+        warehouseId: input.warehouseId,
+        channel: input.channel ?? '',
+        remark: input.remark ?? '',
+        orderedQty: input.orderedQty ?? '',
+      })
+    } else {
+      toast('Marked as ordered', product.name)
+    }
     return order
   },
 
@@ -4384,7 +4722,11 @@ export const db = {
         }),
       ),
     })
-    toast('Order cancelled', cancelReason)
+    if (identityApiUrl()) {
+      queueInventoryWrite('inventory.cancelOrder', { id, reason: cancelReason ?? '' })
+    } else {
+      toast('Order cancelled', cancelReason)
+    }
     return true
   },
 
@@ -4401,6 +4743,18 @@ export const db = {
     if (!state.settings.allowNegativeStock && input.qty > current) {
       toast('Not enough stock at source', `Available: ${current}.`, 'danger')
       return false
+    }
+    if (identityApiUrl()) {
+      if (!beginInventoryPost()) return false
+      queueInventoryWrite('inventory.transfer', {
+        fromWarehouseId: input.fromWarehouseId,
+        toWarehouseId: input.toWarehouseId,
+        productId: input.productId,
+        qty: input.qty,
+        notes: input.notes ?? '',
+        idempotencyKey: crypto.randomUUID(),
+      })
+      return true
     }
     applyWarehouseTransfer(input)
     toast('Transfer complete', `${input.qty} moved.`)
@@ -4564,6 +4918,15 @@ export const db = {
   },
 
   completeStockCount(input: { warehouseId: string; counts: Array<{ productId: string; countedQty: number }> }) {
+    if (identityApiUrl()) {
+      if (!beginInventoryPost()) return false
+      queueInventoryWrite('inventory.count', {
+        warehouseId: input.warehouseId,
+        counts: input.counts,
+        idempotencyKey: crypto.randomUUID(),
+      })
+      return true
+    }
     let inventory = state.inventory
     let movements = state.stockMovements
     const reference = nextDocNo(
@@ -4996,6 +5359,7 @@ export const db = {
         return null
       }
     }
+    if (identityApiUrl() && !beginPurchasePost()) return null
     const returnNo = nextDocNo(state.purchaseReturns.map((item) => item.returnNo), 'PR-')
     const date = nowIso()
     let inventory = state.inventory
@@ -5043,7 +5407,15 @@ export const db = {
         ...state.purchaseReturns,
       ],
     })
-    toast('Purchase return processed', returnNo)
+    if (identityApiUrl()) {
+      queuePurchaseWrite(
+        'purchaseReturns.create',
+        { purchaseId: input.purchaseId, items: input.items, reason: input.reason },
+        crypto.randomUUID(),
+      )
+    } else {
+      toast('Purchase return processed', returnNo)
+    }
     return returnNo
   },
 
@@ -5094,6 +5466,15 @@ export const db = {
       toast('Nothing to pay', undefined, 'info')
       return false
     }
+    if (identityApiUrl()) {
+      if (!beginPurchasePost()) return false
+      queuePurchaseWrite(
+        'purchases.recordPayment',
+        { invoiceId: input.invoiceId, method: input.method, amount: input.amount },
+        crypto.randomUUID(),
+      )
+      return true
+    }
     const amount = Math.min(input.amount, purchase.balance)
     const paid = round2(purchase.paid + amount)
     const balance = round2(purchase.total - paid)
@@ -5142,6 +5523,11 @@ export const db = {
       toast('Add components', 'A BOM needs a finished product and at least one material.', 'warning')
       return null
     }
+    if (identityApiUrl()) {
+      if (!beginBomPost()) return null
+      queueBomWrite('boms.create', { ...input, idempotencyKey: crypto.randomUUID() })
+      return null
+    }
     const product = productById(input.productId)
     const bom = {
       id: uid('bom'),
@@ -5170,6 +5556,11 @@ export const db = {
   updateBom(id: string, input: BomInput) {
     const existing = state.boms.find((bom) => bom.id === id)
     if (!existing) return
+    if (identityApiUrl()) {
+      if (!beginBomPost()) return
+      queueBomWrite('boms.update', { id, ...input, idempotencyKey: crypto.randomUUID() })
+      return
+    }
     const boms = state.boms.map((bom) =>
       bom.id === id
         ? {
@@ -5200,6 +5591,11 @@ export const db = {
   },
 
   setBomStatus(id: string, status: 'active' | 'inactive') {
+    if (identityApiUrl()) {
+      if (!beginBomPost()) return
+      queueBomWrite('boms.setStatus', { id, status, idempotencyKey: crypto.randomUUID() })
+      return
+    }
     const boms = state.boms.map((bom) => (bom.id === id ? { ...bom, status } : bom))
     setData({
       boms,
@@ -5213,10 +5609,26 @@ export const db = {
       toast('Permission denied', 'You cannot create packing / assembly.', 'danger')
       return null
     }
+    if (identityApiUrl() && !beginManufacturingPost()) return null
     const built = buildPackingDraft(input)
-    if (!built) return null
+    if (!built) {
+      manufacturingPostInFlight = false
+      return null
+    }
     setData({ packingAssemblies: [built, ...(state.packingAssemblies ?? [])] })
-    toast('Packing saved', built.packingNo)
+    if (identityApiUrl()) {
+      queueManufacturingWrite('packing.create', {
+        clientId: built.id,
+        productId: input.productId,
+        bomId: input.bomId,
+        warehouseId: input.warehouseId,
+        plannedQty: input.plannedQty,
+        actualQty: input.actualQty,
+        notes: input.notes ?? '',
+      })
+    } else {
+      toast('Packing saved', built.packingNo)
+    }
     return built
   },
 
@@ -5246,7 +5658,20 @@ export const db = {
     setData({
       packingAssemblies: (state.packingAssemblies ?? []).map((row) => (row.id === id ? packing : row)),
     })
-    toast('Packing updated', packing.packingNo)
+    if (identityApiUrl()) {
+      if (!beginManufacturingPost()) return packing
+      queueManufacturingWrite(options?.refreshBom ? 'packing.refresh' : 'packing.update', {
+        id,
+        productId: packing.productId,
+        bomId: packing.bomId,
+        warehouseId: packing.warehouseId,
+        plannedQty: packing.plannedQty,
+        actualQty: packing.actualQty,
+        notes: packing.notes,
+      })
+    } else {
+      toast('Packing updated', packing.packingNo)
+    }
     return packing
   },
 
@@ -5290,7 +5715,12 @@ export const db = {
         row.id === id ? { ...row, status: 'cancelled' as const } : row,
       ),
     })
-    toast('Packing cancelled', existing.packingNo, 'warning')
+    if (identityApiUrl()) {
+      if (!beginManufacturingPost()) return true
+      queueManufacturingWrite('packing.cancel', { id })
+    } else {
+      toast('Packing cancelled', existing.packingNo, 'warning')
+    }
     return true
   },
 
@@ -5319,9 +5749,16 @@ export const db = {
     packingConfirmInFlight = true
     try {
       const posted = postPackingAssembly(existing, { acceptSnapshot: options?.acceptSnapshot === true })
+      if (posted && identityApiUrl()) {
+        if (!manufacturingPostInFlight) manufacturingPostInFlight = true
+        queueManufacturingWrite('packing.confirm', {
+          id,
+          acceptSnapshot: options?.acceptSnapshot === true,
+        })
+      }
       return posted
     } finally {
-      packingConfirmInFlight = false
+      if (!identityApiUrl()) packingConfirmInFlight = false
     }
   },
 
@@ -5333,6 +5770,10 @@ export const db = {
   },
 
   createProductionOrder(input: ProductionInput) {
+    if (!hasPermission(state, 'manufacturing.create')) {
+      toast('Permission denied', 'You cannot create production.', 'danger')
+      return null
+    }
     const bom = state.boms.find((item) => item.id === input.bomId)
     const product = productById(input.productId)
     if (!bom || !product) {
@@ -5371,7 +5812,25 @@ export const db = {
       costEstimate: consumptionCost(state, consumptions),
     }
     setData({ productionOrders: [order, ...state.productionOrders] })
-    toast('Production order created', order.orderNo)
+    if (identityApiUrl()) {
+      if (!beginManufacturingPost()) return order
+      queueManufacturingWrite('productionOrders.create', {
+        clientId: order.id,
+        productId: input.productId,
+        bomId: input.bomId,
+        warehouseId: input.warehouseId,
+        plannedQty: input.plannedQty,
+        plannedStart: input.plannedStart,
+        plannedEnd: input.plannedEnd,
+        operator: input.operator,
+        notes: input.notes,
+        status: input.status ?? 'planned',
+        batchNo: order.batchNo,
+        expiryDate: order.expiryDate,
+      })
+    } else {
+      toast('Production order created', order.orderNo)
+    }
     return order
   },
 
@@ -5406,7 +5865,12 @@ export const db = {
           : item,
       ),
     })
-    toast('Production order updated')
+    if (identityApiUrl()) {
+      if (!beginManufacturingPost()) return
+      queueManufacturingWrite('productionOrders.update', { id, ...patch })
+    } else {
+      toast('Production order updated')
+    }
   },
 
   startProduction(id: string, options?: { ignoreShortage?: boolean }) {
@@ -5432,7 +5896,12 @@ export const db = {
           : item,
       ),
     })
-    toast('Production started', order.orderNo)
+    if (identityApiUrl()) {
+      if (!beginManufacturingPost()) return true
+      queueManufacturingWrite('productionOrders.start', { id, ignoreShortage: options?.ignoreShortage === true })
+    } else {
+      toast('Production started', order.orderNo)
+    }
     return true
   },
 
@@ -5445,7 +5914,8 @@ export const db = {
     setData({
       productionOrders: state.productionOrders.map((item) => (item.id === id ? { ...item, status: 'paused' as const } : item)),
     })
-    toast('Production paused', order.orderNo, 'info')
+    if (identityApiUrl()) queueManufacturingWrite('productionOrders.pause', { id })
+    else toast('Production paused', order.orderNo, 'info')
   },
 
   resumeProduction(id: string) {
@@ -5454,7 +5924,8 @@ export const db = {
     setData({
       productionOrders: state.productionOrders.map((item) => (item.id === id ? { ...item, status: 'in_progress' as const } : item)),
     })
-    toast('Production resumed', order.orderNo)
+    if (identityApiUrl()) queueManufacturingWrite('productionOrders.resume', { id })
+    else toast('Production resumed', order.orderNo)
   },
 
   cancelProduction(id: string) {
@@ -5466,7 +5937,8 @@ export const db = {
     setData({
       productionOrders: state.productionOrders.map((item) => (item.id === id ? { ...item, status: 'cancelled' as const } : item)),
     })
-    toast('Production cancelled', order.orderNo, 'warning')
+    if (identityApiUrl()) queueManufacturingWrite('productionOrders.cancel', { id })
+    else toast('Production cancelled', order.orderNo, 'warning')
   },
 
   updateConsumption(id: string, lines: Array<{ productId: string; actualQty: number; notes?: string }>) {
@@ -5483,6 +5955,7 @@ export const db = {
           : item,
       ),
     })
+    if (identityApiUrl()) queueManufacturingWrite('productionOrders.updateConsumption', { id, lines })
   },
 
   addConsumptionLine(id: string, productId: string, qty: number) {
@@ -5502,7 +5975,8 @@ export const db = {
         item.id === id ? { ...item, consumptions, consumptionConfirmed: false, costEstimate: consumptionCost(state, consumptions) } : item,
       ),
     })
-    toast('Extra material added', product.name)
+    if (identityApiUrl()) queueManufacturingWrite('productionOrders.addLine', { id, productId, qty })
+    else toast('Extra material added', product.name)
   },
 
   confirmConsumption(id: string) {
@@ -5511,7 +5985,8 @@ export const db = {
     setData({
       productionOrders: state.productionOrders.map((item) => (item.id === id ? { ...item, consumptionConfirmed: true } : item)),
     })
-    toast('Consumption confirmed', order.orderNo)
+    if (identityApiUrl()) queueManufacturingWrite('productionOrders.confirmConsumption', { id })
+    else toast('Consumption confirmed', order.orderNo)
   },
 
   recordWastage(id: string, input: { kind: WastageKind; productId?: string; qty: number; unit: string; reason: string; notes: string }) {
@@ -5525,10 +6000,15 @@ export const db = {
     setData({
       productionOrders: state.productionOrders.map((item) => (item.id === id ? { ...item, wastage: [...item.wastage, row] } : item)),
     })
-    toast('Wastage recorded')
+    if (identityApiUrl()) queueManufacturingWrite('productionOrders.recordWastage', { id, ...input })
+    else toast('Wastage recorded')
   },
 
   completeProduction(id: string, input: { actualQty: number; batchNo: string; expiryDate?: string }) {
+    if (!hasPermission(state, 'manufacturing.complete')) {
+      toast('Permission denied', 'You cannot complete production.', 'danger')
+      return false
+    }
     const order = state.productionOrders.find((item) => item.id === id)
     if (!order) return false
     if (order.posted || order.status === 'completed') {
@@ -5628,7 +6108,17 @@ export const db = {
       maybeStockAlerts(line.productId, order.warehouseId, qty)
     }
     emit()
-    toast('Production completed', `${order.orderNo} · ${batchNo}`)
+    if (identityApiUrl()) {
+      if (!beginManufacturingPost()) return true
+      queueManufacturingWrite('productionOrders.complete', {
+        id,
+        actualQty: input.actualQty,
+        batchNo,
+        expiryDate: input.expiryDate,
+      })
+    } else {
+      toast('Production completed', `${order.orderNo} · ${batchNo}`)
+    }
     return true
   },
 
@@ -5649,6 +6139,7 @@ export const db = {
       .join(', ')
     notify('production', 'Purchase request (preview)', `PRQ created for ${order.orderNo}: ${names}`, '/purchases/new')
     toast('Purchase request created', 'Preview only — not sent to Purchases yet.', 'info')
+    if (identityApiUrl()) queueManufacturingWrite('productionOrders.createPurchaseRequest', { id: orderId })
   },
 
   acceptSession(id: string) {
@@ -7031,6 +7522,19 @@ export const db = {
       toast('Not enough unplaced stock', `${available} pack(s) left to place.`, 'warning')
       return false
     }
+    if (identityApiUrl()) {
+      if (!beginWarehousePost()) return false
+      queueWarehouseWrite('warehouse.place', {
+        slotId: input.slotId,
+        productId: input.productId,
+        qty,
+        batchRef: input.batchRef ?? '',
+        productionSessionRef: input.productionSessionRef ?? '',
+        reason: input.reason ?? '',
+        idempotencyKey: crypto.randomUUID(),
+      })
+      return true
+    }
     const actor = currentUser(state)
     const occupancy = {
       id: uid('occ'),
@@ -7101,6 +7605,18 @@ export const db = {
       toast('Keep cartons separate', 'Different production dates cannot share a slot.', 'warning')
       return false
     }
+    if (identityApiUrl()) {
+      if (!beginWarehousePost()) return false
+      queueWarehouseWrite('warehouse.move', {
+        fromSlotId: input.fromSlotId,
+        toSlotId: input.toSlotId,
+        qty,
+        action: input.action ?? 'MOVED',
+        reason: input.reason ?? '',
+        idempotencyKey: crypto.randomUUID(),
+      })
+      return true
+    }
     const actor = currentUser(state)
     const remaining = round2(source.quantityPacks - qty)
     let occupancies = state.slotOccupancies
@@ -7165,6 +7681,16 @@ export const db = {
       toast('Not enough in that position', `${source.quantityPacks} pack(s) available.`, 'warning')
       return false
     }
+    if (identityApiUrl()) {
+      if (!beginWarehousePost()) return false
+      queueWarehouseWrite('warehouse.topUp', {
+        fromSlotId: input.fromSlotId,
+        qty,
+        reason: input.reason ?? '',
+        idempotencyKey: crypto.randomUUID(),
+      })
+      return true
+    }
     const actor = currentUser(state)
     const remaining = round2(source.quantityPacks - qty)
     const occupancies =
@@ -7197,6 +7723,15 @@ export const db = {
     }
     const source = state.slotOccupancies.find((row) => row.slotId === slotId)
     if (!source) return false
+    if (identityApiUrl()) {
+      if (!beginWarehousePost()) return false
+      queueWarehouseWrite('warehouse.empty', {
+        slotId,
+        reason,
+        idempotencyKey: crypto.randomUUID(),
+      })
+      return true
+    }
     const actor = currentUser(state)
     const log = {
       id: uid('pl'),
@@ -7227,6 +7762,14 @@ export const db = {
       .sort((a, b) => a.slotNo - b.slotNo)
       .find((row) => !state.slotOccupancies.some((item) => item.slotId === row.id))
     if (empty) return empty
+    if (identityApiUrl()) {
+      if (!beginWarehousePost()) return null
+      queueWarehouseWrite('warehouse.ensurePalletSlot', {
+        locationId,
+        idempotencyKey: crypto.randomUUID(),
+      })
+      return null
+    }
     const slot = nextGenericSlot(locationId, state.storageSlots)
     setData({ storageSlots: [...state.storageSlots, slot] })
     return slot
@@ -7246,6 +7789,17 @@ export const db = {
     if (isAgentWarehouseId(state.warehouses, warehouseId)) {
       toast('Agent warehouses cannot have storage locations', undefined, 'warning')
       return null
+    }
+    if (identityApiUrl()) {
+      if (!beginWarehousePost()) return null
+      queueWarehouseWrite('warehouse.createTemporary', {
+        name,
+        type: input.type,
+        warehouseId,
+        slotCount: input.slotCount,
+        idempotencyKey: crypto.randomUUID(),
+      })
+      return { id: 'pending', name, type: input.type, warehouseId, active: true, createdAt: nowIso(), updatedAt: nowIso() }
     }
     const id = uid('loc')
     const location = {
@@ -7281,6 +7835,18 @@ export const db = {
       toast('Agent warehouses cannot have storage locations', undefined, 'warning')
       return null
     }
+    if (identityApiUrl()) {
+      if (!beginWarehousePost()) return null
+      queueWarehouseWrite('warehouse.createRack', {
+        name,
+        warehouseId,
+        levels: input.levels,
+        frontCount: input.frontCount,
+        backCount: input.backCount,
+        idempotencyKey: crypto.randomUUID(),
+      })
+      return { id: 'pending', name, type: 'RACK', warehouseId, active: true, createdAt: nowIso(), updatedAt: nowIso() }
+    }
     const id = uid('loc')
     const location = {
       id,
@@ -7307,6 +7873,15 @@ export const db = {
     }
     const next = name.trim()
     if (!next) return false
+    if (identityApiUrl()) {
+      if (!beginWarehousePost()) return false
+      queueWarehouseWrite('warehouse.rename', {
+        id,
+        name: next,
+        idempotencyKey: crypto.randomUUID(),
+      })
+      return true
+    }
     setData({
       storageLocations: state.storageLocations.map((row) => (row.id === id ? { ...row, name: next, updatedAt: nowIso() } : row)),
     })
@@ -7325,6 +7900,15 @@ export const db = {
     if (state.slotOccupancies.some((row) => slotIds.includes(row.slotId))) {
       toast('Location still has stock', 'Empty it before deactivating.', 'warning')
       return false
+    }
+    if (identityApiUrl()) {
+      if (!beginWarehousePost()) return false
+      queueWarehouseWrite('warehouse.deactivate', {
+        id,
+        name: location.name,
+        idempotencyKey: crypto.randomUUID(),
+      })
+      return true
     }
     setData({
       storageLocations: state.storageLocations.map((row) => (row.id === id ? { ...row, active: false, updatedAt: nowIso() } : row)),
@@ -7352,6 +7936,18 @@ export const db = {
     if (qty > balance.quantity) {
       toast('Quantity exceeds available balance.', `${formatQty(balance.quantity)}${balance.unit} available.`, 'warning')
       return false
+    }
+    if (identityApiUrl()) {
+      if (!beginWarehousePost()) return false
+      queueWarehouseWrite('warehouse.useBalance', {
+        balanceId: input.balanceId,
+        qty,
+        reason: input.reason,
+        notes: input.notes ?? '',
+        unit: balance.unit,
+        idempotencyKey: crypto.randomUUID(),
+      })
+      return true
     }
     const remaining = round2(balance.quantity - qty)
     const actor = currentUser(state)
@@ -8909,6 +9505,303 @@ startIdentityHydration({
   settings: () => state.settings,
   onError(message) {
     toast('Could not save to the server', message, 'danger')
+  },
+})
+
+startMasterHydration({
+  apply(slice) {
+    setData({ warehouses: slice.warehouses, categories: slice.categories })
+  },
+  actorId: () => currentUser(state).id,
+  onError(message) {
+    toast('Could not save to the server', message, 'danger')
+  },
+  onSaved(action, payload) {
+    if (action === 'categories.create') toast('Category added', String(payload.name ?? ''))
+    if (action === 'categories.rename') toast('Category renamed')
+  },
+})
+
+startPartyHydration({
+  apply(slice) {
+    setData(slice)
+  },
+  actorId: () => currentUser(state).id,
+  onError(message) {
+    toast('Could not save to the server', message, 'danger')
+  },
+  onSaved(action, payload) {
+    if (action === 'customers.create') toast('Customer added', String(payload.name ?? ''))
+    if (action === 'suppliers.create') toast('Supplier added', String(payload.name ?? ''))
+    if (action === 'agents.create') toast('Agent added', String(payload.name ?? ''))
+    if (action === 'agents.update') toast('Agent updated', String(payload.name ?? ''))
+    if (action === 'agents.setStatus') {
+      toast(payload.status === 'inactive' ? 'Agent deactivated' : 'Agent activated', String(payload.name ?? ''))
+    }
+    if (action === 'customers.saveWholesalePrice') {
+      const label = `${payload.customerName ?? 'Customer'} · ${payload.productName ?? 'Product'}`
+      toast(payload.active === false ? 'Custom price removed' : 'Custom price saved', label)
+    }
+    if (action === 'customers.deactivateWholesalePrice') {
+      toast('Custom price removed', `${payload.customerName ?? 'Customer'} · ${payload.productName ?? 'Product'}`)
+    }
+  },
+})
+
+startProductHydration({
+  apply(slice) {
+    const products = bomCostsReady()
+      ? slice.products.map((product) => {
+          const current = state.products.find((row) => row.id === product.id)
+          if (!current) return product
+          return { ...product, costPrice: current.costPrice, costSource: current.costSource }
+        })
+      : slice.products
+    setData({ products })
+  },
+  actorId: () => currentUser(state).id,
+  onError(message) {
+    toast('Could not save to the server', message, 'danger')
+  },
+  onSaved(action, payload, products) {
+    if (action === 'products.create') {
+      const saved = products.find((product) => product.id === payload.id)
+      const name = saved?.name || String(payload.name ?? '')
+      const sku = saved?.sku || String(payload.sku ?? '')
+      toast('Product added', payload.skuGenerated ? `${name} · SKU ${sku}` : `${name} is now in the catalogue.`)
+    }
+    if (action === 'products.update') toast('Product updated')
+    if (action === 'products.setStatus') toast(payload.status === 'inactive' ? 'Product deactivated' : 'Product activated')
+    if (action === 'products.saveAgentPrices') {
+      const count = Array.isArray(payload.rows) ? payload.rows.length : 0
+      toast('Prices saved', `${count} product(s) updated.`)
+    }
+    if (action === 'products.create') refreshInventory()
+  },
+})
+
+startInventoryHydration({
+  apply(slice) {
+    setData({
+      inventory: slice.inventory,
+      stockMovements: slice.stockMovements,
+      ...(slice.stockOrders ? { stockOrders: slice.stockOrders } : {}),
+    })
+  },
+  actorId: () => currentUser(state).id,
+  onError(message) {
+    toast('Could not save to the server', message, 'danger')
+  },
+  onSaved(action, payload, data) {
+    if (action === 'inventory.adjust') {
+      toast('Stock adjusted', `${productById(String(payload.productId ?? ''))?.name ?? 'Product'} updated.`)
+    }
+    if (action === 'inventory.transfer') toast('Transfer complete', `${payload.qty ?? ''} moved.`)
+    if (action === 'inventory.usage') {
+      const product = productById(String(payload.productId ?? ''))
+      toast('Stock usage recorded', `${product?.name ?? 'Product'} −${formatQty(Number(payload.qty ?? 0))} ${product?.unit ?? ''}`.trim())
+    }
+    if (action === 'inventory.count') {
+      const changes = Number(data.changes ?? 0)
+      toast('Stock count complete', changes ? `${changes} SKUs adjusted.` : 'No differences found.', changes ? 'success' : 'info')
+    }
+    if (action === 'inventory.markOrdered') toast('Marked as ordered', String(payload.productId ?? ''))
+    if (action === 'inventory.cancelOrder') toast('Order cancelled', String(payload.reason ?? ''))
+  },
+  onSettled() {
+    inventoryPostInFlight = false
+  },
+})
+
+startReceivingHydration({
+  apply(slice) {
+    setData({
+      receivings: slice.receivings,
+      stockOrders: slice.stockOrders,
+      ...(slice.inventory ? { inventory: slice.inventory } : {}),
+      ...(slice.stockMovements ? { stockMovements: slice.stockMovements } : {}),
+      ...(slice.purchases ? { purchases: slice.purchases } : {}),
+    })
+  },
+  actorId: () => currentUser(state).id,
+  onError(message) {
+    toast('Could not save to the server', message, 'danger')
+  },
+  onSaved(action, _payload, data) {
+    if (action === 'receivings.create') {
+      const doc = data.receiving as Receiving | undefined
+      toast('Receiving completed', doc ? `${doc.receivingNo} — stock increased.` : 'Stock increased.')
+    }
+    if (action === 'receivings.linkPurchase') {
+      const doc = data.receiving as Receiving | undefined
+      toast('Receiving linked', doc?.purchaseNo ? `${doc.receivingNo} → ${doc.purchaseNo}` : 'Purchase linked.')
+    }
+  },
+  onSettled() {
+    receivingPostInFlight = false
+  },
+})
+
+startWarehouseHydration({
+  apply(slice) {
+    setData(slice)
+  },
+  actorId: () => currentUser(state).id,
+  onError(message) {
+    toast('Could not save to the server', message, 'danger')
+  },
+  onSaved(action, payload) {
+    const qty = payload.qty ?? ''
+    if (action === 'warehouse.place') toast('Stock placed', `${qty} pack(s) placed.`)
+    if (action === 'warehouse.move') toast('Stock moved', `${qty} pack(s) moved.`)
+    if (action === 'warehouse.topUp') toast('Display topped up', `${qty} pack(s) moved to Display. Inventory total unchanged.`)
+    if (action === 'warehouse.empty') toast('Position emptied', 'Packs returned to Ready to Place.')
+    if (action === 'warehouse.createTemporary') toast('Temporary location added', String(payload.name ?? ''))
+    if (action === 'warehouse.createRack') toast('Rack added', String(payload.name ?? ''))
+    if (action === 'warehouse.rename') toast('Location renamed', String(payload.name ?? ''))
+    if (action === 'warehouse.deactivate') toast('Location deactivated', String(payload.name ?? ''))
+    if (action === 'warehouse.useBalance') toast('Balance used', `${qty}${payload.unit ?? ''} recorded. Inventory packs unchanged.`)
+  },
+  onSettled() {
+    warehousePostInFlight = false
+  },
+})
+
+startOpeningBalanceHydration({
+  apply(slice) {
+    setData({
+      openingBalances: slice.openingBalances,
+      ...(slice.inventory ? { inventory: slice.inventory } : {}),
+      ...(slice.stockMovements ? { stockMovements: slice.stockMovements } : {}),
+      ...(slice.displayStocks ? { displayStocks: slice.displayStocks } : {}),
+      ...(slice.productionBalances ? { productionBalances: slice.productionBalances } : {}),
+      ...(slice.storageSlots ? { storageSlots: slice.storageSlots } : {}),
+      ...(slice.slotOccupancies ? { slotOccupancies: slice.slotOccupancies } : {}),
+      ...(slice.placementLogs ? { placementLogs: slice.placementLogs } : {}),
+    })
+  },
+  actorId: () => currentUser(state).id,
+  onError(message) {
+    toast('Could not save to the server', message, 'danger')
+  },
+  onSaved(action, _payload, data) {
+    if (action === 'openingBalances.save') toast('Opening balance saved', String((data.openingBalance as OpeningBalance | undefined)?.documentNo ?? ''))
+    if (action === 'openingBalances.update') toast('Opening balance updated', String((data.openingBalance as OpeningBalance | undefined)?.documentNo ?? ''))
+    if (action === 'openingBalances.confirm') {
+      const doc = data.openingBalance as OpeningBalance | undefined
+      toast('Opening balance confirmed', doc?.documentNo ?? '')
+    }
+  },
+  onSettled() {
+    openingBalanceInFlight = false
+  },
+})
+
+startPurchaseHydration({
+  apply(slice) {
+    setData({
+      purchases: slice.purchases,
+      purchaseReturns: slice.purchaseReturns,
+      payments: slice.payments,
+      ...(slice.inventory ? { inventory: slice.inventory } : {}),
+      ...(slice.stockMovements ? { stockMovements: slice.stockMovements } : {}),
+    })
+  },
+  actorId: () => currentUser(state).id,
+  onError(message) {
+    toast('Could not save to the server', message, 'danger')
+  },
+  onSaved(action, _payload, data) {
+    if (action === 'purchases.create') {
+      const doc = data.purchase as Purchase | undefined
+      toast(
+        doc?.receivingId ? 'Purchase saved — stock already received' : _payload.receive ? 'Purchase received' : 'Draft saved',
+        doc?.purchaseNo ?? '',
+      )
+    }
+    if (action === 'purchases.receive') {
+      const doc = data.purchase as Purchase | undefined
+      toast(doc?.receivingId ? 'Purchase marked received — stock already in' : 'Purchase received', doc?.purchaseNo ?? '')
+    }
+    if (action === 'purchases.recordPayment') {
+      toast('Supplier payment recorded', String((data.payment as Payment | undefined)?.paymentNo ?? ''))
+    }
+    if (action === 'purchaseReturns.create') {
+      toast('Purchase return processed', String((data.purchaseReturn as PurchaseReturn | undefined)?.returnNo ?? ''))
+    }
+  },
+  onSettled() {
+    purchasePostInFlight = false
+  },
+})
+
+startManufacturingHydration({
+  apply(slice) {
+    setData({
+      packingAssemblies: slice.packingAssemblies,
+      productionOrders: slice.productionOrders,
+      batches: slice.batches,
+      ...(slice.inventory ? { inventory: slice.inventory } : {}),
+      ...(slice.stockMovements ? { stockMovements: slice.stockMovements } : {}),
+    })
+  },
+  actorId: () => currentUser(state).id,
+  onError(message) {
+    toast('Could not save to the server', message, 'danger')
+  },
+  onSaved(action, _payload, data) {
+    if (action === 'packing.create') toast('Packing saved', String((data.packing as PackingAssembly | undefined)?.packingNo ?? ''))
+    if (action === 'packing.update' || action === 'packing.refresh') {
+      toast('Packing updated', String((data.packing as PackingAssembly | undefined)?.packingNo ?? ''))
+    }
+    if (action === 'packing.cancel') toast('Packing cancelled', String((data.packing as PackingAssembly | undefined)?.packingNo ?? ''), 'warning')
+    if (action === 'packing.confirm') {
+      const packing = data.packing as PackingAssembly | undefined
+      toast('Packing confirmed', packing ? `${packing.packingNo} · ${formatQty(packing.actualQty)} ${packing.unit}` : '')
+    }
+    if (action === 'productionOrders.create') toast('Production order created', String((data.productionOrder as ProductionOrder | undefined)?.orderNo ?? ''))
+    if (action === 'productionOrders.update') toast('Production order updated')
+    if (action === 'productionOrders.start') toast('Production started', String((data.productionOrder as ProductionOrder | undefined)?.orderNo ?? ''))
+    if (action === 'productionOrders.pause') toast('Production paused', String((data.productionOrder as ProductionOrder | undefined)?.orderNo ?? ''), 'info')
+    if (action === 'productionOrders.resume') toast('Production resumed', String((data.productionOrder as ProductionOrder | undefined)?.orderNo ?? ''))
+    if (action === 'productionOrders.cancel') toast('Production cancelled', String((data.productionOrder as ProductionOrder | undefined)?.orderNo ?? ''), 'warning')
+    if (action === 'productionOrders.complete') {
+      const order = data.productionOrder as ProductionOrder | undefined
+      toast('Production completed', order ? `${order.orderNo} · ${order.batchNo}` : '')
+    }
+  },
+  onSettled() {
+    manufacturingPostInFlight = false
+    packingConfirmInFlight = false
+  },
+})
+
+startBomHydration({
+  apply(slice) {
+    markBomCostsReady()
+    const costs = new Map(slice.productCosts.map((row) => [row.id, row]))
+    setData({
+      boms: hydrateBoms(slice.boms),
+      products: state.products.map((product) => {
+        const cost = costs.get(product.id)
+        if (!cost) return product
+        const costSource = cost.costSource === 'bom' ? 'bom' as const : 'manual' as const
+        if (product.costPrice === cost.costPrice && product.costSource === costSource) return product
+        return { ...product, costPrice: cost.costPrice, costSource }
+      }),
+    })
+  },
+  actorId: () => currentUser(state).id,
+  onError(message) {
+    toast('Could not save to the server', message, 'danger')
+  },
+  onSaved(action, payload) {
+    if (action === 'boms.create') toast('BOM created', String(payload.name || ''))
+    if (action === 'boms.update') toast('BOM updated')
+    if (action === 'boms.setStatus') toast(payload.status === 'inactive' ? 'BOM deactivated' : 'BOM activated')
+  },
+  onSettled() {
+    bomPostInFlight = false
   },
 })
 
