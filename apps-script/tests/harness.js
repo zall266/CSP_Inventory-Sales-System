@@ -7,6 +7,7 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const files = [
   'utils/errors.js',
   'utils/receivingPurchaseLink.js',
+  'utils/packingMath.js',
   'utils/time.js',
   'utils/ids.js',
   'utils/locks.js',
@@ -30,6 +31,7 @@ const files = [
   'repositories/openingBalanceRepository.js',
   'repositories/purchaseRepository.js',
   'repositories/receivingRepository.js',
+  'repositories/manufacturingRepository.js',
   'services/auditService.js',
   'services/idempotencyService.js',
   'services/counterService.js',
@@ -45,6 +47,7 @@ const files = [
   'services/openingBalanceService.js',
   'services/purchaseService.js',
   'services/receivingService.js',
+  'services/manufacturingService.js',
   'app/router.js',
   'app/main.js',
 ]
