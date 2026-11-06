@@ -59,6 +59,7 @@ import {
   RECEIVING_PERMISSION_KEYS,
   buildReceivingLines,
   parseReceivingPhoto,
+  receivingPurchaseMismatchMessage,
 } from '@/features/receiving/receivingModel'
 import { INVENTORY_USAGE_PERMISSION_KEYS, activeStockOrder } from '@/features/inventory/toOrderModel'
 import {
@@ -3976,6 +3977,16 @@ export const db = {
       toast('Receiving already linked', linkedReceiving.receivingNo, 'warning')
       return null
     }
+    if (linkedReceiving) {
+      const mismatch = receivingPurchaseMismatchMessage(linkedReceiving, {
+        warehouseId: input.warehouseId,
+        items: items.map((item) => ({ productId: item.productId, qty: item.qty, price: 0, discount: 0, total: 0, returnedQty: 0 })),
+      })
+      if (mismatch) {
+        toast('Cannot link purchase', mismatch, 'warning')
+        return null
+      }
+    }
     const subtotal = round2(items.reduce((sum, item) => sum + item.total, 0))
     const discount = input.discount ?? 0
     const tax = input.tax ?? 0
@@ -4279,6 +4290,11 @@ export const db = {
     }
     if (purchase.status !== 'draft' && purchase.receivingId !== receivingId) {
       toast('Link a draft purchase', 'This purchase already posted stock. Create a new purchase from the receiving instead.', 'warning')
+      return false
+    }
+    const mismatch = receivingPurchaseMismatchMessage(receiving, purchase)
+    if (mismatch) {
+      toast('Cannot link purchase', mismatch, 'warning')
       return false
     }
     const inventoryFingerprint = state.inventory.map((row) => `${row.productId}:${row.warehouseId}:${row.qty}`).join('|')

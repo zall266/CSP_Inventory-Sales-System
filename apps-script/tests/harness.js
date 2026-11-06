@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url'
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const files = [
   'utils/errors.js',
+  'utils/receivingPurchaseLink.js',
   'utils/time.js',
   'utils/ids.js',
   'utils/locks.js',

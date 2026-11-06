@@ -20,6 +20,14 @@ function app() {
     },
     SpreadsheetApp: { openById: () => spreadsheet },
     DriveApp: drive,
+    Utilities: {
+      base64Decode(value) {
+        return Buffer.from(String(value), 'base64')
+      },
+      newBlob(bytes, mime, name) {
+        return { bytes, mime, name }
+      },
+    },
     ContentService: {
       MimeType: { JSON: 'application/json' },
       createTextOutput(text) {
@@ -48,6 +56,7 @@ function app() {
     boms: context.createBomService({ sheetRepository: sheets }),
     openingBalances: context.createOpeningBalanceService({ sheetRepository: sheets }),
     purchases: context.createPurchaseService({ sheetRepository: sheets }),
+    receivings: context.createReceivingService({ sheetRepository: sheets, driveStorage }),
   }
 }
 
@@ -95,6 +104,7 @@ function masterPayload() {
   return {
     warehouses: [
       { id: 'wh-main', name: 'Main Warehouse', code: 'MAIN', kind: 'company' },
+      { id: 'wh-shop', name: 'Shop', code: 'SHOP', kind: 'company' },
     ],
     categories: [{ id: 'cat-ing', name: 'Ingredients' }],
   }
@@ -210,10 +220,15 @@ test('create with receive posts stock once and honors clientId', () => {
 
 test('receivingId skips stock posting', () => {
   const backend = ready()
-  backend.spreadsheet.store.Receivings = [
-    ['id', 'receivingNo', 'purchaseId', 'purchaseNo'],
-    ['rcv-1', 'RCV-000001', '', ''],
-  ]
+  const receiving = post(backend, 'receivings.create', {
+    actorUserId: 'u-aina',
+    clientId: 'rcv-1',
+    warehouseId: 'wh-main',
+    source: 'other',
+    items: [{ productId: 'prd-sugar', qty: 3, condition: 'Baik' }],
+  }, { idempotencyKey: 'rcv-linked-1' })
+  assert.equal(receiving.ok, true)
+  const afterReceiving = qty(receiving.data, 'prd-sugar', 'wh-main')
   const created = post(backend, 'purchases.create', {
     actorUserId: 'u-aina',
     clientId: 'pur_linked',
@@ -225,8 +240,9 @@ test('receivingId skips stock posting', () => {
     receive: true,
   }, { idempotencyKey: 'create-linked-1' })
   assert.equal(created.ok, true)
-  assert.equal(qty(created.data, 'prd-sugar', 'wh-main'), 0)
+  assert.equal(qty(created.data, 'prd-sugar', 'wh-main'), afterReceiving)
   assert.equal(created.data.purchase.receivingId, 'rcv-1')
+  assert.equal(created.data.purchase.status, 'received')
 })
 
 test('return qty too high is rejected', () => {
@@ -248,3 +264,174 @@ test('return qty too high is rejected', () => {
   })
   assert.equal(bad.error.message, 'Return qty too high')
 })
+
+function addKgProduct(backend, id, name) {
+  assert.equal(call(backend, 'products.create', {
+    actorUserId: 'u-aina', id, name, categoryId: 'cat-ing', unit: 'KG',
+    purchaseUnit: 'KG', purchaseConversionQty: 1, purchaseCost: 22, sellingPrice: 35, trackExpiry: false,
+  }).ok, true)
+}
+
+function storeFingerprint(backend) {
+  return JSON.stringify(backend.spreadsheet.store)
+}
+
+test('purchases.create with receivingId rejects mismatched products before writes', () => {
+  const backend = ready()
+  addKgProduct(backend, 'prd-choc', 'UAT Chocolate')
+  const receiving = post(backend, 'receivings.create', {
+    actorUserId: 'u-aina',
+    clientId: 'rcv_sugar_only',
+    warehouseId: 'wh-main',
+    source: 'other',
+    items: [{ productId: 'prd-sugar', qty: 1, condition: 'Baik' }],
+  }, { idempotencyKey: 'rcv-mismatch' })
+  assert.equal(receiving.ok, true)
+  const before = storeFingerprint(backend)
+  const purchaseCount = (backend.spreadsheet.store.Purchases || []).length
+  const denied = post(backend, 'purchases.create', {
+    actorUserId: 'u-aina',
+    clientId: 'pur_choc_mismatch',
+    supplierId: 'sup-1',
+    warehouseId: 'wh-main',
+    invoiceNumber: 'UAT-R2',
+    receivingId: 'rcv_sugar_only',
+    items: [{ productId: 'prd-choc', qty: 1, price: 22 }],
+    receive: false,
+  }, { idempotencyKey: 'pur-mismatch' })
+  assert.equal(denied.ok, false)
+  assert.equal(denied.error.code, 'PRODUCT_MISMATCH')
+  assert.equal(storeFingerprint(backend), before)
+  assert.equal((backend.spreadsheet.store.Purchases || []).length, purchaseCount)
+  const listed = call(backend, 'purchases.list', { actorUserId: 'u-aina' }).data.purchases
+  assert.equal(listed.some((row) => row.id === 'pur_choc_mismatch'), false)
+})
+
+test('purchases.create with receivingId allows partial match and quantity difference', () => {
+  const backend = ready()
+  addKgProduct(backend, 'prd-flour', 'UAT Flour')
+  addKgProduct(backend, 'prd-choc', 'UAT Chocolate')
+  const receiving = post(backend, 'receivings.create', {
+    actorUserId: 'u-aina',
+    clientId: 'rcv_partial_create',
+    warehouseId: 'wh-main',
+    source: 'other',
+    items: [
+      { productId: 'prd-sugar', qty: 1, condition: 'Baik' },
+      { productId: 'prd-flour', qty: 2, condition: 'Baik' },
+    ],
+  }, { idempotencyKey: 'rcv-partial-create' })
+  assert.equal(receiving.ok, true)
+  const created = call(backend, 'purchases.create', {
+    actorUserId: 'u-aina',
+    clientId: 'pur_partial_create',
+    supplierId: 'sup-1',
+    warehouseId: 'wh-main',
+    invoiceNumber: 'PARTIAL',
+    receivingId: 'rcv_partial_create',
+    items: [{ productId: 'prd-sugar', qty: 9, price: 50 }],
+    receive: false,
+  })
+  assert.equal(created.ok, true)
+  assert.equal(created.data.purchase.receivingId, 'rcv_partial_create')
+  assert.equal(created.data.purchase.status, 'draft')
+})
+
+test('purchases.create with receivingId rejects warehouse mismatch and already-linked receiving', () => {
+  const backend = ready()
+  const receiving = post(backend, 'receivings.create', {
+    actorUserId: 'u-aina',
+    clientId: 'rcv_wh_create',
+    warehouseId: 'wh-main',
+    source: 'other',
+    items: [{ productId: 'prd-sugar', qty: 1, condition: 'Baik' }],
+  }, { idempotencyKey: 'rcv-wh-create' })
+  assert.equal(receiving.ok, true)
+  const warehouseDenied = call(backend, 'purchases.create', {
+    actorUserId: 'u-aina',
+    clientId: 'pur_wh_create',
+    supplierId: 'sup-1',
+    warehouseId: 'wh-shop',
+    invoiceNumber: 'WH',
+    receivingId: 'rcv_wh_create',
+    items: [{ productId: 'prd-sugar', qty: 1, price: 50 }],
+    receive: false,
+  })
+  assert.equal(warehouseDenied.error.message, 'Receiving and purchase must use the same warehouse.')
+
+  const first = call(backend, 'purchases.create', {
+    actorUserId: 'u-aina',
+    clientId: 'pur_first_link',
+    supplierId: 'sup-1',
+    warehouseId: 'wh-main',
+    invoiceNumber: 'FIRST',
+    receivingId: 'rcv_wh_create',
+    items: [{ productId: 'prd-sugar', qty: 1, price: 50 }],
+    receive: false,
+  })
+  assert.equal(first.ok, true)
+  const second = call(backend, 'purchases.create', {
+    actorUserId: 'u-aina',
+    clientId: 'pur_second_link',
+    supplierId: 'sup-1',
+    warehouseId: 'wh-main',
+    invoiceNumber: 'SECOND',
+    receivingId: 'rcv_wh_create',
+    items: [{ productId: 'prd-sugar', qty: 1, price: 50 }],
+    receive: false,
+  })
+  assert.equal(second.ok, false)
+  assert.match(String(second.error.message), /already linked|RCV-/)
+})
+
+test('purchase list and get return the persisted status and linkage does not convert it', () => {
+  const backend = ready()
+  const draft = call(backend, 'purchases.create', {
+    actorUserId: 'u-aina',
+    clientId: 'pur_status_draft',
+    supplierId: 'sup-1',
+    warehouseId: 'wh-main',
+    invoiceNumber: 'DRAFT-STATUS',
+    items: [{ productId: 'prd-sugar', qty: 1, price: 50 }],
+    receive: false,
+  })
+  assert.equal(draft.data.purchase.status, 'draft')
+  const listedDraft = call(backend, 'purchases.list', { actorUserId: 'u-aina' }).data.purchases.find((row) => row.id === 'pur_status_draft')
+  const gotDraft = call(backend, 'purchases.get', { actorUserId: 'u-aina', id: 'pur_status_draft' }).data.purchase
+  assert.equal(listedDraft.status, 'draft')
+  assert.equal(gotDraft.status, 'draft')
+
+  const received = post(backend, 'purchases.create', {
+    actorUserId: 'u-aina',
+    clientId: 'pur_status_recv',
+    supplierId: 'sup-1',
+    warehouseId: 'wh-main',
+    invoiceNumber: 'RECV-STATUS',
+    items: [{ productId: 'prd-sugar', qty: 1, price: 50 }],
+    receive: true,
+  }, { idempotencyKey: 'status-recv' })
+  assert.equal(received.data.purchase.status, 'received')
+  const listedRecv = call(backend, 'purchases.list', { actorUserId: 'u-aina' }).data.purchases.find((row) => row.id === 'pur_status_recv')
+  const gotRecv = call(backend, 'purchases.get', { actorUserId: 'u-aina', id: 'pur_status_recv' }).data.purchase
+  assert.equal(listedRecv.status, 'received')
+  assert.equal(gotRecv.status, 'received')
+
+  const receiving = post(backend, 'receivings.create', {
+    actorUserId: 'u-aina',
+    clientId: 'rcv_status',
+    warehouseId: 'wh-main',
+    source: 'other',
+    items: [{ productId: 'prd-sugar', qty: 1, condition: 'Baik' }],
+  }, { idempotencyKey: 'rcv-status' })
+  assert.equal(receiving.ok, true)
+  const linked = post(backend, 'receivings.linkPurchase', {
+    actorUserId: 'u-aina',
+    receivingId: 'rcv_status',
+    purchaseId: 'pur_status_draft',
+  }, { idempotencyKey: 'link-status' })
+  assert.equal(linked.ok, true)
+  const afterLink = call(backend, 'purchases.get', { actorUserId: 'u-aina', id: 'pur_status_draft' }).data.purchase
+  assert.equal(afterLink.status, 'draft')
+  assert.equal(afterLink.receivingId, 'rcv_status')
+})
+

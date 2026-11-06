@@ -1,5 +1,5 @@
 import { formatUnit, productHasBom, purchaseQtyToBaseQty } from '@/features/products/masterData'
-import type { AppState, Product, Receiving, ReceivingCondition, ReceivingInput, ReceivingLine, ReceivingSource } from '@/types'
+import type { AppState, Product, Purchase, Receiving, ReceivingCondition, ReceivingInput, ReceivingLine, ReceivingSource } from '@/types'
 
 export const RECEIVING_CONDITIONS: ReceivingCondition[] = ['Baik', 'Tidak Baik', 'Perlu Pemeriksaan']
 
@@ -132,4 +132,40 @@ export function unlinkedReceivings(state: Pick<AppState, 'receivings'>) {
 export function receivingLinkLabel(row: Receiving) {
   if (row.purchaseNo) return `Linked to ${row.purchaseNo}`
   return 'Not linked to a purchase'
+}
+
+export function purchaseSharesReceivingProduct(
+  receiving: Pick<Receiving, 'items'>,
+  purchase: Pick<Purchase, 'items'>,
+) {
+  const ids = new Set(receiving.items.map((line) => line.productId).filter(Boolean))
+  return purchase.items.some((line) => ids.has(line.productId))
+}
+
+export function purchaseMatchesReceivingWarehouse(
+  receiving: Pick<Receiving, 'warehouseId'>,
+  purchase: Pick<Purchase, 'warehouseId'>,
+) {
+  if (!receiving.warehouseId || !purchase.warehouseId) return true
+  return receiving.warehouseId === purchase.warehouseId
+}
+
+export function isCompatibleReceivingPurchase(
+  receiving: Pick<Receiving, 'items' | 'warehouseId'>,
+  purchase: Pick<Purchase, 'items' | 'warehouseId'>,
+) {
+  return purchaseSharesReceivingProduct(receiving, purchase) && purchaseMatchesReceivingWarehouse(receiving, purchase)
+}
+
+export function receivingPurchaseMismatchMessage(
+  receiving: Pick<Receiving, 'items' | 'warehouseId'>,
+  purchase: Pick<Purchase, 'items' | 'warehouseId'>,
+) {
+  if (!purchaseMatchesReceivingWarehouse(receiving, purchase)) {
+    return 'Receiving and purchase must use the same warehouse.'
+  }
+  if (!purchaseSharesReceivingProduct(receiving, purchase)) {
+    return 'Receiving and purchase must share at least one product.'
+  }
+  return ''
 }
