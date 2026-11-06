@@ -4141,7 +4141,7 @@ export const db = {
       photoName = parsed.name
     }
     const actor = currentUser(state)
-    const date = input.date ?? nowIso()
+    const date = new Date().toISOString()
     const receivingNo = nextDocNo((state.receivings ?? []).map((row) => row.receivingNo), 'RCV-')
     const receiving: Receiving = {
       id: uid('rcv'),
@@ -4245,7 +4245,6 @@ export const db = {
         source: input.source ?? 'other',
         supplierId: input.supplierId ?? '',
         supplierNote: input.supplierNote ?? '',
-        date: receiving.date,
         notes: input.notes ?? '',
         photoUrl: input.photoUrl ?? '',
         photoName: input.photoName ?? '',

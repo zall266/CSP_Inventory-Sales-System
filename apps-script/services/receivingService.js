@@ -340,9 +340,11 @@ function createReceivingService(deps) {
     var receivingNo = existing
       ? existing.receivingNo
       : firstPosted ? firstPosted.reference : nextDocNo(docs.map(function (row) { return row.receivingNo; }), 'RCV-', 6);
+    // New receiving: server nowIso() is the event date. Ignore payload.date.
+    // Retry: reuse the header date, else the first posted movement date.
     var date = existing
       ? existing.date
-      : firstPosted ? firstPosted.date : (text(payload.date).trim() || nowIso());
+      : firstPosted ? firstPosted.date : nowIso();
     var photoFileId = existing ? (existing.photoFileId || '') : '';
     var photoName = existing ? (existing.photoName || '') : '';
     if (!existing && payload.photoUrl) {

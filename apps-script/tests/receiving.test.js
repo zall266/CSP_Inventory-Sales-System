@@ -453,3 +453,93 @@ test('a reused receiving number after a failed attempt is refused instead of dup
   const nos = call(backend, 'receivings.list', { actorUserId: 'u-aina' }).data.receivings.map((row) => row.receivingNo)
   assert.equal(new Set(nos).size, nos.length)
 })
+
+const PROTOTYPE_DATE = '2026-09-10T04:00:00.000Z'
+const SERVER_DATE = '2026-11-06T05:30:00.000Z'
+const LATER_DATE = '2026-11-06T08:00:00.000Z'
+
+function setClock(backend, iso) {
+  backend.context.nowIso = () => iso
+}
+
+function receivingDates(backend, payload) {
+  const listed = call(backend, 'receivings.list', { actorUserId: 'u-aina' })
+  const receiving = listed.data.receivings.find((row) => row.id === payload.clientId)
+  const movements = (listed.data.stockMovements || [])
+    .filter((row) => row.type === 'receiving' && row.reference === receiving?.receivingNo)
+    .map((row) => row.date)
+  return { receivingDate: receiving?.date, movementDates: movements }
+}
+
+test('a new receiving ignores a frozen client date and uses server nowIso', () => {
+  const backend = faultReady()
+  setClock(backend, SERVER_DATE)
+  const payload = {
+    ...twoLinePayload({ stockOrderId: backend.orderId, clientId: 'rcv_date' }),
+    date: PROTOTYPE_DATE,
+  }
+  const created = post(backend, 'receivings.create', payload, { idempotencyKey: 'date-key' })
+  assert.equal(created.ok, true)
+  assert.equal(created.data.receiving.date, SERVER_DATE)
+  assert.notEqual(created.data.receiving.date, PROTOTYPE_DATE)
+  const dates = receivingDates(backend, payload)
+  assert.equal(dates.receivingDate, SERVER_DATE)
+  assert.ok(dates.movementDates.length === 2)
+  dates.movementDates.forEach((date) => assert.equal(date, SERVER_DATE))
+})
+
+test('Receivings.date matches StockMovements.date on a new receiving', () => {
+  const backend = faultReady()
+  setClock(backend, SERVER_DATE)
+  const payload = twoLinePayload({ stockOrderId: backend.orderId, clientId: 'rcv_match' })
+  const created = post(backend, 'receivings.create', payload, { idempotencyKey: 'match-key' })
+  assert.equal(created.ok, true)
+  const dates = receivingDates(backend, payload)
+  assert.equal(dates.receivingDate, SERVER_DATE)
+  assert.deepEqual(dates.movementDates, [SERVER_DATE, SERVER_DATE])
+})
+
+test('a retry after a partial write keeps the original server date', () => {
+  const backend = faultReady()
+  setClock(backend, SERVER_DATE)
+  const payload = twoLinePayload({ stockOrderId: backend.orderId, clientId: 'rcv_retry_date' })
+  countWrites(backend, 2)
+  assert.equal(post(backend, 'receivings.create', payload, { idempotencyKey: 'retry-date-key' }).ok, false)
+  const retry = post(backend, 'receivings.create', payload, { idempotencyKey: 'retry-date-key' })
+  assert.equal(retry.ok, true)
+  const dates = receivingDates(backend, payload)
+  assert.equal(dates.receivingDate, SERVER_DATE)
+  assert.deepEqual(dates.movementDates, [SERVER_DATE, SERVER_DATE])
+  assert.equal(receivingState(backend, payload).movements.length, 2)
+})
+
+test('a retry does not replace the original date with a later server time', () => {
+  const backend = faultReady()
+  setClock(backend, SERVER_DATE)
+  const payload = twoLinePayload({ stockOrderId: backend.orderId, clientId: 'rcv_later' })
+  countWrites(backend, 2)
+  assert.equal(post(backend, 'receivings.create', payload, { idempotencyKey: 'later-key' }).ok, false)
+  setClock(backend, LATER_DATE)
+  const retry = post(backend, 'receivings.create', { ...payload, date: LATER_DATE }, { idempotencyKey: 'later-key' })
+  assert.equal(retry.ok, true)
+  const dates = receivingDates(backend, payload)
+  assert.equal(dates.receivingDate, SERVER_DATE)
+  assert.notEqual(dates.receivingDate, LATER_DATE)
+  dates.movementDates.forEach((date) => assert.equal(date, SERVER_DATE))
+})
+
+test('a completed replay keeps the original timestamp', () => {
+  const backend = faultReady()
+  setClock(backend, SERVER_DATE)
+  const payload = twoLinePayload({ stockOrderId: backend.orderId, clientId: 'rcv_replay_date' })
+  const created = post(backend, 'receivings.create', payload, { idempotencyKey: 'replay-date-key' })
+  assert.equal(created.ok, true)
+  setClock(backend, LATER_DATE)
+  const replay = post(backend, 'receivings.create', { ...payload, date: LATER_DATE }, { idempotencyKey: 'replay-date-key' })
+  assert.equal(replay.ok, true)
+  assert.equal(replay.meta.idempotentReplay, true)
+  assert.equal(replay.data.receiving.date, SERVER_DATE)
+  const dates = receivingDates(backend, payload)
+  assert.equal(dates.receivingDate, SERVER_DATE)
+  dates.movementDates.forEach((date) => assert.equal(date, SERVER_DATE))
+})
