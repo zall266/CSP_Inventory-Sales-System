@@ -14,6 +14,7 @@ import {
 } from '@/store/openingBalanceSync'
 import { queuePurchaseWrite, startPurchaseHydration } from '@/store/purchaseSync'
 import { queueReceivingWrite, startReceivingHydration } from '@/store/receivingSync'
+import { queueManufacturingWrite, startManufacturingHydration } from '@/store/manufacturingSync'
 import {
   applyDisplayDelta,
   createMainWarehouseLayout,
@@ -163,6 +164,7 @@ import type {
   OpeningBalanceInput,
   PackingAssembly,
   PackingInput,
+  ProductionOrder,
   PaymentMethod,
   PermissionKey,
   ProductInput,
@@ -884,7 +886,7 @@ function postPackingAssembly(existing: PackingAssembly, options: { acceptSnapsho
     const qty = posted.inventory.find((row) => row.productId === line.productId && row.warehouseId === existing.warehouseId)?.qty ?? 0
     maybeStockAlerts(line.productId, existing.warehouseId, qty)
   }
-  toast('Packing confirmed', `${packing.packingNo} · ${formatQty(existing.actualQty)} ${existing.unit}`)
+  if (!identityApiUrl()) toast('Packing confirmed', `${packing.packingNo} · ${formatQty(existing.actualQty)} ${existing.unit}`)
   return packing
 }
 
@@ -952,6 +954,16 @@ function beginBomPost() {
 let salesImportConfirmInFlight = false
 let salesReturnInFlight = false
 let packingConfirmInFlight = false
+let manufacturingPostInFlight = false
+
+function beginManufacturingPost() {
+  if (manufacturingPostInFlight || packingConfirmInFlight) {
+    toast('Already posting', 'Wait for the current manufacturing update to finish.', 'warning')
+    return false
+  }
+  manufacturingPostInFlight = true
+  return true
+}
 
 function postConfirmedOpeningBalance(doc: OpeningBalance) {
   const actor = currentUser(state)
@@ -5597,10 +5609,26 @@ export const db = {
       toast('Permission denied', 'You cannot create packing / assembly.', 'danger')
       return null
     }
+    if (identityApiUrl() && !beginManufacturingPost()) return null
     const built = buildPackingDraft(input)
-    if (!built) return null
+    if (!built) {
+      manufacturingPostInFlight = false
+      return null
+    }
     setData({ packingAssemblies: [built, ...(state.packingAssemblies ?? [])] })
-    toast('Packing saved', built.packingNo)
+    if (identityApiUrl()) {
+      queueManufacturingWrite('packing.create', {
+        clientId: built.id,
+        productId: input.productId,
+        bomId: input.bomId,
+        warehouseId: input.warehouseId,
+        plannedQty: input.plannedQty,
+        actualQty: input.actualQty,
+        notes: input.notes ?? '',
+      })
+    } else {
+      toast('Packing saved', built.packingNo)
+    }
     return built
   },
 
@@ -5630,7 +5658,20 @@ export const db = {
     setData({
       packingAssemblies: (state.packingAssemblies ?? []).map((row) => (row.id === id ? packing : row)),
     })
-    toast('Packing updated', packing.packingNo)
+    if (identityApiUrl()) {
+      if (!beginManufacturingPost()) return packing
+      queueManufacturingWrite(options?.refreshBom ? 'packing.refresh' : 'packing.update', {
+        id,
+        productId: packing.productId,
+        bomId: packing.bomId,
+        warehouseId: packing.warehouseId,
+        plannedQty: packing.plannedQty,
+        actualQty: packing.actualQty,
+        notes: packing.notes,
+      })
+    } else {
+      toast('Packing updated', packing.packingNo)
+    }
     return packing
   },
 
@@ -5674,7 +5715,12 @@ export const db = {
         row.id === id ? { ...row, status: 'cancelled' as const } : row,
       ),
     })
-    toast('Packing cancelled', existing.packingNo, 'warning')
+    if (identityApiUrl()) {
+      if (!beginManufacturingPost()) return true
+      queueManufacturingWrite('packing.cancel', { id })
+    } else {
+      toast('Packing cancelled', existing.packingNo, 'warning')
+    }
     return true
   },
 
@@ -5703,9 +5749,16 @@ export const db = {
     packingConfirmInFlight = true
     try {
       const posted = postPackingAssembly(existing, { acceptSnapshot: options?.acceptSnapshot === true })
+      if (posted && identityApiUrl()) {
+        if (!manufacturingPostInFlight) manufacturingPostInFlight = true
+        queueManufacturingWrite('packing.confirm', {
+          id,
+          acceptSnapshot: options?.acceptSnapshot === true,
+        })
+      }
       return posted
     } finally {
-      packingConfirmInFlight = false
+      if (!identityApiUrl()) packingConfirmInFlight = false
     }
   },
 
@@ -5717,6 +5770,10 @@ export const db = {
   },
 
   createProductionOrder(input: ProductionInput) {
+    if (!hasPermission(state, 'manufacturing.create')) {
+      toast('Permission denied', 'You cannot create production.', 'danger')
+      return null
+    }
     const bom = state.boms.find((item) => item.id === input.bomId)
     const product = productById(input.productId)
     if (!bom || !product) {
@@ -5755,7 +5812,25 @@ export const db = {
       costEstimate: consumptionCost(state, consumptions),
     }
     setData({ productionOrders: [order, ...state.productionOrders] })
-    toast('Production order created', order.orderNo)
+    if (identityApiUrl()) {
+      if (!beginManufacturingPost()) return order
+      queueManufacturingWrite('productionOrders.create', {
+        clientId: order.id,
+        productId: input.productId,
+        bomId: input.bomId,
+        warehouseId: input.warehouseId,
+        plannedQty: input.plannedQty,
+        plannedStart: input.plannedStart,
+        plannedEnd: input.plannedEnd,
+        operator: input.operator,
+        notes: input.notes,
+        status: input.status ?? 'planned',
+        batchNo: order.batchNo,
+        expiryDate: order.expiryDate,
+      })
+    } else {
+      toast('Production order created', order.orderNo)
+    }
     return order
   },
 
@@ -5790,7 +5865,12 @@ export const db = {
           : item,
       ),
     })
-    toast('Production order updated')
+    if (identityApiUrl()) {
+      if (!beginManufacturingPost()) return
+      queueManufacturingWrite('productionOrders.update', { id, ...patch })
+    } else {
+      toast('Production order updated')
+    }
   },
 
   startProduction(id: string, options?: { ignoreShortage?: boolean }) {
@@ -5816,7 +5896,12 @@ export const db = {
           : item,
       ),
     })
-    toast('Production started', order.orderNo)
+    if (identityApiUrl()) {
+      if (!beginManufacturingPost()) return true
+      queueManufacturingWrite('productionOrders.start', { id, ignoreShortage: options?.ignoreShortage === true })
+    } else {
+      toast('Production started', order.orderNo)
+    }
     return true
   },
 
@@ -5829,7 +5914,8 @@ export const db = {
     setData({
       productionOrders: state.productionOrders.map((item) => (item.id === id ? { ...item, status: 'paused' as const } : item)),
     })
-    toast('Production paused', order.orderNo, 'info')
+    if (identityApiUrl()) queueManufacturingWrite('productionOrders.pause', { id })
+    else toast('Production paused', order.orderNo, 'info')
   },
 
   resumeProduction(id: string) {
@@ -5838,7 +5924,8 @@ export const db = {
     setData({
       productionOrders: state.productionOrders.map((item) => (item.id === id ? { ...item, status: 'in_progress' as const } : item)),
     })
-    toast('Production resumed', order.orderNo)
+    if (identityApiUrl()) queueManufacturingWrite('productionOrders.resume', { id })
+    else toast('Production resumed', order.orderNo)
   },
 
   cancelProduction(id: string) {
@@ -5850,7 +5937,8 @@ export const db = {
     setData({
       productionOrders: state.productionOrders.map((item) => (item.id === id ? { ...item, status: 'cancelled' as const } : item)),
     })
-    toast('Production cancelled', order.orderNo, 'warning')
+    if (identityApiUrl()) queueManufacturingWrite('productionOrders.cancel', { id })
+    else toast('Production cancelled', order.orderNo, 'warning')
   },
 
   updateConsumption(id: string, lines: Array<{ productId: string; actualQty: number; notes?: string }>) {
@@ -5867,6 +5955,7 @@ export const db = {
           : item,
       ),
     })
+    if (identityApiUrl()) queueManufacturingWrite('productionOrders.updateConsumption', { id, lines })
   },
 
   addConsumptionLine(id: string, productId: string, qty: number) {
@@ -5886,7 +5975,8 @@ export const db = {
         item.id === id ? { ...item, consumptions, consumptionConfirmed: false, costEstimate: consumptionCost(state, consumptions) } : item,
       ),
     })
-    toast('Extra material added', product.name)
+    if (identityApiUrl()) queueManufacturingWrite('productionOrders.addLine', { id, productId, qty })
+    else toast('Extra material added', product.name)
   },
 
   confirmConsumption(id: string) {
@@ -5895,7 +5985,8 @@ export const db = {
     setData({
       productionOrders: state.productionOrders.map((item) => (item.id === id ? { ...item, consumptionConfirmed: true } : item)),
     })
-    toast('Consumption confirmed', order.orderNo)
+    if (identityApiUrl()) queueManufacturingWrite('productionOrders.confirmConsumption', { id })
+    else toast('Consumption confirmed', order.orderNo)
   },
 
   recordWastage(id: string, input: { kind: WastageKind; productId?: string; qty: number; unit: string; reason: string; notes: string }) {
@@ -5909,10 +6000,15 @@ export const db = {
     setData({
       productionOrders: state.productionOrders.map((item) => (item.id === id ? { ...item, wastage: [...item.wastage, row] } : item)),
     })
-    toast('Wastage recorded')
+    if (identityApiUrl()) queueManufacturingWrite('productionOrders.recordWastage', { id, ...input })
+    else toast('Wastage recorded')
   },
 
   completeProduction(id: string, input: { actualQty: number; batchNo: string; expiryDate?: string }) {
+    if (!hasPermission(state, 'manufacturing.complete')) {
+      toast('Permission denied', 'You cannot complete production.', 'danger')
+      return false
+    }
     const order = state.productionOrders.find((item) => item.id === id)
     if (!order) return false
     if (order.posted || order.status === 'completed') {
@@ -6012,7 +6108,17 @@ export const db = {
       maybeStockAlerts(line.productId, order.warehouseId, qty)
     }
     emit()
-    toast('Production completed', `${order.orderNo} · ${batchNo}`)
+    if (identityApiUrl()) {
+      if (!beginManufacturingPost()) return true
+      queueManufacturingWrite('productionOrders.complete', {
+        id,
+        actualQty: input.actualQty,
+        batchNo,
+        expiryDate: input.expiryDate,
+      })
+    } else {
+      toast('Production completed', `${order.orderNo} · ${batchNo}`)
+    }
     return true
   },
 
@@ -6033,6 +6139,7 @@ export const db = {
       .join(', ')
     notify('production', 'Purchase request (preview)', `PRQ created for ${order.orderNo}: ${names}`, '/purchases/new')
     toast('Purchase request created', 'Preview only — not sent to Purchases yet.', 'info')
+    if (identityApiUrl()) queueManufacturingWrite('productionOrders.createPurchaseRequest', { id: orderId })
   },
 
   acceptSession(id: string) {
@@ -9625,6 +9732,47 @@ startPurchaseHydration({
   },
   onSettled() {
     purchasePostInFlight = false
+  },
+})
+
+startManufacturingHydration({
+  apply(slice) {
+    setData({
+      packingAssemblies: slice.packingAssemblies,
+      productionOrders: slice.productionOrders,
+      batches: slice.batches,
+      ...(slice.inventory ? { inventory: slice.inventory } : {}),
+      ...(slice.stockMovements ? { stockMovements: slice.stockMovements } : {}),
+    })
+  },
+  actorId: () => currentUser(state).id,
+  onError(message) {
+    toast('Could not save to the server', message, 'danger')
+  },
+  onSaved(action, _payload, data) {
+    if (action === 'packing.create') toast('Packing saved', String((data.packing as PackingAssembly | undefined)?.packingNo ?? ''))
+    if (action === 'packing.update' || action === 'packing.refresh') {
+      toast('Packing updated', String((data.packing as PackingAssembly | undefined)?.packingNo ?? ''))
+    }
+    if (action === 'packing.cancel') toast('Packing cancelled', String((data.packing as PackingAssembly | undefined)?.packingNo ?? ''), 'warning')
+    if (action === 'packing.confirm') {
+      const packing = data.packing as PackingAssembly | undefined
+      toast('Packing confirmed', packing ? `${packing.packingNo} · ${formatQty(packing.actualQty)} ${packing.unit}` : '')
+    }
+    if (action === 'productionOrders.create') toast('Production order created', String((data.productionOrder as ProductionOrder | undefined)?.orderNo ?? ''))
+    if (action === 'productionOrders.update') toast('Production order updated')
+    if (action === 'productionOrders.start') toast('Production started', String((data.productionOrder as ProductionOrder | undefined)?.orderNo ?? ''))
+    if (action === 'productionOrders.pause') toast('Production paused', String((data.productionOrder as ProductionOrder | undefined)?.orderNo ?? ''), 'info')
+    if (action === 'productionOrders.resume') toast('Production resumed', String((data.productionOrder as ProductionOrder | undefined)?.orderNo ?? ''))
+    if (action === 'productionOrders.cancel') toast('Production cancelled', String((data.productionOrder as ProductionOrder | undefined)?.orderNo ?? ''), 'warning')
+    if (action === 'productionOrders.complete') {
+      const order = data.productionOrder as ProductionOrder | undefined
+      toast('Production completed', order ? `${order.orderNo} · ${order.batchNo}` : '')
+    }
+  },
+  onSettled() {
+    manufacturingPostInFlight = false
+    packingConfirmInFlight = false
   },
 })
 
