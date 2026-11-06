@@ -156,7 +156,7 @@ function createReceivingRepository(sheetRepository) {
     sheetRepository.replaceObjects(lineSheet, lineRows);
   }
 
-  function appendReceiving(spreadsheet, doc, lineIds) {
+  function appendReceivingHeader(spreadsheet, doc) {
     ensure(spreadsheet);
     var receivingSheet = sheetRepository.getSheet(spreadsheet, 'Receivings');
     sheetRepository.appendObject(receivingSheet, {
@@ -177,10 +177,22 @@ function createReceivingRepository(sheetRepository) {
       status: doc.status,
       stockOrderId: doc.stockOrderId || ''
     });
+  }
+
+  // Appends only the lines that are not stored yet, so a retry after a partial
+  // write never duplicates a line.
+  function appendMissingLines(spreadsheet, doc, lineIds) {
+    ensure(spreadsheet);
     var lineSheet = sheetRepository.getSheet(spreadsheet, 'ReceivingLines');
+    var stored = {};
+    readLines(spreadsheet).forEach(function (row) {
+      stored[row.id] = true;
+    });
     (doc.items || []).forEach(function (item, index) {
+      var lineId = (lineIds && lineIds[index]) || (doc.id + '_ln' + (index + 1));
+      if (stored[lineId]) return;
       sheetRepository.appendObject(lineSheet, {
-        id: (lineIds && lineIds[index]) || (doc.id + '_ln' + (index + 1)),
+        id: lineId,
         receivingId: doc.id,
         productId: item.productId,
         qty: item.qty,
@@ -192,6 +204,11 @@ function createReceivingRepository(sheetRepository) {
         condition: item.condition || ''
       });
     });
+  }
+
+  function appendReceiving(spreadsheet, doc, lineIds) {
+    appendReceivingHeader(spreadsheet, doc);
+    appendMissingLines(spreadsheet, doc, lineIds);
   }
 
   function readReceivingLink(spreadsheet, receivingId) {
@@ -327,6 +344,8 @@ function createReceivingRepository(sheetRepository) {
     readReceivings: readReceivings,
     writeReceivings: writeReceivings,
     appendReceiving: appendReceiving,
+    appendReceivingHeader: appendReceivingHeader,
+    appendMissingLines: appendMissingLines,
     readReceivingLink: readReceivingLink,
     linkReceivingToPurchase: linkReceivingToPurchase,
     readStockOrders: readStockOrders,

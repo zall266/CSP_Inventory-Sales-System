@@ -228,3 +228,228 @@ test('mark ordered and cancel stock order', () => {
   assert.equal(cancelled.ok, true)
   assert.equal(cancelled.data.stockOrders.find((row) => row.id === orderId)?.status, 'cancelled')
 })
+
+function twoLinePayload(overrides = {}) {
+  return {
+    actorUserId: 'u-aina',
+    clientId: 'rcv_fault',
+    warehouseId: 'wh-main',
+    source: 'shopee',
+    stockOrderId: 'ORDER_ID',
+    items: [
+      { productId: 'prd-sugar', qty: 2, condition: 'Baik' },
+      { productId: 'prd-flour', qty: 3, condition: 'Baik' },
+    ],
+    ...overrides,
+  }
+}
+
+function faultReady() {
+  const backend = ready()
+  assert.equal(call(backend, 'products.create', {
+    actorUserId: 'u-aina', id: 'prd-flour', name: 'UAT Flour', categoryId: 'cat-ing', unit: 'KG',
+    purchaseUnit: 'BAG', purchaseConversionQty: 10, purchaseCost: 20, sellingPrice: 5, trackExpiry: false,
+  }).ok, true)
+  const marked = call(backend, 'inventory.markOrdered', {
+    actorUserId: 'u-aina', productId: 'prd-sugar', warehouseId: 'wh-main', channel: 'Shopee',
+  })
+  assert.equal(marked.ok, true)
+  backend.orderId = marked.data.stockOrders[0].id
+  assert.equal(call(backend, 'receivings.list', { actorUserId: 'u-aina' }).ok, true)
+  return backend
+}
+
+function countWrites(backend, failAt) {
+  const state = { writes: 0, failed: false }
+  for (const name of ['appendObject', 'replaceObjects']) {
+    const original = backend.sheets[name]
+    backend.sheets[name] = (...args) => {
+      state.writes += 1
+      if (failAt && state.writes === failAt && !state.failed) {
+        state.failed = true
+        throw new Error('simulated write failure')
+      }
+      return original(...args)
+    }
+  }
+  return state
+}
+
+function receivingState(backend, payload) {
+  const inv = call(backend, 'inventory.get', { actorUserId: 'u-aina' })
+  const listed = call(backend, 'receivings.list', { actorUserId: 'u-aina' })
+  const audits = backend.sheets.readObjects(backend.spreadsheet.getSheetByName('AuditLogs'))
+    .filter((row) => row.action === 'receivings.create' && row.entityId === payload.clientId)
+  const idem = backend.sheets.readObjects(backend.spreadsheet.getSheetByName('Idempotency'))
+    .filter((row) => row.idempotencyKey === 'rcv-fault-key')
+  const lineRows = backend.sheets.readObjects(backend.spreadsheet.getSheetByName('ReceivingLines'))
+    .filter((row) => row.receivingId === payload.clientId)
+  return {
+    sugar: qty(inv.data, 'prd-sugar', 'wh-main'),
+    flour: qty(inv.data, 'prd-flour', 'wh-main'),
+    movements: inv.data.stockMovements
+      .filter((row) => row.type === 'receiving')
+      .map((row) => `${row.id}|${row.reference}|${row.productId}|${row.stockIn}|${row.balance}`)
+      .sort(),
+    receivings: listed.data.receivings.filter((row) => row.id === payload.clientId).length,
+    receivingNos: listed.data.receivings.map((row) => row.receivingNo),
+    lines: lineRows.length,
+    audits: audits.length,
+    idempotency: idem.length,
+    orderStatus: listed.data.stockOrders.find((row) => row.productId === 'prd-sugar')?.status,
+  }
+}
+
+test('retry after a failure at every write boundary never double posts', () => {
+  const clean = faultReady()
+  const payload = twoLinePayload({ stockOrderId: clean.orderId })
+  const counter = countWrites(clean, 0)
+  const ok = post(clean, 'receivings.create', payload, { idempotencyKey: 'rcv-fault-key' })
+  assert.equal(ok.ok, true)
+  const total = counter.writes
+  assert.ok(total >= 8, `expected several write boundaries, got ${total}`)
+  const expected = receivingState(clean, payload)
+  assert.equal(expected.movements.length, 2)
+  assert.equal(expected.receivings, 1)
+  assert.equal(expected.lines, 2)
+  assert.equal(expected.audits, 1)
+  assert.equal(expected.idempotency, 1)
+  assert.equal(expected.orderStatus, 'received')
+
+  for (let failAt = 1; failAt <= total; failAt += 1) {
+    const backend = faultReady()
+    const livePayload = twoLinePayload({ stockOrderId: backend.orderId })
+    const fault = countWrites(backend, failAt)
+    const first = post(backend, 'receivings.create', livePayload, { idempotencyKey: 'rcv-fault-key' })
+    assert.equal(first.ok, false, `write ${failAt} should have failed the first attempt`)
+    assert.equal(fault.failed, true)
+    const retry = post(backend, 'receivings.create', livePayload, { idempotencyKey: 'rcv-fault-key' })
+    assert.equal(retry.ok, true, `retry after failing write ${failAt}: ${retry.error?.message}`)
+    assert.deepEqual(receivingState(backend, livePayload), expected, `state after failing write ${failAt}`)
+    const replay = post(backend, 'receivings.create', livePayload, { idempotencyKey: 'rcv-fault-key' })
+    assert.equal(replay.ok, true)
+    assert.equal(replay.meta.idempotentReplay, true)
+    assert.deepEqual(receivingState(backend, livePayload), expected, `state after replay following write ${failAt}`)
+  }
+})
+
+test('a retry with a new idempotency key resumes the same client id without double posting', () => {
+  const backend = faultReady()
+  const payload = twoLinePayload({ stockOrderId: backend.orderId })
+  countWrites(backend, 2)
+  assert.equal(post(backend, 'receivings.create', payload, { idempotencyKey: 'first-key' }).ok, false)
+  const retry = post(backend, 'receivings.create', payload, { idempotencyKey: 'second-key' })
+  assert.equal(retry.ok, true)
+  const state = receivingState(backend, payload)
+  assert.equal(state.movements.length, 2)
+  assert.equal(state.receivings, 1)
+  assert.equal(state.audits, 1)
+})
+
+test('a retry that changes the receiving after a partial failure is refused', () => {
+  const backend = faultReady()
+  const payload = twoLinePayload({ stockOrderId: backend.orderId })
+  countWrites(backend, 2)
+  assert.equal(post(backend, 'receivings.create', payload, { idempotencyKey: 'rcv-fault-key' }).ok, false)
+  const changed = post(backend, 'receivings.create', {
+    ...payload,
+    items: [{ productId: 'prd-sugar', qty: 9, condition: 'Baik' }, payload.items[1]],
+  }, { idempotencyKey: 'rcv-fault-key' })
+  assert.equal(changed.error?.code, 'CONFLICT')
+  const state = receivingState(backend, payload)
+  assert.equal(state.movements.length, 1)
+  assert.equal(state.receivings, 0)
+})
+
+function failOnceOnAudit(backend) {
+  const original = backend.sheets.appendObject
+  let failed = false
+  backend.sheets.appendObject = (sheet, record) => {
+    if (!failed && record && record.action === 'receivings.create') {
+      failed = true
+      throw new Error('simulated write failure')
+    }
+    return original(sheet, record)
+  }
+}
+
+function sheetSnapshot(backend) {
+  return JSON.parse(JSON.stringify({
+    StockMovements: backend.spreadsheet.store.StockMovements || [],
+    InventoryBalances: backend.spreadsheet.store.InventoryBalances || [],
+    Receivings: backend.spreadsheet.store.Receivings || [],
+    ReceivingLines: backend.spreadsheet.store.ReceivingLines || [],
+    StockOrders: backend.spreadsheet.store.StockOrders || [],
+    AuditLogs: backend.spreadsheet.store.AuditLogs || [],
+  }))
+}
+
+function rejectAlteredRetryAfterPartialCreate(label, mutateItems) {
+  const backend = faultReady()
+  const payload = twoLinePayload({ stockOrderId: backend.orderId })
+  failOnceOnAudit(backend)
+  assert.equal(post(backend, 'receivings.create', payload, { idempotencyKey: 'rcv-fault-key' }).ok, false)
+  const before = sheetSnapshot(backend)
+  assert.ok(before.Receivings.length > 1, `${label}: receiving header should exist after the partial write`)
+  assert.equal(before.ReceivingLines.filter((row) => row[1] === payload.clientId).length, 2, `${label}: both lines should exist after the partial write`)
+  const rejected = post(backend, 'receivings.create', {
+    ...payload,
+    items: mutateItems(payload.items),
+  }, { idempotencyKey: 'rcv-fault-key' })
+  assert.equal(rejected.error?.code, 'CONFLICT', label)
+  assert.deepEqual(sheetSnapshot(backend), before, `${label}: rejected retry must not write`)
+}
+
+test('a retry that removes an item after a partial failure is refused', () => {
+  rejectAlteredRetryAfterPartialCreate('remove item', (items) => [items[0]])
+})
+
+test('a retry that adds an item after a partial failure is refused', () => {
+  rejectAlteredRetryAfterPartialCreate('add item', (items) => [
+    ...items,
+    { productId: 'prd-sugar', qty: 1, condition: 'Baik' },
+  ])
+})
+
+test('a retry that reorders items after a partial failure is refused', () => {
+  rejectAlteredRetryAfterPartialCreate('reorder items', (items) => [items[1], items[0]])
+})
+
+test('a completed receiving is returned for its own key and refused for another key', () => {
+  const backend = faultReady()
+  const payload = twoLinePayload({ stockOrderId: backend.orderId })
+  const created = post(backend, 'receivings.create', payload, { idempotencyKey: 'rcv-fault-key' })
+  assert.equal(created.ok, true)
+  const before = receivingState(backend, payload)
+  const direct = (key) => {
+    try {
+      return backend.receivings.dispatch({
+        v: 1, requestId: 'direct', action: 'receivings.create', payload, idempotencyKey: key,
+      })
+    } catch (error) {
+      return { ok: false, error: { code: error.code } }
+    }
+  }
+  const same = direct('rcv-fault-key')
+  assert.equal(same.ok, true)
+  assert.equal(same.data.receiving.receivingNo, created.data.receiving.receivingNo)
+  const other = direct('another-key')
+  assert.equal(other.error?.code, 'CONFLICT')
+  assert.deepEqual(receivingState(backend, payload), before)
+})
+
+test('a reused receiving number after a failed attempt is refused instead of duplicated', () => {
+  const backend = faultReady()
+  const payload = twoLinePayload({ stockOrderId: backend.orderId, clientId: 'rcv_a' })
+  countWrites(backend, 2)
+  assert.equal(post(backend, 'receivings.create', payload, { idempotencyKey: 'key-a' }).ok, false)
+  const other = post(backend, 'receivings.create', {
+    actorUserId: 'u-aina', clientId: 'rcv_b', warehouseId: 'wh-main',
+    items: [{ productId: 'prd-flour', qty: 1, condition: 'Baik' }],
+  }, { idempotencyKey: 'key-b' })
+  assert.equal(other.ok, true)
+  const retry = post(backend, 'receivings.create', payload, { idempotencyKey: 'key-a' })
+  assert.equal(retry.error?.code, 'CONFLICT')
+  const nos = call(backend, 'receivings.list', { actorUserId: 'u-aina' }).data.receivings.map((row) => row.receivingNo)
+  assert.equal(new Set(nos).size, nos.length)
+})
