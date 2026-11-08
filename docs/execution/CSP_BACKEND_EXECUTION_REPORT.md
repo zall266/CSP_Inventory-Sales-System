@@ -1,8 +1,8 @@
 # CSP Backend Execution Report
 
-Closeout sprint for Steps 9, 10, and 11. Step 12 was not started.
+Steps 9, 10, and 11 are **PASS / LOCKED** by owner authorization dated 9 Nov 2026. Step 12 Daily Sessions is in progress.
 
-Statuses used here: PASS / OWNER UAT REQUIRED / BLOCKED / IN PROGRESS. Untouched later modules stay NOT STARTED.
+Statuses used here: PASS / PASS / LOCKED / OWNER UAT REQUIRED / BLOCKED / IN PROGRESS. Untouched later modules stay NOT STARTED.
 
 Integration branch: `cursor/dev-frontend-github-pages-d9ac` at `c7a88d33797511922b09a2b99632c8b41fb347db` (merge of PR #100).
 Locked Apps Script: `1mkRzptY0mzHnzOFB8TA6AGIZyv6q2gJq-QdKPBWtV91oq5okHWVpY4Jj`.
@@ -32,7 +32,7 @@ Historical rows were read before and after the run and were identical. They were
 
 ## Step 9 — Purchases and returns — API run record
 
-Status after the direct workbook read is **PASS**, not LOCKED. See the reconciliation section.
+Status after the 9 Nov 2026 owner approval is **PASS / LOCKED**. See **OFFICIAL LOCK — 2026-11-09**.
 
 Implementation is on v19 (purchases module merged before this SHA). This closeout did not change purchase code.
 
@@ -53,7 +53,7 @@ This block is the API run. The workbook read later in this file is the status so
 
 ## Step 10 — Receiving and to-order — API run record
 
-Status after the direct workbook read is **PASS**, not LOCKED. See the reconciliation section.
+Status after the 9 Nov 2026 owner approval is **PASS / LOCKED**. See **OFFICIAL LOCK — 2026-11-09**.
 
 PR #99 (`9e81fcd`) and the server-date change are inside v19. Product-overlap and warehouse checks are the code that ran.
 
@@ -77,7 +77,7 @@ This block is the API run. Do not edit RCV-000001, RCV-000002, or PUR-000009.
 
 ## Step 11 — Production orders and packing — API run record
 
-Status after the direct workbook read is **PASS**, not LOCKED. See the reconciliation section.
+Status after the 9 Nov 2026 owner approval is **PASS / LOCKED**. See **OFFICIAL LOCK — 2026-11-09**.
 
 PR #100 merged as `c7a88d3` and is the Apps Script v19 description. No defect was found against the packing or production-order workflow.
 
@@ -122,24 +122,24 @@ Known limits, not defects:
 - New receiving dates are stored as UTC ISO (`toISOString()`), which is the server clock. A date-only usage value is stored as `T08:00:00.000+08:00`.
 - The historical `returnedQty=1` pair is explained in the reconciliation section. Classification: **VALID**. The rows were not modified and were not waived.
 
-The owner-action list and module statuses below this paragraph are replaced by **FINAL OWNER UAT RECONCILIATION — 2026-11-08**.
+The owner-action list and module statuses below this paragraph are replaced by **FINAL OWNER UAT RECONCILIATION — 2026-11-08** and **OFFICIAL LOCK — 2026-11-09**.
 
 ## Roadmap
 
 | Module | Status after direct workbook read |
 | --- | --- |
 | 0–8 | PASS (previously verified; opening-balance header `OB-0001` still present and confirmed) |
-| 9 Purchases and returns | **PASS** — workbook and AuditLogs reconciled. Not LOCKED |
-| 10 Receiving and to-order | **PASS** — workbook and AuditLogs reconciled. Not LOCKED |
-| 11 Production orders and packing | **PASS** — workbook and AuditLogs reconciled. Not LOCKED |
-| 12 Daily sessions | NOT STARTED |
+| 9 Purchases and returns | **PASS / LOCKED** — owner accepted the 2026-11-08 workbook reconciliation on 9 Nov 2026 |
+| 10 Receiving and to-order | **PASS / LOCKED** — owner accepted the 2026-11-08 workbook reconciliation on 9 Nov 2026 |
+| 11 Production orders and packing | **PASS / LOCKED** — owner accepted the 2026-11-08 workbook reconciliation on 9 Nov 2026 |
+| 12 Daily sessions | IN PROGRESS |
 | 13–18 | NOT STARTED |
 
 PRs: Step 10 linkage [#99](https://github.com/zall266/CSP_Inventory-Sales-System/pull/99) merged `9e81fcd`. Step 11 [#100](https://github.com/zall266/CSP_Inventory-Sales-System/pull/100) merged `c7a88d3`. This closeout report is a docs-only follow-up; it does not deploy.
 
 ## FINAL OWNER UAT RECONCILIATION — 2026-11-08
 
-Read-only audit. No workbook cell, Apps Script deployment, GitHub Pages deployment, or application file was changed. Step 12 remains NOT STARTED. Nothing in this section is a waiver, a lock, or a data repair.
+Read-only audit. No workbook cell, Apps Script deployment, GitHub Pages deployment, or application file was changed. Nothing in this section was a waiver, a lock, or a data repair at the time it was written. The owner lock is recorded in **OFFICIAL LOCK — 2026-11-09**.
 
 Workbook export: `https://docs.google.com/spreadsheets/d/1TPmkASdzlGssGyAisklf4QkLcxWYbHHhUSxntgLha94/export?format=xlsx`, HTTP 200, 513,527 bytes, file time 8 Nov 2026, 10:54 PM MYT. All figures below are from that file. The Apps Script API was not called during this audit.
 
@@ -273,22 +273,34 @@ Direct read of all 145 AuditLogs rows. Each successful closeout action listed ab
 
 The dual `returnedQty=1` observation is **VALID**. PUR-000001 and PUR-000002 each received 1 of `p-cp` and each returned 1, through PR-000002 and PR-000001 respectively. Stock movements and the `p-cp` balance of 38 agree. Classification: **VALID — no corrective action required.** This is not a waiver. The owner is not asked to forgive a defect. The rows stay as they are.
 
-### G. Owner action checklist
+### G. Owner action checklist (closed 9 Nov 2026)
 
-1. Accept or dispute this reconciliation. The workbook was read from the export above; no further tab inspection is required unless you dispute a figure.
-2. Decide whether Steps 9, 10, and 11 may be marked LOCKED. This audit does not lock them.
-3. Leave `RCV-000001`, `RCV-000002`, `PUR-000009`, `PUR-000001`, `PUR-000002`, `PAY-000001`, and `PR-000002` unchanged.
+The owner accepted this reconciliation. Remaining instruction: leave `RCV-000001`, `RCV-000002`, `PUR-000009`, `PUR-000001`, `PUR-000002`, `PAY-000001`, `PR-000001`, and `PR-000002` unchanged.
 
-No data correction is proposed.
+### H. Final module status (superseded 9 Nov 2026)
 
-### H. Final module status
+See **OFFICIAL LOCK — 2026-11-09** below. At the time of this reconciliation the three modules were PASS and not yet locked.
 
-| Module | Status | Lock |
-| --- | --- | --- |
-| 9 Purchases and returns | **PASS** | Not LOCKED |
-| 10 Receiving and to-order | **PASS** | Not LOCKED |
-| 11 Production orders and packing | **PASS** | Not LOCKED |
-| 12 Daily sessions | NOT STARTED | — |
+## OFFICIAL LOCK — 2026-11-09
 
-No DATA DISCREPANCY, BLOCKED, or INSUFFICIENT EVIDENCE status remains for these three modules on the evidence above. The prior API-only limitation on AuditLogs is closed by the direct tab read. Step 12 stays NOT STARTED until you accept this reconciliation and explicitly allow the next module.
+The owner reviewed and **ACCEPTED** **FINAL OWNER UAT RECONCILIATION — 2026-11-08**, including the direct DEV workbook export (8 Nov 2026, 10:54 PM MYT) and all 145 AuditLogs rows.
+
+| Module | Official status |
+| --- | --- |
+| 9 Purchases and returns | **PASS / LOCKED** |
+| 10 Receiving and to-order | **PASS / LOCKED** |
+| 11 Production orders and packing | **PASS / LOCKED** |
+
+Recorded decisions:
+
+- Historical `PUR-000001`, `PUR-000002`, `PAY-000001`, `PR-000001`, and `PR-000002` are **VALID**. Two `returnedQty=1` values are two independent returns, each on its own purchase line, each with its own return document and stock-out.
+- No waiver or data correction is required.
+- Historical records remain unchanged. `RCV-000001`, `RCV-000002`, and `PUR-000009` remain unchanged.
+- Existing closeout evidence (`CLOSEOUT-20261108`) is accepted.
+- The planned production date format on `PO-0001` (`Sun Nov 08 2026 00:00:00 GMT+0800 (Singapore Standard Time)`) is non-blocking and does not reopen Step 11.
+- Rejected API requests remain supported by the prior API test evidence and by the absence of a success workbook row. No fabricated rejection rows were added.
+
+Locked-module protection: do not redesign or refactor Steps 9, 10, or 11. A later change requires a proven production defect, a security issue, a data integrity issue, or a documented dependency of a later module, plus explicit owner authorization and regression tests.
+
+Step 12 Daily Sessions is authorized to begin. This lock section is documentation only. It does not deploy and does not change workbook data.
 
