@@ -1,6 +1,6 @@
-// Module 11 production orders and packing.
-// Ledger posts only on packing.confirm and productionOrders.complete.
-// MANUAL components do not auto-out. Confirm/complete are retry-safe.
+// Module 11 production orders and packing. Module 12 daily sessions.
+// Ledger posts on packing.confirm, productionOrders.complete, sessions.complete,
+// and completed-session stock edits. MANUAL components do not auto-out.
 
 var PACKING_ACTIONS = {
   'packing.list': true,
@@ -29,17 +29,43 @@ var PRODUCTION_ORDER_ACTIONS = {
   'productionOrders.createPurchaseRequest': true
 };
 
+var SESSION_ACTIONS = {
+  'sessions.list': true,
+  'sessions.get': true,
+  'sessions.create': true,
+  'sessions.accept': true,
+  'sessions.start': true,
+  'sessions.cancelPlanned': true,
+  'sessions.update': true,
+  'sessions.amend': true,
+  'sessions.changeTarget': true,
+  'sessions.togglePicking': true,
+  'sessions.addMaterial': true,
+  'sessions.saveResult': true,
+  'sessions.saveDistribution': true,
+  'sessions.saveMaterialClosing': true,
+  'sessions.complete': true,
+  'sessions.continueCarryForward': true,
+  'sessions.editCompleted': true,
+  'sessions.editCompletedClosing': true
+};
+
 function createManufacturingService(deps) {
   var sheets = deps.sheetRepository;
+  var drive = deps.driveStorage;
   var repository = createManufacturingRepository(sheets);
   var products = createProductRepository(sheets);
   var inventoryRepo = createInventoryRepository(sheets);
   var bomRepo = createBomRepository(sheets);
+  var warehouseRepo = createWarehouseRepository(sheets);
   var masters = createMasterRepository(sheets);
   var audit = deps.audit || createAuditService(sheets);
+  var SESSION_PHOTO_FOLDER = 'RecipePhotos';
+  var SESSION_PHOTO_MAX_BYTES = 5 * 1024 * 1024;
+  var SESSION_PHOTO_TYPES = { 'image/png': true, 'image/jpeg': true, 'image/webp': true };
 
   function canHandle(action) {
-    return Boolean(PACKING_ACTIONS[action] || PRODUCTION_ORDER_ACTIONS[action]);
+    return Boolean(PACKING_ACTIONS[action] || PRODUCTION_ORDER_ACTIONS[action] || SESSION_ACTIONS[action]);
   }
 
   function text(value) {
@@ -221,12 +247,16 @@ function createManufacturingService(deps) {
   function snapshot(spreadsheet) {
     repository.ensure(spreadsheet);
     inventoryRepo.ensure(spreadsheet);
+    warehouseRepo.ensure(spreadsheet);
     var movements = inventoryRepo.readMovements(spreadsheet);
     movements.reverse();
     return {
       packingAssemblies: repository.readPackings(spreadsheet),
       productionOrders: repository.readOrders(spreadsheet),
       batches: repository.readBatches(spreadsheet),
+      productionSessions: repository.readSessions(spreadsheet),
+      displayStocks: warehouseRepo.readDisplay(spreadsheet),
+      productionBalances: warehouseRepo.readProductionBalances(spreadsheet),
       inventory: products.readBalances(spreadsheet).map(function (row) {
         return { productId: row.productId, warehouseId: row.warehouseId, qty: round2(row.qty) };
       }),
@@ -257,7 +287,7 @@ function createManufacturingService(deps) {
         return;
       }
       var current = qtyOf(balances, line.productId, warehouseId);
-      var balance = round2(current + line.stockIn - line.stockOut);
+      var balance = line.skipInventory ? current : round2(current + line.stockIn - line.stockOut);
       inventoryRepo.appendMovement(spreadsheet, {
         id: movementId,
         date: date,
@@ -271,7 +301,7 @@ function createManufacturingService(deps) {
         user: actor.name,
         notes: line.notes || ''
       });
-      balances = putQty(balances, line.productId, warehouseId, balance);
+      if (!line.skipInventory) balances = putQty(balances, line.productId, warehouseId, balance);
     });
     products.writeBalances(spreadsheet, balances);
     return balances;
@@ -1043,12 +1073,1018 @@ function createManufacturingService(deps) {
     return okEnvelope(state);
   }
 
+  function actorLegacyRole(spreadsheet, actor) {
+    var role = text(actor.role).trim();
+    sheetRows(spreadsheet, 'Roles').forEach(function (row) {
+      if (text(row.id).trim() === text(actor.roleId).trim()) role = text(row.legacyRole).trim() || role;
+    });
+    return role;
+  }
+
+  function defaultWarehouseId(spreadsheet) {
+    var rows = sheetRows(spreadsheet, 'Settings');
+    for (var i = 0; i < rows.length; i += 1) {
+      if (text(rows[i].id).trim() === 'settings') return text(rows[i].defaultWarehouseId).trim() || 'wh-main';
+    }
+    return 'wh-main';
+  }
+
+  function findSession(spreadsheet, payload) {
+    var id = text(payload.id || payload.sessionId).trim();
+    var found = null;
+    repository.readSessions(spreadsheet).forEach(function (row) {
+      if (row.id === id) found = row;
+    });
+    if (!found) throw appError('NOT_FOUND', 'Production session not found');
+    return found;
+  }
+
+  function replaceSession(spreadsheet, session) {
+    var docs = repository.readSessions(spreadsheet);
+    repository.writeSessions(spreadsheet, docs.map(function (row) {
+      return row.id === session.id ? session : row;
+    }));
+    return session;
+  }
+
+  function todayKey() {
+    return businessDate(new Date());
+  }
+
+  function requireToday(session) {
+    if (!sessionIsOperationalToday(session, todayKey())) {
+      throw appError('VALIDATION_ERROR', "Not today's production");
+    }
+  }
+
+  function requireSessionRole(spreadsheet, actor, session) {
+    if (!sessionCanEdit(actorLegacyRole(spreadsheet, actor), session.status)) {
+      throw appError('FORBIDDEN', 'You cannot edit this production session.');
+    }
+  }
+
+  function applyDisplayDelta(rows, productId, warehouseId, delta, at) {
+    var qty = round2(delta);
+    var existing = null;
+    rows.forEach(function (row) {
+      if (row.productId === productId && row.warehouseId === warehouseId) existing = row;
+    });
+    if (!existing) {
+      var nextQty = round2(Math.max(0, qty));
+      if (nextQty <= 0) return rows;
+      return rows.concat([{
+        id: 'ds_' + createId().replace(/-/g, '').slice(0, 10),
+        warehouseId: warehouseId,
+        productId: productId,
+        qty: nextQty,
+        updatedAt: at
+      }]);
+    }
+    return rows.map(function (row) {
+      if (row.id !== existing.id) return row;
+      return {
+        id: row.id,
+        warehouseId: row.warehouseId,
+        productId: row.productId,
+        qty: round2(Math.max(0, row.qty + qty)),
+        updatedAt: at
+      };
+    });
+  }
+
+  function balanceStorageBoxNames(spreadsheet, warehouseId) {
+    var locations = warehouseRepo.readLocations(spreadsheet);
+    var slots = warehouseRepo.readSlots(spreadsheet);
+    var names = [];
+    var seen = {};
+    slots.forEach(function (slot) {
+      if (!slot.active) return;
+      var location = null;
+      locations.forEach(function (row) { if (row.id === slot.locationId) location = row; });
+      if (!location || !location.active || location.type !== 'BALANCE_AREA') return;
+      if (warehouseId && location.warehouseId !== warehouseId) return;
+      var name = 'Box ' + slot.slotNo;
+      var key = location.warehouseId + ':' + name;
+      if (seen[key]) return;
+      seen[key] = true;
+      names.push(name);
+    });
+    return names;
+  }
+
+  function isActiveBalanceStorageBox(spreadsheet, warehouseId, name) {
+    var box = text(name).trim();
+    if (!box) return false;
+    return balanceStorageBoxNames(spreadsheet, warehouseId).indexOf(box) >= 0;
+  }
+
+  function parseRecipePhoto(dataUrl, fileName) {
+    var value = text(dataUrl).trim();
+    if (!value) return null;
+    if (value.indexOf('data:') !== 0) return { stored: value, name: text(fileName).trim() || 'recipe-sheet.jpg' };
+    var match = value.match(/^data:(image\/[a-zA-Z0-9.+-]+);base64,([A-Za-z0-9+/=\s]+)$/);
+    if (!match) throw appError('VALIDATION_ERROR', 'Upload recipe photo');
+    var mime = match[1].toLowerCase();
+    if (mime === 'image/jpg') mime = 'image/jpeg';
+    if (!SESSION_PHOTO_TYPES[mime]) throw appError('VALIDATION_ERROR', 'Use a JPG, PNG, or WebP image up to 5 MB.');
+    var b64 = match[2].replace(/\s/g, '');
+    var padding = b64.endsWith('==') ? 2 : b64.endsWith('=') ? 1 : 0;
+    var bytes = Math.floor((b64.length * 3) / 4) - padding;
+    if (!(bytes > 0) || bytes > SESSION_PHOTO_MAX_BYTES) {
+      throw appError('VALIDATION_ERROR', 'Use a JPG, PNG, or WebP image up to 5 MB.');
+    }
+    return {
+      mime: mime,
+      bytes: typeof Utilities !== 'undefined' && Utilities.base64Decode ? Utilities.base64Decode(b64) : b64,
+      name: text(fileName).trim() || 'recipe-sheet.jpg',
+      dataUrl: value
+    };
+  }
+
+  function storeRecipePhoto(parsed) {
+    if (!parsed) return { id: '', name: '' };
+    if (parsed.stored) return { id: parsed.stored, name: parsed.name };
+    if (drive && typeof Utilities !== 'undefined' && Utilities.newBlob) {
+      drive.createChildFolder(SESSION_PHOTO_FOLDER);
+      var blob = Utilities.newBlob(parsed.bytes, parsed.mime, parsed.name);
+      var uploaded = drive.uploadFile(SESSION_PHOTO_FOLDER, blob, parsed.name);
+      return { id: uploaded.id, name: parsed.name };
+    }
+    return { id: parsed.dataUrl || parsed.stored || '', name: parsed.name };
+  }
+
+  function emptySessionItem(sessionId, productId, bomId, targetQty) {
+    return {
+      id: 'psi_' + createId().replace(/-/g, '').slice(0, 10),
+      sessionId: sessionId,
+      productId: productId,
+      bomId: bomId || '',
+      originalTargetQty: targetQty,
+      targetQty: targetQty,
+      actualQty: 0,
+      shortProductionQty: 0,
+      shortProductionReason: '',
+      productionBalanceQty: 0,
+      balanceLocation: 'Main Warehouse',
+      balanceContainer: '',
+      wasteQty: 0,
+      wasteReason: '',
+      notes: '',
+      displayQty: 0,
+      cartonQty: 0
+    };
+  }
+
+  function activeBomForProduct(boms, productId) {
+    var found = null;
+    (boms || []).forEach(function (row) {
+      if (row.productId === productId && row.status === 'active') found = row;
+    });
+    return found;
+  }
+
+  function createSession(spreadsheet, payload, requestId, actor) {
+    if (!sessionCanRun(actorLegacyRole(spreadsheet, actor))) {
+      throw appError('FORBIDDEN', 'You cannot create a production session.');
+    }
+    var items = (payload.items || []).filter(function (row) { return Number(row.targetQty) > 0; });
+    if (!items.length) throw appError('VALIDATION_ERROR', 'Add products to the daily plan');
+    items.forEach(function (row) {
+      if (!Number.isFinite(Number(row.targetQty)) || Number(row.targetQty) <= 0) {
+        throw appError('VALIDATION_ERROR', 'Target must be greater than zero');
+      }
+    });
+    var warehouseId = text(payload.warehouseId).trim() || defaultWarehouseId(spreadsheet);
+    requireCompanyWarehouse(spreadsheet, warehouseId);
+    var productionDate = normalizeBusinessDate(payload.productionDate || todayKey());
+    var boms = bomRepo.readBoms(spreadsheet);
+    var productList = products.readProducts(spreadsheet);
+    var docs = repository.readSessions(spreadsheet);
+    var id = clientId(payload.clientId || payload.id, 'ps');
+    docs.forEach(function (row) {
+      if (row.id === id) throw appError('CONFLICT', 'Production session already exists.');
+    });
+    var session = {
+      id: id,
+      productionDate: productionDate,
+      reference: sessionNextReference(docs, productionDate),
+      status: 'planned',
+      warehouseId: warehouseId,
+      createdBy: actor.name,
+      createdAt: nowIso(),
+      acceptedBy: '',
+      acceptedAt: '',
+      startedBy: '',
+      startedAt: '',
+      completedBy: '',
+      completedAt: '',
+      recipePhoto: '',
+      recipePhotoName: '',
+      uploadedBy: '',
+      uploadedAt: '',
+      notes: text(payload.notes),
+      posted: false,
+      items: items.map(function (row) {
+        var product = requireActiveProduct(productList, row.productId, 'Choose a finished product');
+        var bom = activeBomForProduct(boms, product.id);
+        return emptySessionItem(id, product.id, bom ? bom.id : '', Number(row.targetQty));
+      }),
+      picking: [],
+      excessReturns: [],
+      targetChanges: [],
+      completedEdits: [],
+      materialAllocations: [],
+      materialAudits: []
+    };
+    repository.writeSessions(spreadsheet, [session].concat(docs));
+    systemAudit(spreadsheet, {
+      userId: actor.id, action: 'sessions.create', entityType: 'productionSession',
+      entityId: session.id, reference: session.reference, before: '', after: 'planned', requestId: requestId
+    });
+    return session;
+  }
+
+  function acceptSession(spreadsheet, payload, requestId, actor) {
+    var existing = findSession(spreadsheet, payload);
+    requireToday(existing);
+    requireSessionRole(spreadsheet, actor, existing);
+    if (existing.status !== 'planned') throw appError('VALIDATION_ERROR', 'Only a planned session can be accepted');
+    var session = Object.assign({}, existing, { status: 'accepted', acceptedBy: actor.name, acceptedAt: nowIso() });
+    replaceSession(spreadsheet, session);
+    systemAudit(spreadsheet, {
+      userId: actor.id, action: 'sessions.accept', entityType: 'productionSession',
+      entityId: session.id, reference: session.reference, before: 'planned', after: 'accepted', requestId: requestId
+    });
+    return session;
+  }
+
+  function startSession(spreadsheet, payload, requestId, actor) {
+    var existing = findSession(spreadsheet, payload);
+    requireToday(existing);
+    requireSessionRole(spreadsheet, actor, existing);
+    if (existing.status === 'planned') throw appError('VALIDATION_ERROR', 'Accept production first');
+    if (existing.status !== 'accepted') throw appError('VALIDATION_ERROR', 'Accept production before starting');
+    var parsed = parseRecipePhoto(payload.recipePhoto, payload.recipePhotoName);
+    if (!parsed) throw appError('VALIDATION_ERROR', 'Upload recipe photo');
+    var stored = storeRecipePhoto(parsed);
+    var plan = sessionBuildPlan(
+      products.readProducts(spreadsheet),
+      bomRepo.readBoms(spreadsheet),
+      warehouseRepo.readProductionBalances(spreadsheet),
+      existing
+    );
+    var session = Object.assign({}, existing, {
+      status: 'in_progress',
+      startedBy: actor.name,
+      startedAt: nowIso(),
+      recipePhoto: stored.id,
+      recipePhotoName: stored.name,
+      uploadedBy: actor.name,
+      uploadedAt: nowIso(),
+      picking: plan.picking,
+      materialAllocations: existing.materialAllocations || [],
+      materialAudits: existing.materialAudits || []
+    });
+    replaceSession(spreadsheet, session);
+    systemAudit(spreadsheet, {
+      userId: actor.id, action: 'sessions.start', entityType: 'productionSession',
+      entityId: session.id, reference: session.reference, before: 'accepted', after: 'in_progress', requestId: requestId
+    });
+    return session;
+  }
+
+  function cancelPlannedSession(spreadsheet, payload, requestId, actor) {
+    var existing = findSession(spreadsheet, payload);
+    if (existing.status !== 'planned') throw appError('VALIDATION_ERROR', 'Only planned sessions can be cancelled');
+    var session = Object.assign({}, existing, { status: 'cancelled', cancelledBy: actor.name, cancelledAt: nowIso() });
+    replaceSession(spreadsheet, session);
+    systemAudit(spreadsheet, {
+      userId: actor.id, action: 'sessions.cancelPlanned', entityType: 'productionSession',
+      entityId: session.id, reference: session.reference, before: 'planned', after: 'cancelled', requestId: requestId
+    });
+    return session;
+  }
+
+  function updatePlannedSession(spreadsheet, payload, requestId, actor) {
+    var existing = findSession(spreadsheet, payload);
+    if (existing.status !== 'planned') {
+      throw appError('VALIDATION_ERROR', 'Normal edit is not allowed after the plan is accepted');
+    }
+    var items = payload.items || [];
+    if (!items.length) throw appError('VALIDATION_ERROR', 'Add products to the daily plan');
+    var boms = bomRepo.readBoms(spreadsheet);
+    var nextItems = items.map(function (row) {
+      var targetQty = Number(row.targetQty);
+      if (!Number.isFinite(targetQty) || targetQty <= 0) throw appError('VALIDATION_ERROR', 'Target must be greater than zero');
+      var found = null;
+      existing.items.forEach(function (item) { if (item.productId === text(row.productId).trim()) found = item; });
+      var bom = activeBomForProduct(boms, text(row.productId).trim());
+      if (found) return Object.assign({}, found, { bomId: bom ? bom.id : found.bomId, originalTargetQty: targetQty, targetQty: targetQty });
+      return emptySessionItem(existing.id, text(row.productId).trim(), bom ? bom.id : '', targetQty);
+    });
+    var session = Object.assign({}, existing, {
+      productionDate: payload.productionDate ? normalizeBusinessDate(payload.productionDate) : existing.productionDate,
+      notes: payload.notes === undefined ? existing.notes : text(payload.notes),
+      items: nextItems
+    });
+    replaceSession(spreadsheet, session);
+    systemAudit(spreadsheet, {
+      userId: actor.id, action: 'sessions.update', entityType: 'productionSession',
+      entityId: session.id, reference: session.reference, before: String(existing.items.length), after: String(nextItems.length), requestId: requestId
+    });
+    return session;
+  }
+
+  function amendSession(spreadsheet, payload, requestId, actor) {
+    var existing = findSession(spreadsheet, payload);
+    requireToday(existing);
+    if (existing.status === 'planned') throw appError('VALIDATION_ERROR', 'Use Edit for planned sessions');
+    if (!sessionCanAmendStatus(existing.status)) throw appError('VALIDATION_ERROR', 'This plan cannot be amended');
+    var reason = text(payload.reason).trim();
+    if (!reason) throw appError('VALIDATION_ERROR', 'Enter a reason');
+    var items = payload.items || (payload.productId ? [{ productId: payload.productId, targetQty: payload.targetQty }] : []);
+    var changes = [];
+    existing.items.forEach(function (item) {
+      var next = null;
+      items.forEach(function (row) { if (text(row.productId).trim() === item.productId) next = row; });
+      if (!next) return;
+      var newTarget = Number(next.targetQty);
+      if (!Number.isFinite(newTarget) || newTarget <= 0) throw appError('VALIDATION_ERROR', 'Target must be greater than zero');
+      if (newTarget < (item.actualQty || 0)) throw appError('VALIDATION_ERROR', 'New target cannot be lower than actual production completed.');
+      if (newTarget !== item.targetQty) changes.push({ productId: item.productId, originalTarget: item.targetQty, newTarget: newTarget });
+    });
+    if (!changes.length) throw appError('VALIDATION_ERROR', 'No target changes');
+    var updatedItems = existing.items.map(function (item) {
+      var change = null;
+      changes.forEach(function (row) { if (row.productId === item.productId) change = row; });
+      return change ? Object.assign({}, item, { targetQty: change.newTarget }) : item;
+    });
+    var nextSession = Object.assign({}, existing, { items: updatedItems });
+    var plan = sessionBuildPlan(
+      products.readProducts(spreadsheet),
+      bomRepo.readBoms(spreadsheet),
+      warehouseRepo.readProductionBalances(spreadsheet),
+      nextSession
+    );
+    var merged = sessionMergePicking(existing.picking, plan.picking);
+    var changedAt = nowIso();
+    var logs = changes.map(function (change) {
+      return {
+        id: 'tcl_' + createId().replace(/-/g, '').slice(0, 10),
+        sessionId: existing.id,
+        productId: change.productId,
+        originalTarget: change.originalTarget,
+        newTarget: change.newTarget,
+        reason: reason,
+        changedBy: actor.name,
+        changedAt: changedAt
+      };
+    });
+    var excess = (existing.excessReturns || []).concat(merged.excess.map(function (row) {
+      return {
+        id: 'ex_' + createId().replace(/-/g, '').slice(0, 10),
+        productId: row.productId,
+        qty: row.qty,
+        unit: row.unit,
+        status: 'to_return',
+        notes: 'Amendment ' + row.productId
+      };
+    }));
+    var session = Object.assign({}, existing, {
+      items: updatedItems,
+      picking: merged.picking,
+      targetChanges: (existing.targetChanges || []).concat(logs),
+      excessReturns: excess
+    });
+    replaceSession(spreadsheet, session);
+    systemAudit(spreadsheet, {
+      userId: actor.id, action: 'sessions.amend', entityType: 'productionSession',
+      entityId: session.id, reference: session.reference, before: '', after: JSON.stringify(changes), requestId: requestId
+    });
+    return session;
+  }
+
+  function togglePicking(spreadsheet, payload, requestId, actor) {
+    var existing = findSession(spreadsheet, payload);
+    requireToday(existing);
+    if (existing.status !== 'in_progress') throw appError('VALIDATION_ERROR', 'Picking is only for in-progress sessions');
+    var lineId = text(payload.lineId).trim();
+    var line = null;
+    existing.picking.forEach(function (row) { if (row.id === lineId) line = row; });
+    if (!line) throw appError('NOT_FOUND', 'Picking line not found');
+    var nextPicked = payload.picked === undefined ? !line.picked : payload.picked === true;
+    var allocations = existing.materialAllocations || [];
+    var audits = existing.materialAudits || [];
+    if (Array.isArray(existing.materialAllocations) && sessionIsRawStorePickingLine(line) && nextPicked && !line.picked) {
+      var already = allocations.some(function (row) { return row.productId === line.productId && row.source === 'picking'; });
+      if (!already) {
+        var product = productById(products.readProducts(spreadsheet), line.productId);
+        var converted = packingQtyToInventory(line.qtyToPick, line.unit, product);
+        var allocation = {
+          id: 'pma_' + createId().replace(/-/g, '').slice(0, 10),
+          sessionId: existing.id,
+          productId: line.productId,
+          source: 'picking',
+          purchaseQty: line.qtyToPick,
+          purchaseUnit: line.unit,
+          baseQty: converted.ok ? packingRound2(converted.qty) : line.qtyToPick,
+          baseUnit: product ? product.unit : line.unit,
+          createdBy: actor.name,
+          createdAt: nowIso()
+        };
+        allocations = allocations.concat([allocation]);
+        audits = audits.concat([{
+          id: 'pmu_' + createId().replace(/-/g, '').slice(0, 10),
+          sessionId: existing.id,
+          productId: line.productId,
+          action: 'PICKING_ALLOCATED',
+          source: 'picking',
+          purchaseQty: allocation.purchaseQty,
+          purchaseUnit: allocation.purchaseUnit,
+          baseQty: allocation.baseQty,
+          baseUnit: allocation.baseUnit,
+          createdBy: actor.name,
+          createdAt: allocation.createdAt
+        }]);
+      }
+    }
+    var session = Object.assign({}, existing, {
+      picking: existing.picking.map(function (row) {
+        return row.id === lineId ? Object.assign({}, row, { picked: nextPicked }) : row;
+      }),
+      materialAllocations: allocations,
+      materialAudits: audits
+    });
+    replaceSession(spreadsheet, session);
+    systemAudit(spreadsheet, {
+      userId: actor.id, action: 'sessions.togglePicking', entityType: 'productionSession',
+      entityId: session.id, reference: session.reference, before: lineId, after: String(nextPicked), requestId: requestId
+    });
+    return session;
+  }
+
+  function addSessionMaterial(spreadsheet, payload, requestId, actor) {
+    var existing = findSession(spreadsheet, payload);
+    requireToday(existing);
+    requireSessionRole(spreadsheet, actor, existing);
+    if (existing.status !== 'in_progress') throw appError('VALIDATION_ERROR', 'Add material only during production');
+    if (!Array.isArray(existing.materialAllocations)) {
+      throw appError('VALIDATION_ERROR', 'This session has no material allocation ledger');
+    }
+    var product = requireActiveProduct(products.readProducts(spreadsheet), payload.productId, 'Select a material');
+    var at = nowIso();
+    var allocation;
+    if (text(payload.mode).trim() === 'loose') {
+      var looseQty = round2(Number(payload.looseQty));
+      if (!Number.isFinite(looseQty) || looseQty <= 0) throw appError('VALIDATION_ERROR', 'Enter a loose quantity');
+      allocation = {
+        id: 'pma_' + createId().replace(/-/g, '').slice(0, 10),
+        sessionId: existing.id, productId: product.id, source: 'loose',
+        baseQty: looseQty, baseUnit: product.unit,
+        containerType: text(payload.containerType).trim() || 'TONG',
+        notes: text(payload.notes).trim() || undefined,
+        createdBy: actor.name, createdAt: at
+      };
+    } else {
+      var purchaseQty = round2(Number(payload.purchaseQty));
+      if (!Number.isFinite(purchaseQty) || purchaseQty <= 0) throw appError('VALIDATION_ERROR', 'Enter a purchase quantity');
+      var converted = packingQtyToInventory(purchaseQty, product.purchaseUnit || product.unit, product);
+      allocation = {
+        id: 'pma_' + createId().replace(/-/g, '').slice(0, 10),
+        sessionId: existing.id, productId: product.id, source: 'additional',
+        purchaseQty: purchaseQty, purchaseUnit: product.purchaseUnit || product.unit,
+        baseQty: converted.ok ? packingRound2(converted.qty) : purchaseQty,
+        baseUnit: product.unit, notes: text(payload.notes).trim() || undefined,
+        createdBy: actor.name, createdAt: at
+      };
+    }
+    var session = Object.assign({}, existing, {
+      materialAllocations: existing.materialAllocations.concat([allocation]),
+      materialAudits: (existing.materialAudits || []).concat([{
+        id: 'pmu_' + createId().replace(/-/g, '').slice(0, 10),
+        sessionId: existing.id, productId: product.id,
+        action: allocation.source === 'loose' ? 'LOOSE_MATERIAL_ALLOCATED' : 'MATERIAL_ADDED',
+        source: allocation.source, baseQty: allocation.baseQty, baseUnit: allocation.baseUnit,
+        createdBy: actor.name, createdAt: at
+      }])
+    });
+    replaceSession(spreadsheet, session);
+    systemAudit(spreadsheet, {
+      userId: actor.id, action: 'sessions.addMaterial', entityType: 'productionSession',
+      entityId: session.id, reference: session.reference, before: '', after: allocation.source, requestId: requestId
+    });
+    return session;
+  }
+
+  function requireInProgressUnposted(session) {
+    if (session.status !== 'in_progress') throw appError('VALIDATION_ERROR', 'Start production first');
+    if (session.posted) throw appError('CONFLICT', 'Already posted');
+  }
+
+  function saveResult(spreadsheet, payload, requestId, actor) {
+    var existing = findSession(spreadsheet, payload);
+    requireToday(existing);
+    requireSessionRole(spreadsheet, actor, existing);
+    requireInProgressUnposted(existing);
+    var results = payload.results || payload.items || [];
+    existing.items.forEach(function (item) {
+      var result = null;
+      results.forEach(function (row) { if (row.productId === item.productId) result = row; });
+      if (!result || Number(result.actualQty) < 0) throw appError('VALIDATION_ERROR', 'Enter actual quantity for every product');
+      if (Number(result.productionBalanceQty) > 0 && (!text(result.balanceLocation).trim() || !text(result.balanceContainer).trim())) {
+        throw appError('VALIDATION_ERROR', 'Storage and box required');
+      }
+      if (Number(result.productionBalanceQty) > 0 && !isActiveBalanceStorageBox(spreadsheet, existing.warehouseId, result.balanceContainer)) {
+        throw appError('VALIDATION_ERROR', 'Select a valid Storage Box');
+      }
+      if (Number(result.actualQty) < item.targetQty && !result.carryForward && !text(result.shortProductionReason).trim()) {
+        throw appError('VALIDATION_ERROR', 'Select a reason');
+      }
+    });
+    var savedAt = nowIso();
+    var session = Object.assign({}, existing, {
+      resultSavedBy: actor.name,
+      resultSavedAt: savedAt,
+      items: existing.items.map(function (row) {
+        var result = null;
+        results.forEach(function (entry) { if (entry.productId === row.productId) result = entry; });
+        var carryForward = Boolean(result.carryForward) && Number(result.actualQty) < row.targetQty;
+        return Object.assign({}, row, {
+          actualQty: Number(result.actualQty),
+          productionBalanceQty: Number(result.productionBalanceQty) || 0,
+          balanceLocation: text(result.balanceLocation),
+          balanceContainer: text(result.balanceContainer),
+          wasteQty: Number(result.wasteQty) || 0,
+          shortProductionQty: carryForward ? 0 : Math.max(0, row.targetQty - Number(result.actualQty)),
+          shortProductionReason: carryForward ? '' : text(result.shortProductionReason),
+          notes: text(result.notes),
+          carryForward: carryForward
+        });
+      })
+    });
+    replaceSession(spreadsheet, session);
+    systemAudit(spreadsheet, {
+      userId: actor.id, action: 'sessions.saveResult', entityType: 'productionSession',
+      entityId: session.id, reference: session.reference, before: '', after: savedAt, requestId: requestId
+    });
+    return session;
+  }
+
+  function saveDistribution(spreadsheet, payload, requestId, actor) {
+    var existing = findSession(spreadsheet, payload);
+    requireToday(existing);
+    requireSessionRole(spreadsheet, actor, existing);
+    requireInProgressUnposted(existing);
+    if (!existing.resultSavedAt) throw appError('VALIDATION_ERROR', 'Save Production Result first');
+    var results = payload.results || payload.items || [];
+    existing.items.forEach(function (item) {
+      var result = null;
+      results.forEach(function (row) { if (row.productId === item.productId) result = row; });
+      var displayQty = round2(result ? result.displayQty : 0);
+      var cartonQty = round2(result ? result.cartonQty : 0);
+      if (displayQty < 0 || cartonQty < 0) throw appError('VALIDATION_ERROR', 'Distribution cannot be negative');
+      if (!sessionDistributionEqualsActual(displayQty, cartonQty, item.actualQty)) {
+        throw appError('VALIDATION_ERROR', 'Display + Carton must equal Actual Produced for every product.');
+      }
+    });
+    var savedAt = nowIso();
+    var session = Object.assign({}, existing, {
+      distributionSavedBy: actor.name,
+      distributionSavedAt: savedAt,
+      items: existing.items.map(function (row) {
+        var result = null;
+        results.forEach(function (entry) { if (entry.productId === row.productId) result = entry; });
+        return Object.assign({}, row, {
+          displayQty: round2(result ? result.displayQty : 0),
+          cartonQty: round2(result ? result.cartonQty : 0)
+        });
+      })
+    });
+    replaceSession(spreadsheet, session);
+    systemAudit(spreadsheet, {
+      userId: actor.id, action: 'sessions.saveDistribution', entityType: 'productionSession',
+      entityId: session.id, reference: session.reference, before: '', after: savedAt, requestId: requestId
+    });
+    return session;
+  }
+
+  function saveMaterialClosing(spreadsheet, payload, requestId, actor) {
+    var existing = findSession(spreadsheet, payload);
+    requireToday(existing);
+    requireSessionRole(spreadsheet, actor, existing);
+    requireInProgressUnposted(existing);
+    if (!existing.distributionSavedAt) throw appError('VALIDATION_ERROR', 'Save Finished Goods Distribution first');
+    if (!payload.acknowledged && !(payload.closing && payload.closing.acknowledged)) {
+      throw appError('VALIDATION_ERROR', 'Acknowledge the physical check');
+    }
+    var inputs = (payload.closing && payload.closing.inputs) || payload.inputs || [];
+    var built = sessionBuildMaterialClosing(
+      products.readProducts(spreadsheet),
+      bomRepo.readBoms(spreadsheet),
+      warehouseRepo.readProductionBalances(spreadsheet),
+      existing,
+      inputs
+    );
+    if (!built.ok) throw appError('VALIDATION_ERROR', built.reason);
+    var savedAt = nowIso();
+    var session = Object.assign({}, existing, {
+      materialClosing: {
+        checkedAt: savedAt,
+        checkedBy: actor.name,
+        acknowledged: true,
+        significantVariance: built.lines.some(sessionIsSignificantVariance),
+        lines: built.lines
+      }
+    });
+    replaceSession(spreadsheet, session);
+    systemAudit(spreadsheet, {
+      userId: actor.id, action: 'sessions.saveMaterialClosing', entityType: 'productionSession',
+      entityId: session.id, reference: session.reference, before: '', after: savedAt, requestId: requestId
+    });
+    return session;
+  }
+
+  function completeSession(spreadsheet, payload, requestId, actor, idempotencyKey) {
+    var existing = findSession(spreadsheet, payload);
+    if (existing.posted || existing.status === 'completed') {
+      var completed = findAudit(spreadsheet, 'sessions.complete', 'productionSession', existing.id);
+      if (completed && idempotencyKey && auditIdempotencyKey(completed) && auditIdempotencyKey(completed) !== idempotencyKey) {
+        throw appError('CONFLICT', 'Already posted');
+      }
+      return existing;
+    }
+    requireToday(existing);
+    requireSessionRole(spreadsheet, actor, existing);
+    requireInProgressUnposted(existing);
+    var closingPayload = payload.closing || payload;
+    if (!closingPayload.acknowledged) throw appError('VALIDATION_ERROR', 'Acknowledge the physical check');
+    var results = payload.results || payload.items || [];
+    existing.items.forEach(function (item) {
+      var result = null;
+      results.forEach(function (row) { if (row.productId === item.productId) result = row; });
+      if (!result || Number(result.actualQty) < 0) throw appError('VALIDATION_ERROR', 'Enter actual quantity for every product');
+      if (Number(result.productionBalanceQty) > 0 && (!text(result.balanceLocation).trim() || !text(result.balanceContainer).trim())) {
+        throw appError('VALIDATION_ERROR', 'Storage and box required');
+      }
+      if (Number(result.productionBalanceQty) > 0 && !isActiveBalanceStorageBox(spreadsheet, existing.warehouseId, result.balanceContainer)) {
+        throw appError('VALIDATION_ERROR', 'Select a valid Storage Box');
+      }
+      var carryForward = Boolean(result.carryForward || item.carryForward) && Number(result.actualQty) < item.targetQty;
+      if (Number(result.actualQty) < item.targetQty && !carryForward && !text(result.shortProductionReason).trim()) {
+        throw appError('VALIDATION_ERROR', 'Select a reason');
+      }
+      var displayQty = round2(result.displayQty || 0);
+      var cartonQty = round2(result.cartonQty || 0);
+      if (displayQty < 0 || cartonQty < 0) throw appError('VALIDATION_ERROR', 'Distribution cannot be negative');
+      if (!sessionDistributionEqualsActual(displayQty, cartonQty, result.actualQty)) {
+        throw appError('VALIDATION_ERROR', 'Display + Carton must equal Actual Produced for every product.');
+      }
+    });
+    var date = nowIso();
+    var items = existing.items.map(function (item) {
+      var result = null;
+      results.forEach(function (row) { if (row.productId === item.productId) result = row; });
+      var carryForward = Boolean(result.carryForward || item.carryForward) && Number(result.actualQty) < item.targetQty;
+      return Object.assign({}, item, {
+        actualQty: Number(result.actualQty),
+        productionBalanceQty: Number(result.productionBalanceQty) || 0,
+        balanceLocation: text(result.balanceLocation),
+        balanceContainer: text(result.balanceContainer),
+        wasteQty: Number(result.wasteQty) || 0,
+        shortProductionQty: carryForward ? 0 : Math.max(0, item.targetQty - Number(result.actualQty)),
+        shortProductionReason: carryForward ? '' : text(result.shortProductionReason),
+        notes: text(result.notes),
+        displayQty: round2(result.displayQty || 0),
+        cartonQty: round2(result.cartonQty || 0),
+        carryForward: carryForward,
+        carriedForwardAt: carryForward ? date : undefined,
+        carriedForwardBy: carryForward ? actor.name : undefined
+      });
+    });
+    var working = Object.assign({}, existing, { items: items });
+    var productList = products.readProducts(spreadsheet);
+    var boms = bomRepo.readBoms(spreadsheet);
+    var balances = warehouseRepo.readProductionBalances(spreadsheet);
+    var built = sessionBuildMaterialClosing(productList, boms, balances, working, closingPayload.inputs || []);
+    if (!built.ok) throw appError('VALIDATION_ERROR', built.reason);
+    var plan = sessionBuildPlan(productList, boms, balances, working);
+    var postLines = [];
+    plan.products.forEach(function (req) {
+      req.balanceUsed.forEach(function (alloc) {
+        balances = balances.map(function (row) {
+          if (row.id !== alloc.balanceId) return row;
+          var qty = round2(row.quantity - alloc.qty);
+          return Object.assign({}, row, { quantity: Math.max(0, qty), status: qty <= 0.001 ? 'consumed' : row.status });
+        });
+        postLines.push({
+          productId: req.productId, type: 'production_balance_out', stockIn: 0, stockOut: alloc.qty,
+          notes: 'Use production balance ' + alloc.container, skipInventory: true
+        });
+      });
+    });
+    plan.consolidatedRaw.forEach(function (raw) {
+      if (sessionComponentIsManual(boms, items, raw.productId)) return;
+      var closingLine = null;
+      built.lines.forEach(function (row) { if (row.productId === raw.productId) closingLine = row; });
+      var outQty = closingLine ? closingLine.actualUsedQty : raw.qty;
+      if (!(outQty > 0)) return;
+      postLines.push({
+        productId: raw.productId, type: 'production_out', stockIn: 0, stockOut: outQty,
+        notes: closingLine ? 'Material closing actual used ' + outQty : 'Consolidated material consumption'
+      });
+    });
+    var displayStocks = warehouseRepo.readDisplay(spreadsheet);
+    items.forEach(function (item) {
+      if (item.actualQty > 0) {
+        postLines.push({ productId: item.productId, type: 'production_in', stockIn: item.actualQty, stockOut: 0, notes: 'Finished goods packs' });
+      }
+      if (item.displayQty > 0) {
+        displayStocks = applyDisplayDelta(displayStocks, item.productId, existing.warehouseId, item.displayQty, date);
+      }
+      if (item.productionBalanceQty > 0) {
+        balances = [{
+          id: 'pb_' + createId().replace(/-/g, '').slice(0, 10),
+          productId: item.productId, quantity: item.productionBalanceQty, unit: 'g',
+          location: item.balanceLocation, container: item.balanceContainer,
+          warehouseId: existing.warehouseId, productionDate: date,
+          productionReference: existing.reference, status: 'available'
+        }].concat(balances);
+        postLines.push({
+          productId: item.productId, type: 'production_balance_in', stockIn: item.productionBalanceQty, stockOut: 0,
+          notes: 'Production balance ' + item.balanceContainer, skipInventory: true
+        });
+      }
+      if (item.wasteQty > 0) {
+        postLines.push({
+          productId: 'p-pouch', type: 'production_wastage', stockIn: 0, stockOut: 0,
+          notes: 'Packaging waste ' + item.wasteQty + 'g', skipInventory: true
+        });
+      }
+    });
+    if (!allowNegative(spreadsheet)) {
+      var inv = products.readBalances(spreadsheet);
+      postLines.forEach(function (line) {
+        if (line.skipInventory || !(line.stockOut > 0)) return;
+        if (qtyOf(inv, line.productId, existing.warehouseId) < line.stockOut) {
+          throw appError('VALIDATION_ERROR', 'Insufficient stock');
+        }
+      });
+    }
+    appendPostingLines(spreadsheet, actor, date, existing.reference, existing.warehouseId, existing.id, postLines);
+    warehouseRepo.writeDisplay(spreadsheet, displayStocks);
+    warehouseRepo.writeProductionBalances(spreadsheet, balances);
+    var materialClosing = {
+      checkedAt: existing.materialClosing && existing.materialClosing.checkedBy ? existing.materialClosing.checkedAt : date,
+      checkedBy: existing.materialClosing && existing.materialClosing.checkedBy ? existing.materialClosing.checkedBy : actor.name,
+      acknowledged: true,
+      significantVariance: built.lines.some(sessionIsSignificantVariance),
+      lines: built.lines
+    };
+    var session = Object.assign({}, existing, {
+      items: items,
+      status: 'completed',
+      posted: true,
+      completedBy: actor.name,
+      completedAt: date,
+      picking: plan.picking.map(function (line) {
+        var previous = null;
+        existing.picking.forEach(function (row) { if (row.id === line.id) previous = row; });
+        return Object.assign({}, line, { picked: previous ? previous.picked : true });
+      }),
+      materialClosing: materialClosing,
+      materialAllocations: existing.materialAllocations || [],
+      materialAudits: (existing.materialAudits || []).concat(built.lines.map(function (row) {
+        return {
+          id: 'pmu_' + createId().replace(/-/g, '').slice(0, 10),
+          sessionId: existing.id, productId: row.productId, action: 'MATERIAL_CLOSING_RECORDED',
+          baseQty: row.actualUsedQty, createdBy: actor.name, createdAt: date
+        };
+      })).concat([{
+        id: 'pmu_' + createId().replace(/-/g, '').slice(0, 10),
+        sessionId: existing.id, productId: existing.items[0] ? existing.items[0].productId : '',
+        action: 'PRODUCTION_COMPLETED', notes: existing.reference, createdBy: actor.name, createdAt: date
+      }])
+    });
+    replaceSession(spreadsheet, session);
+    systemAudit(spreadsheet, {
+      userId: actor.id, action: 'sessions.complete', entityType: 'productionSession',
+      entityId: session.id, reference: session.reference,
+      before: 'in_progress',
+      after: JSON.stringify({ posted: true, actualQty: items.reduce(function (sum, item) { return sum + item.actualQty; }, 0), idempotencyKey: idempotencyKey }),
+      requestId: requestId
+    });
+    return session;
+  }
+
+  function continueCarryForward(spreadsheet, payload, requestId, actor) {
+    if (!sessionCanRun(actorLegacyRole(spreadsheet, actor))) {
+      throw appError('FORBIDDEN', 'You cannot continue production.');
+    }
+    var originSession = findSession(spreadsheet, { id: payload.originSessionId });
+    var origin = null;
+    originSession.items.forEach(function (item) { if (item.id === text(payload.originItemId).trim()) origin = item; });
+    if (!origin) throw appError('NOT_FOUND', 'Carry Forward not found');
+    if (!originSession.posted || originSession.status !== 'completed' || !origin.carryForward) {
+      throw appError('VALIDATION_ERROR', 'Carry Forward is not ready');
+    }
+    var remaining = sessionRemainingTarget(origin);
+    if (!(remaining > 0)) throw appError('VALIDATION_ERROR', 'Nothing remaining to continue');
+    var docs = repository.readSessions(spreadsheet);
+    var resumed = docs.some(function (session) {
+      return session.items.some(function (item) { return item.carriedFromItemId === origin.id; });
+    });
+    if (resumed) throw appError('VALIDATION_ERROR', 'Already continued');
+    var today = todayKey();
+    var operational = null;
+    docs.forEach(function (row) {
+      if (sessionDateKey(row.productionDate) !== today) return;
+      if (row.status !== 'completed' && row.status !== 'cancelled' && !operational) operational = row;
+    });
+    var bom = activeBomForProduct(bomRepo.readBoms(spreadsheet), origin.productId);
+    if (!operational) {
+      var created = createSession(spreadsheet, {
+        clientId: payload.clientId,
+        productionDate: today,
+        items: [{ productId: origin.productId, targetQty: remaining }],
+        notes: 'Continued from ' + originSession.reference
+      }, requestId, actor);
+      created.items = created.items.map(function (row) {
+        if (row.productId !== origin.productId) return row;
+        return Object.assign({}, row, {
+          originalTargetQty: remaining, targetQty: remaining, carryForward: false,
+          carriedFromSessionId: originSession.id, carriedFromItemId: origin.id
+        });
+      });
+      replaceSession(spreadsheet, created);
+      return created;
+    }
+    if (operational.items.some(function (item) { return item.productId === origin.productId; })) {
+      throw appError('VALIDATION_ERROR', "Already on today's production");
+    }
+    var nextItem = emptySessionItem(operational.id, origin.productId, bom ? bom.id : origin.bomId, remaining);
+    nextItem.carriedFromSessionId = originSession.id;
+    nextItem.carriedFromItemId = origin.id;
+    var nextItems = operational.items.concat([nextItem]);
+    var nextSession = Object.assign({}, operational, { items: nextItems });
+    if (operational.status === 'in_progress') {
+      var merged = sessionMergePicking(
+        operational.picking,
+        sessionBuildPlan(products.readProducts(spreadsheet), bomRepo.readBoms(spreadsheet), warehouseRepo.readProductionBalances(spreadsheet), nextSession).picking
+      );
+      nextSession.picking = merged.picking;
+    }
+    replaceSession(spreadsheet, nextSession);
+    systemAudit(spreadsheet, {
+      userId: actor.id, action: 'sessions.continueCarryForward', entityType: 'productionSession',
+      entityId: nextSession.id, reference: nextSession.reference, before: originSession.id, after: origin.id, requestId: requestId
+    });
+    return nextSession;
+  }
+
+  function editCompletedSession(spreadsheet, payload, requestId, actor) {
+    var existing = findSession(spreadsheet, payload);
+    if (existing.status !== 'completed') throw appError('VALIDATION_ERROR', 'Only completed sessions use this edit');
+    var reason = text(payload.reason).trim();
+    if (!reason) throw appError('VALIDATION_ERROR', 'Reason is required');
+    var field = text(payload.field).trim();
+    if (field !== 'actualQty' && field !== 'productionBalanceQty' && field !== 'wasteQty') {
+      throw appError('VALIDATION_ERROR', 'Field is not editable');
+    }
+    var item = null;
+    existing.items.forEach(function (row) { if (row.productId === text(payload.productId).trim()) item = row; });
+    if (!item) throw appError('NOT_FOUND', 'Product line not found');
+    var newValue = Number(payload.newValue);
+    if (!Number.isFinite(newValue) || newValue < 0) throw appError('VALIDATION_ERROR', 'Enter a valid quantity');
+    var original = item[field];
+    if (original === newValue) return existing;
+    var date = nowIso();
+    var diff = round2(newValue - original);
+    var postLines = [];
+    var balances = warehouseRepo.readProductionBalances(spreadsheet);
+    if (field === 'actualQty' && diff !== 0) {
+      postLines.push({
+        productId: item.productId, type: 'adjustment',
+        stockIn: diff > 0 ? diff : 0, stockOut: diff < 0 ? -diff : 0,
+        notes: 'Completed production edit · ' + reason
+      });
+    }
+    if (field === 'productionBalanceQty') {
+      var existingBal = null;
+      balances.forEach(function (row) {
+        if (row.productionReference === existing.reference && row.productId === item.productId && row.status === 'available') existingBal = row;
+      });
+      if (existingBal) {
+        balances = balances.map(function (row) {
+          if (row.id !== existingBal.id) return row;
+          var qty = round2(existingBal.quantity + diff);
+          return Object.assign({}, row, { quantity: Math.max(0, qty), status: qty <= 0 ? 'consumed' : 'available' });
+        });
+      } else if (newValue > 0) {
+        balances = [{
+          id: 'pb_' + createId().replace(/-/g, '').slice(0, 10),
+          productId: item.productId, quantity: newValue, unit: 'g',
+          location: item.balanceLocation || 'Main Warehouse',
+          container: item.balanceContainer || 'Box 1',
+          warehouseId: existing.warehouseId, productionDate: date,
+          productionReference: existing.reference, status: 'available'
+        }].concat(balances);
+      }
+      postLines.push({
+        productId: item.productId, type: diff >= 0 ? 'production_balance_in' : 'production_balance_out',
+        stockIn: diff > 0 ? diff : 0, stockOut: diff < 0 ? -diff : 0,
+        notes: 'Balance edit · ' + reason, skipInventory: true
+      });
+    }
+    if (field === 'wasteQty' && diff !== 0) {
+      postLines.push({
+        productId: 'p-pouch', type: 'production_wastage', stockIn: 0, stockOut: 0,
+        notes: 'Waste edit ' + original + 'g → ' + newValue + 'g · ' + reason, skipInventory: true
+      });
+    }
+    if (postLines.length) {
+      appendPostingLines(spreadsheet, actor, date, existing.reference + ' adj', existing.warehouseId, existing.id + '-' + field + '-' + date.slice(0, 19), postLines);
+    }
+    warehouseRepo.writeProductionBalances(spreadsheet, balances);
+    var log = {
+      id: 'cel_' + createId().replace(/-/g, '').slice(0, 10),
+      sessionId: existing.id, productId: item.productId, field: field,
+      originalValue: String(original), newValue: String(newValue), reason: reason,
+      editedBy: actor.name, editedAt: date
+    };
+    var session = Object.assign({}, existing, {
+      items: existing.items.map(function (row) {
+        if (row.productId !== item.productId) return row;
+        var next = Object.assign({}, row);
+        next[field] = newValue;
+        if (field === 'actualQty') next.shortProductionQty = Math.max(0, row.targetQty - newValue);
+        return next;
+      }),
+      completedEdits: (existing.completedEdits || []).concat([log])
+    });
+    replaceSession(spreadsheet, session);
+    systemAudit(spreadsheet, {
+      userId: actor.id, action: 'sessions.editCompleted', entityType: 'productionSession',
+      entityId: session.id, reference: session.reference, before: String(original), after: String(newValue), requestId: requestId
+    });
+    return session;
+  }
+
+  function editCompletedClosing(spreadsheet, payload, requestId, actor) {
+    var existing = findSession(spreadsheet, payload);
+    if (existing.status !== 'completed') throw appError('VALIDATION_ERROR', 'Only completed sessions use this edit');
+    var reason = text(payload.reason).trim();
+    if (!reason) throw appError('VALIDATION_ERROR', 'Reason is required');
+    var closing = existing.materialClosing;
+    var original = null;
+    ((closing && closing.lines) || []).forEach(function (row) {
+      if (row.productId === text(payload.productId).trim()) original = row;
+    });
+    if (!closing || !original) throw appError('VALIDATION_ERROR', 'No material closing to edit');
+    var product = requireActiveProduct(products.readProducts(spreadsheet), payload.productId, 'Material is missing from Product Master.');
+    var rebuilt = sessionClosingLineFromInput(product, original.plannedQty, original.availableQty, {
+      fullUnits: Number(payload.fullUnits),
+      looseQty: Number(payload.looseQty)
+    });
+    if (!rebuilt.ok) throw appError('VALIDATION_ERROR', rebuilt.reason);
+    if (rebuilt.line.remainingQty === original.remainingQty && rebuilt.line.actualUsedQty === original.actualUsedQty) return existing;
+    var date = nowIso();
+    var diff = round2(rebuilt.line.actualUsedQty - original.actualUsedQty);
+    if (diff !== 0) {
+      appendPostingLines(spreadsheet, actor, date, existing.reference + ' adj', existing.warehouseId, existing.id + '-close-' + date.slice(0, 19), [{
+        productId: product.id, type: 'adjustment',
+        stockIn: diff < 0 ? -diff : 0, stockOut: diff > 0 ? diff : 0,
+        notes: 'Material closing edit · ' + reason
+      }]);
+    }
+    var lines = closing.lines.map(function (row) {
+      return row.productId === product.id ? rebuilt.line : row;
+    });
+    var session = Object.assign({}, existing, {
+      materialClosing: Object.assign({}, closing, {
+        lines: lines,
+        significantVariance: lines.some(sessionIsSignificantVariance)
+      }),
+      completedEdits: (existing.completedEdits || []).concat([{
+        id: 'cel_' + createId().replace(/-/g, '').slice(0, 10),
+        sessionId: existing.id, productId: product.id, field: 'remainingQty',
+        originalValue: String(original.remainingQty), newValue: String(rebuilt.line.remainingQty),
+        reason: reason, editedBy: actor.name, editedAt: date
+      }])
+    });
+    replaceSession(spreadsheet, session);
+    systemAudit(spreadsheet, {
+      userId: actor.id, action: 'sessions.editCompletedClosing', entityType: 'productionSession',
+      entityId: session.id, reference: session.reference, before: String(original.actualUsedQty), after: String(rebuilt.line.actualUsedQty), requestId: requestId
+    });
+    return session;
+  }
+
   function dispatch(request) {
     var action = request.action;
     var payload = request.payload || {};
     var requestId = request.requestId ? String(request.requestId) : '';
     return locked(function (spreadsheet) {
-      if (action === 'packing.list' || action === 'productionOrders.list') {
+      if (action === 'packing.list' || action === 'productionOrders.list' || action === 'sessions.list') {
         requirePermission(spreadsheet, payload.actorUserId, 'manufacturing.view', 'You cannot view manufacturing.');
         return okEnvelope(snapshot(spreadsheet));
       }
@@ -1193,6 +2229,121 @@ function createManufacturingService(deps) {
         var state = snapshot(spreadsheet);
         state.purchaseRequest = preview;
         return okEnvelope(state);
+      }
+      if (action === 'sessions.get') {
+        requirePermission(spreadsheet, payload.actorUserId, 'manufacturing.view', 'You cannot view manufacturing.');
+        var foundSession = findSession(spreadsheet, payload);
+        return withDoc(snapshot(spreadsheet), 'productionSession', foundSession);
+      }
+      if (action === 'sessions.create') {
+        requireKey(request);
+        var createdSession = createSession(
+          spreadsheet, payload, requestId,
+          requirePermission(spreadsheet, payload.actorUserId, 'manufacturing.create', 'You cannot create a production session.')
+        );
+        return withDoc(snapshot(spreadsheet), 'productionSession', createdSession);
+      }
+      if (action === 'sessions.accept') {
+        var acceptedSession = acceptSession(
+          spreadsheet, payload, requestId,
+          requirePermission(spreadsheet, payload.actorUserId, 'manufacturing.start', 'You cannot accept production.')
+        );
+        return withDoc(snapshot(spreadsheet), 'productionSession', acceptedSession);
+      }
+      if (action === 'sessions.start') {
+        var startedSession = startSession(
+          spreadsheet, payload, requestId,
+          requirePermission(spreadsheet, payload.actorUserId, 'manufacturing.start', 'You cannot start production.')
+        );
+        return withDoc(snapshot(spreadsheet), 'productionSession', startedSession);
+      }
+      if (action === 'sessions.cancelPlanned') {
+        var cancelledSession = cancelPlannedSession(
+          spreadsheet, payload, requestId,
+          requirePermission(spreadsheet, payload.actorUserId, 'manufacturing.plan.edit', 'You cannot cancel a production plan.')
+        );
+        return withDoc(snapshot(spreadsheet), 'productionSession', cancelledSession);
+      }
+      if (action === 'sessions.update') {
+        var updatedSession = updatePlannedSession(
+          spreadsheet, payload, requestId,
+          requirePermission(spreadsheet, payload.actorUserId, 'manufacturing.plan.edit', 'You cannot edit a production plan.')
+        );
+        return withDoc(snapshot(spreadsheet), 'productionSession', updatedSession);
+      }
+      if (action === 'sessions.amend' || action === 'sessions.changeTarget') {
+        var amendedSession = amendSession(
+          spreadsheet, payload, requestId,
+          requirePermission(spreadsheet, payload.actorUserId, 'manufacturing.plan.amend', 'You cannot amend a production plan.')
+        );
+        return withDoc(snapshot(spreadsheet), 'productionSession', amendedSession);
+      }
+      if (action === 'sessions.togglePicking') {
+        var pickingSession = togglePicking(
+          spreadsheet, payload, requestId,
+          requirePermission(spreadsheet, payload.actorUserId, 'manufacturing.start', 'You cannot update the picking list.')
+        );
+        return withDoc(snapshot(spreadsheet), 'productionSession', pickingSession);
+      }
+      if (action === 'sessions.addMaterial') {
+        var materialSession = addSessionMaterial(
+          spreadsheet, payload, requestId,
+          requirePermission(spreadsheet, payload.actorUserId, 'manufacturing.start', 'You cannot add material.')
+        );
+        return withDoc(snapshot(spreadsheet), 'productionSession', materialSession);
+      }
+      if (action === 'sessions.saveResult') {
+        var resultSession = saveResult(
+          spreadsheet, payload, requestId,
+          requirePermission(spreadsheet, payload.actorUserId, 'manufacturing.complete', 'You cannot save production results.')
+        );
+        return withDoc(snapshot(spreadsheet), 'productionSession', resultSession);
+      }
+      if (action === 'sessions.saveDistribution') {
+        var distributionSession = saveDistribution(
+          spreadsheet, payload, requestId,
+          requirePermission(spreadsheet, payload.actorUserId, 'manufacturing.complete', 'You cannot save finished goods distribution.')
+        );
+        return withDoc(snapshot(spreadsheet), 'productionSession', distributionSession);
+      }
+      if (action === 'sessions.saveMaterialClosing') {
+        var closingSession = saveMaterialClosing(
+          spreadsheet, payload, requestId,
+          requirePermission(spreadsheet, payload.actorUserId, 'manufacturing.complete', 'You cannot save material closing.')
+        );
+        return withDoc(snapshot(spreadsheet), 'productionSession', closingSession);
+      }
+      if (action === 'sessions.complete') {
+        requireKey(request);
+        var completedSession = completeSession(
+          spreadsheet, payload, requestId,
+          requirePermission(spreadsheet, payload.actorUserId, 'manufacturing.complete', 'You cannot complete production.'),
+          text(request.idempotencyKey).trim()
+        );
+        return withDoc(snapshot(spreadsheet), 'productionSession', completedSession);
+      }
+      if (action === 'sessions.continueCarryForward') {
+        var continuedSession = continueCarryForward(
+          spreadsheet, payload, requestId,
+          requirePermission(spreadsheet, payload.actorUserId, 'manufacturing.create', 'You cannot continue production.')
+        );
+        return withDoc(snapshot(spreadsheet), 'productionSession', continuedSession);
+      }
+      if (action === 'sessions.editCompleted') {
+        requireKey(request);
+        var editedSession = editCompletedSession(
+          spreadsheet, payload, requestId,
+          requirePermission(spreadsheet, payload.actorUserId, 'manufacturing.completed.edit', 'You cannot edit completed production.')
+        );
+        return withDoc(snapshot(spreadsheet), 'productionSession', editedSession);
+      }
+      if (action === 'sessions.editCompletedClosing') {
+        requireKey(request);
+        var editedClosing = editCompletedClosing(
+          spreadsheet, payload, requestId,
+          requirePermission(spreadsheet, payload.actorUserId, 'manufacturing.completed.edit', 'You cannot edit completed production.')
+        );
+        return withDoc(snapshot(spreadsheet), 'productionSession', editedClosing);
       }
       return errorEnvelope('UNKNOWN_ACTION', 'The action is not available.', { requestId: requestId });
     });

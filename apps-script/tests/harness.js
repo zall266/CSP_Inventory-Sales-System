@@ -8,6 +8,7 @@ const files = [
   'utils/errors.js',
   'utils/receivingPurchaseLink.js',
   'utils/packingMath.js',
+  'utils/sessionMath.js',
   'utils/time.js',
   'utils/ids.js',
   'utils/locks.js',

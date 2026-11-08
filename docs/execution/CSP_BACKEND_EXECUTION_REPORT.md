@@ -304,3 +304,22 @@ Locked-module protection: do not redesign or refactor Steps 9, 10, or 11. A late
 
 Step 12 Daily Sessions is authorized to begin. This lock section is documentation only. It does not deploy and does not change workbook data.
 
+## Step 12 — Daily Sessions — IN PROGRESS
+
+Backend implementation matches the existing Daily Sessions frontend. Locked Steps 9–11 were not redesigned.
+
+| Item | Status |
+| --- | --- |
+| Workflow | planned → accepted → in_progress → completed+posted. Recipe photo required at start. |
+| Display + carton | Must equal actual produced. Rejected when they do not. |
+| Complete once | `sessions.complete` is idempotent. A second key after posting returns `CONFLICT`. |
+| Stock | Posted only on complete (and completed-session edits). AUTO components out from material-closing actual used. MANUAL components skip auto-out. Finished goods in. Display qty updates DisplayStocks. |
+| Carry-forward | Remaining target continues once onto today's operational session, or a new planned session. |
+| Frontend | Existing pages unchanged. `db.ts` queues `sessions.*` when the identity API is connected. Hydration reads `productionSessions` from `packing.list` / `sessions.list`. |
+| Automated tests | Manufacturing file 10/10. Full backend suite 106/106. `tsc` and Vite production build passed. |
+| Owner UAT | Required on DEV after Apps Script + Pages deploy. Not started. |
+
+Actions: `sessions.list`, `sessions.get`, `sessions.create`, `sessions.accept`, `sessions.start`, `sessions.cancelPlanned`, `sessions.update`, `sessions.amend`, `sessions.changeTarget`, `sessions.togglePicking`, `sessions.addMaterial`, `sessions.saveResult`, `sessions.saveDistribution`, `sessions.saveMaterialClosing`, `sessions.complete`, `sessions.continueCarryForward`, `sessions.editCompleted`, `sessions.editCompletedClosing`.
+
+Owner UAT still required: create/accept/start with recipe photo, picking, the three complete-production steps, display+carton=actual, complete once, AUTO out / MANUAL skip, cashier denial, and carry-forward. Do not treat automated tests as owner UAT.
+

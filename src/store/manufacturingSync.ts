@@ -1,5 +1,14 @@
 import { identityApiUrl, postIdentityAction } from '@/api/identityApi'
-import type { Batch, InventoryRow, PackingAssembly, ProductionOrder, StockMovement } from '@/types'
+import type {
+  Batch,
+  DisplayStock,
+  InventoryRow,
+  PackingAssembly,
+  ProductionBalance,
+  ProductionOrder,
+  ProductionSession,
+  StockMovement,
+} from '@/types'
 import { hydratePackingAssemblies } from '@/features/manufacturing/packingModel'
 
 export type ManufacturingSlice = {
@@ -8,6 +17,9 @@ export type ManufacturingSlice = {
   batches: Batch[]
   inventory?: InventoryRow[]
   stockMovements?: StockMovement[]
+  productionSessions?: ProductionSession[]
+  displayStocks?: DisplayStock[]
+  productionBalances?: ProductionBalance[]
 }
 
 type SyncOptions = {
@@ -34,6 +46,10 @@ const IDEMPOTENT_ACTIONS = new Set([
   'packing.confirm',
   'productionOrders.create',
   'productionOrders.complete',
+  'sessions.create',
+  'sessions.complete',
+  'sessions.editCompleted',
+  'sessions.editCompletedClosing',
 ])
 
 function sliceFrom(data: Partial<ManufacturingSlice> | null): ManufacturingSlice | null {
@@ -44,6 +60,9 @@ function sliceFrom(data: Partial<ManufacturingSlice> | null): ManufacturingSlice
     batches: Array.isArray(data.batches) ? data.batches : [],
     inventory: data.inventory,
     stockMovements: data.stockMovements,
+    productionSessions: Array.isArray(data.productionSessions) ? data.productionSessions : undefined,
+    displayStocks: Array.isArray(data.displayStocks) ? data.displayStocks : undefined,
+    productionBalances: Array.isArray(data.productionBalances) ? data.productionBalances : undefined,
   }
 }
 

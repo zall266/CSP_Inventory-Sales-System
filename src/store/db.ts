@@ -965,6 +965,10 @@ function beginManufacturingPost() {
   return true
 }
 
+function queueSessionWrite(action: string, payload: Record<string, unknown>, idempotencyKey?: string) {
+  if (identityApiUrl()) queueManufacturingWrite(action, payload, idempotencyKey)
+}
+
 function postConfirmedOpeningBalance(doc: OpeningBalance) {
   const actor = currentUser(state)
   let inventory = state.inventory
@@ -6162,6 +6166,7 @@ export const db = {
         item.id === id ? { ...item, status: 'accepted' as const, acceptedBy: user.name, acceptedAt: nowIso() } : item,
       ),
     })
+    queueSessionWrite('sessions.accept', { id })
     toast('Production accepted', session.reference)
   },
 
@@ -6207,6 +6212,11 @@ export const db = {
             }
           : item,
       ),
+    })
+    queueSessionWrite('sessions.start', {
+      id,
+      recipePhoto: input.recipePhoto,
+      recipePhotoName: input.recipePhotoName,
     })
     toast('Production started', 'Picking list is ready.')
     return true
@@ -6274,6 +6284,12 @@ export const db = {
           : item,
       ),
     })
+    queueSessionWrite('sessions.update', {
+      id,
+      productionDate: input.productionDate,
+      notes: input.notes ?? session.notes,
+      items: input.items,
+    })
     toast('Production plan updated', session.reference)
     return true
   },
@@ -6302,6 +6318,7 @@ export const db = {
           : item,
       ),
     })
+    queueSessionWrite('sessions.cancelPlanned', { id })
     toast('Production plan cancelled', session.reference, 'warning')
     return true
   },
@@ -6397,6 +6414,7 @@ export const db = {
     const summary = changes
       .map((change) => `${productById(change.productId)?.name ?? change.productId}: ${change.originalTarget} → ${change.newTarget}`)
       .join(', ')
+    queueSessionWrite('sessions.amend', { id, items, reason: reason.trim() })
     toast('Production plan amended', summary)
     return true
   },
@@ -6462,6 +6480,7 @@ export const db = {
           : item,
       ),
     })
+    queueSessionWrite('sessions.togglePicking', { id, lineId, picked: nextPicked })
   },
 
   addSessionMaterial(
@@ -6566,6 +6585,15 @@ export const db = {
           : item,
       ),
     })
+    queueSessionWrite('sessions.addMaterial', {
+      id,
+      productId: input.productId,
+      mode: input.mode,
+      purchaseQty: input.purchaseQty,
+      looseQty: input.looseQty,
+      containerType: input.containerType,
+      notes: input.notes,
+    })
     toast(
       source === 'loose' ? 'Loose material added' : 'Material added',
       `${product.name} · ${allocation.purchaseQty != null && allocation.purchaseUnit ? `${allocation.purchaseQty} ${allocation.purchaseUnit} · ` : ''}${allocation.baseQty} ${allocation.baseUnit}`,
@@ -6654,6 +6682,7 @@ export const db = {
           : item,
       ),
     })
+    queueSessionWrite('sessions.saveResult', { id, results })
     toast('Production result saved', session.reference)
     return true
   },
@@ -6721,6 +6750,7 @@ export const db = {
           : item,
       ),
     })
+    queueSessionWrite('sessions.saveDistribution', { id, results })
     toast('Finished goods distribution saved', session.reference)
     return true
   },
@@ -6782,6 +6812,11 @@ export const db = {
             }
           : item,
       ),
+    })
+    queueSessionWrite('sessions.saveMaterialClosing', {
+      id,
+      acknowledged: true,
+      inputs: closing.inputs ?? [],
     })
     toast('Material closing saved', session.reference)
     return true
@@ -7069,6 +7104,7 @@ export const db = {
       }
     }
     emit()
+    queueSessionWrite('sessions.complete', { id, results, closing })
     toast('Production completed', session.reference)
     return true
   },
@@ -7130,7 +7166,7 @@ export const db = {
         productionDate: today,
         items: [{ productId: origin.productId, targetQty: remaining }],
         notes: `Continued from ${originSession.reference}`,
-      })
+      }, { localOnly: true })
       if (!created) return null
       setData({
         productionSessions: state.productionSessions.map((item) =>
@@ -7156,6 +7192,11 @@ export const db = {
               }
             : item,
         ),
+      })
+      queueSessionWrite('sessions.continueCarryForward', {
+        originSessionId,
+        originItemId,
+        clientId: created.id,
       })
       toast('Continued on today\'s production', productById(origin.productId)?.name)
       return state.productionSessions.find((item) => item.id === created.id) ?? created
@@ -7190,6 +7231,7 @@ export const db = {
           : item,
       ),
     })
+    queueSessionWrite('sessions.continueCarryForward', { originSessionId, originItemId })
     toast('Continued on today\'s production', productById(origin.productId)?.name)
     return state.productionSessions.find((item) => item.id === operational.id) ?? nextSession
   },
@@ -7318,6 +7360,7 @@ export const db = {
           : row,
       ),
     })
+    queueSessionWrite('sessions.editCompleted', { id, productId, field, newValue, reason: reason.trim() })
     toast('Completed production updated', 'Audit log recorded.')
     return true
   },
@@ -7421,11 +7464,21 @@ export const db = {
           : row,
       ),
     })
+    queueSessionWrite('sessions.editCompletedClosing', {
+      id,
+      productId,
+      fullUnits: input.fullUnits,
+      looseQty: input.looseQty,
+      reason: reason.trim(),
+    })
     toast('Material closing updated', 'Inventory reconciled and audit recorded.')
     return true
   },
 
-  createDailySession(input: { productionDate: string; items: Array<{ productId: string; targetQty: number }>; notes?: string }) {
+  createDailySession(
+    input: { productionDate: string; items: Array<{ productId: string; targetQty: number }>; notes?: string },
+    options?: { localOnly?: boolean },
+  ) {
     if (!input.items.length) {
       toast('Add products to the daily plan', undefined, 'warning')
       return null
@@ -7484,6 +7537,15 @@ export const db = {
       materialAudits: [],
     }
     setData({ productionSessions: [session, ...state.productionSessions] })
+    if (!options?.localOnly) {
+      queueSessionWrite('sessions.create', {
+        clientId: session.id,
+        productionDate: input.productionDate,
+        warehouseId: session.warehouseId,
+        items: input.items,
+        notes: input.notes ?? '',
+      })
+    }
     toast('Daily production created', session.reference)
     return session
   },
@@ -9743,6 +9805,9 @@ startManufacturingHydration({
       batches: slice.batches,
       ...(slice.inventory ? { inventory: slice.inventory } : {}),
       ...(slice.stockMovements ? { stockMovements: slice.stockMovements } : {}),
+      ...(slice.productionSessions ? { productionSessions: slice.productionSessions } : {}),
+      ...(slice.displayStocks ? { displayStocks: slice.displayStocks } : {}),
+      ...(slice.productionBalances ? { productionBalances: slice.productionBalances } : {}),
     })
   },
   actorId: () => currentUser(state).id,

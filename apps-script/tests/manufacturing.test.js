@@ -44,7 +44,7 @@ function app() {
     products: context.createProductService({ sheetRepository: sheets }),
     inventory: context.createInventoryService({ sheetRepository: sheets }),
     boms: context.createBomService({ sheetRepository: sheets }),
-    manufacturing: context.createManufacturingService({ sheetRepository: sheets }),
+    manufacturing: context.createManufacturingService({ sheetRepository: sheets, driveStorage }),
   }
 }
 
@@ -159,6 +159,7 @@ test('packing list is permissioned and cashier cannot confirm', () => {
   assert.equal(listed.ok, true)
   assert.equal(listed.data.packingAssemblies.length, 0)
   assert.equal(listed.data.productionOrders.length, 0)
+  assert.equal(listed.data.productionSessions.length, 0)
 })
 
 test('packing confirm posts AUTO out and finished goods in, skips MANUAL, and is retry-safe', () => {
@@ -460,3 +461,267 @@ test('packing and production do not rewrite receiving sheets', () => {
   assert.equal((backend.spreadsheet.store.Purchases || []).length, 0)
   assert.equal((confirmed.data.stockMovements || []).every((row) => row.type !== 'receiving'), true)
 })
+
+const RECIPE_PHOTO = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=='
+
+function todayKey() {
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Kuala_Lumpur',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(new Date())
+}
+
+function seedDailySession(backend) {
+  addProduct(backend, { id: 'p-s12auto', name: 'S12 Auto Mix', sku: 'S12A', unit: 'KG', purchaseUnit: 'KG', purchaseConversionQty: 1 })
+  addProduct(backend, { id: 'p-s12pouch', name: 'S12 Pouch', sku: 'S12P', unit: 'PCS', purchaseUnit: 'PCS', purchaseConversionQty: 1 })
+  addProduct(backend, { id: 'p-s12fg', name: 'S12 Pack', sku: 'S12F', unit: 'PCS', purchaseUnit: 'PCS', purchaseConversionQty: 1 })
+  const bom = createBom(backend, {
+    name: 'S12 daily BOM',
+    productId: 'p-s12fg',
+    outputQty: 10,
+    outputUnit: 'PCS',
+    bulkYieldGrams: 2000,
+    notes: '',
+    items: [
+      { productId: 'p-s12auto', qty: 2, unit: 'KG', wastagePct: 0, notes: '', consumptionMethod: 'AUTO' },
+      { productId: 'p-s12pouch', qty: 10, unit: 'PCS', wastagePct: 0, notes: '', consumptionMethod: 'MANUAL' },
+    ],
+  })
+  stock(backend, 'p-s12auto', 20)
+  stock(backend, 'p-s12pouch', 50)
+  const created = post(backend, 'sessions.create', {
+    actorUserId: 'u-aina',
+    clientId: 'ps_s12',
+    productionDate: todayKey(),
+    warehouseId: 'wh-main',
+    items: [{ productId: 'p-s12fg', targetQty: 10 }],
+    notes: 'Step 12 UAT',
+  })
+  assert.equal(created.ok, true, created.error && created.error.message)
+  return { bom, session: created.data.productionSession, snapshot: created.data }
+}
+
+function closingInputs(remainingAuto = 0, remainingPouch = 0) {
+  return [
+    { productId: 'p-s12auto', fullUnits: 0, looseQty: remainingAuto },
+    { productId: 'p-s12pouch', fullUnits: 0, looseQty: remainingPouch },
+  ]
+}
+
+function resultLine(overrides = {}) {
+  return {
+    productId: 'p-s12fg',
+    actualQty: 10,
+    productionBalanceQty: 0,
+    balanceLocation: '',
+    balanceContainer: '',
+    wasteQty: 0,
+    shortProductionReason: '',
+    notes: '',
+    displayQty: 2,
+    cartonQty: 8,
+    ...overrides,
+  }
+}
+
+test('daily session create is permissioned and does not post stock', () => {
+  const backend = ready()
+  const { snapshot } = seedDailySession(backend)
+  assert.equal(snapshot.productionSession.status, 'planned')
+  assert.equal(snapshot.productionSession.posted, false)
+  assert.match(snapshot.productionSession.reference, /^PROD-\d{8}-001$/)
+  assert.equal(qty(snapshot, 'p-s12auto'), 20)
+  assert.equal(qty(snapshot, 'p-s12fg'), 0)
+  const cashier = post(backend, 'sessions.create', {
+    actorUserId: 'u-siti',
+    clientId: 'ps_s12_cashier',
+    productionDate: todayKey(),
+    items: [{ productId: 'p-s12fg', targetQty: 1 }],
+  })
+  assert.equal(cashier.ok, false)
+  assert.equal(cashier.error.code, 'FORBIDDEN')
+  const listed = call(backend, 'sessions.list', { actorUserId: 'u-siti' })
+  assert.equal(listed.ok, false)
+  assert.equal(listed.error.code, 'FORBIDDEN')
+})
+
+test('daily session complete posts AUTO out, skips MANUAL, requires display+carton=actual, and is retry-safe', () => {
+  const backend = ready()
+  const { session } = seedDailySession(backend)
+  const accepted = call(backend, 'sessions.accept', { actorUserId: 'u-aina', id: session.id })
+  assert.equal(accepted.ok, true, accepted.error && accepted.error.message)
+  assert.equal(accepted.data.productionSession.status, 'accepted')
+
+  const started = call(backend, 'sessions.start', {
+    actorUserId: 'u-aina',
+    id: session.id,
+    recipePhoto: RECIPE_PHOTO,
+    recipePhotoName: 'recipe.png',
+  })
+  assert.equal(started.ok, true, started.error && started.error.message)
+  assert.equal(started.data.productionSession.status, 'in_progress')
+  assert.ok(started.data.productionSession.recipePhoto)
+  const autoLine = started.data.productionSession.picking.find((row) => row.id === 'raw-p-s12auto')
+  assert.ok(autoLine)
+  const picked = call(backend, 'sessions.togglePicking', {
+    actorUserId: 'u-aina',
+    id: session.id,
+    lineId: autoLine.id,
+    picked: true,
+  })
+  assert.equal(picked.ok, true, picked.error && picked.error.message)
+  assert.equal(picked.data.productionSession.materialAllocations.some((row) => row.productId === 'p-s12auto' && row.source === 'picking'), true)
+
+  const savedResult = call(backend, 'sessions.saveResult', {
+    actorUserId: 'u-aina',
+    id: session.id,
+    results: [resultLine()],
+  })
+  assert.equal(savedResult.ok, true, savedResult.error && savedResult.error.message)
+
+  const mismatch = call(backend, 'sessions.saveDistribution', {
+    actorUserId: 'u-aina',
+    id: session.id,
+    results: [resultLine({ displayQty: 1, cartonQty: 1 })],
+  })
+  assert.equal(mismatch.ok, false)
+  assert.match(mismatch.error.message, /Display \+ Carton must equal Actual/)
+
+  const savedDist = call(backend, 'sessions.saveDistribution', {
+    actorUserId: 'u-aina',
+    id: session.id,
+    results: [resultLine()],
+  })
+  assert.equal(savedDist.ok, true, savedDist.error && savedDist.error.message)
+
+  const savedClose = call(backend, 'sessions.saveMaterialClosing', {
+    actorUserId: 'u-aina',
+    id: session.id,
+    acknowledged: true,
+    inputs: closingInputs(0, 0),
+  })
+  assert.equal(savedClose.ok, true, savedClose.error && savedClose.error.message)
+
+  const noAck = post(backend, 'sessions.complete', {
+    actorUserId: 'u-aina',
+    id: session.id,
+    results: [resultLine()],
+    closing: { acknowledged: false, inputs: closingInputs(0, 0) },
+  })
+  assert.equal(noAck.ok, false)
+
+  const done = post(backend, 'sessions.complete', {
+    actorUserId: 'u-aina',
+    id: session.id,
+    results: [resultLine()],
+    closing: { acknowledged: true, inputs: closingInputs(0, 0) },
+  }, { idempotencyKey: 's12-complete' })
+  assert.equal(done.ok, true, done.error && done.error.message)
+  const completed = done.data.productionSession
+  assert.equal(completed.status, 'completed')
+  assert.equal(completed.posted, true)
+  assert.equal(completed.items[0].displayQty, 2)
+  assert.equal(completed.items[0].cartonQty, 8)
+  assert.equal(qty(done.data, 'p-s12auto'), 18)
+  assert.equal(qty(done.data, 'p-s12pouch'), 50)
+  assert.equal(qty(done.data, 'p-s12fg'), 10)
+  const autoMoves = movements(done.data, completed.reference).filter((row) => row.productId === 'p-s12auto')
+  const pouchMoves = movements(done.data, completed.reference).filter((row) => row.productId === 'p-s12pouch')
+  const fgMoves = movements(done.data, completed.reference).filter((row) => row.productId === 'p-s12fg' && row.type === 'production_in')
+  assert.equal(autoMoves.length, 1)
+  assert.equal(autoMoves[0].type, 'production_out')
+  assert.equal(autoMoves[0].stockOut, 2)
+  assert.equal(pouchMoves.length, 0)
+  assert.equal(fgMoves.length, 1)
+  assert.equal(fgMoves[0].stockIn, 10)
+  const display = (done.data.displayStocks || []).find((row) => row.productId === 'p-s12fg' && row.warehouseId === 'wh-main')
+  assert.equal(display && display.qty, 2)
+
+  const retry = post(backend, 'sessions.complete', {
+    actorUserId: 'u-aina',
+    id: session.id,
+    results: [resultLine()],
+    closing: { acknowledged: true, inputs: closingInputs(0, 0) },
+  }, { idempotencyKey: 's12-complete' })
+  assert.equal(retry.ok, true, retry.error && retry.error.message)
+  assert.equal(qty(retry.data, 'p-s12auto'), 18)
+  assert.equal(qty(retry.data, 'p-s12fg'), 10)
+  assert.equal(movements(retry.data, completed.reference).filter((row) => row.type === 'production_in').length, 1)
+
+  const otherKey = post(backend, 'sessions.complete', {
+    actorUserId: 'u-aina',
+    id: session.id,
+    results: [resultLine()],
+    closing: { acknowledged: true, inputs: closingInputs(0, 0) },
+  }, { idempotencyKey: 's12-complete-other' })
+  assert.equal(otherKey.ok, false)
+  assert.equal(otherKey.error.code, 'CONFLICT')
+})
+
+test('daily session carry-forward continues remaining target once', () => {
+  const backend = ready()
+  addProduct(backend, { id: 'p-s12auto', name: 'S12 Auto Mix', sku: 'S12A', unit: 'KG', purchaseUnit: 'KG', purchaseConversionQty: 1 })
+  addProduct(backend, { id: 'p-s12pouch', name: 'S12 Pouch', sku: 'S12P', unit: 'PCS', purchaseUnit: 'PCS', purchaseConversionQty: 1 })
+  addProduct(backend, { id: 'p-s12fg', name: 'S12 Pack', sku: 'S12F', unit: 'PCS', purchaseUnit: 'PCS', purchaseConversionQty: 1 })
+  createBom(backend, {
+    name: 'S12 daily BOM',
+    productId: 'p-s12fg',
+    outputQty: 10,
+    outputUnit: 'PCS',
+    bulkYieldGrams: 2000,
+    notes: '',
+    items: [
+      { productId: 'p-s12auto', qty: 2, unit: 'KG', wastagePct: 0, notes: '', consumptionMethod: 'AUTO' },
+      { productId: 'p-s12pouch', qty: 10, unit: 'PCS', wastagePct: 0, notes: '', consumptionMethod: 'MANUAL' },
+    ],
+  })
+  stock(backend, 'p-s12auto', 20)
+  stock(backend, 'p-s12pouch', 50)
+  const created = post(backend, 'sessions.create', {
+    actorUserId: 'u-aina',
+    clientId: 'ps_s12cf',
+    productionDate: todayKey(),
+    items: [{ productId: 'p-s12fg', targetQty: 10 }],
+  })
+  assert.equal(created.ok, true, created.error && created.error.message)
+  const id = created.data.productionSession.id
+  assert.equal(call(backend, 'sessions.accept', { actorUserId: 'u-aina', id }).ok, true)
+  const started = call(backend, 'sessions.start', {
+    actorUserId: 'u-aina', id, recipePhoto: RECIPE_PHOTO, recipePhotoName: 'recipe.png',
+  })
+  assert.equal(started.ok, true, started.error && started.error.message)
+  const autoLine = started.data.productionSession.picking.find((row) => row.id === 'raw-p-s12auto')
+  assert.equal(call(backend, 'sessions.togglePicking', { actorUserId: 'u-aina', id, lineId: autoLine.id, picked: true }).ok, true)
+  const short = resultLine({ actualQty: 6, displayQty: 2, cartonQty: 4, carryForward: true })
+  const done = post(backend, 'sessions.complete', {
+    actorUserId: 'u-aina',
+    id,
+    results: [short],
+    closing: { acknowledged: true, inputs: closingInputs(0, 0) },
+  })
+  assert.equal(done.ok, true, done.error && done.error.message)
+  const originItem = done.data.productionSession.items[0]
+  assert.equal(originItem.carryForward, true)
+  assert.equal(originItem.actualQty, 6)
+  const continued = call(backend, 'sessions.continueCarryForward', {
+    actorUserId: 'u-aina',
+    originSessionId: id,
+    originItemId: originItem.id,
+    clientId: 'ps_s12cf2',
+  })
+  assert.equal(continued.ok, true, continued.error && continued.error.message)
+  const next = continued.data.productionSession
+  assert.equal(next.status, 'planned')
+  assert.equal(next.id, 'ps_s12cf2')
+  assert.equal(next.items[0].targetQty, 4)
+  assert.equal(next.items[0].carriedFromSessionId, id)
+  const again = call(backend, 'sessions.continueCarryForward', {
+    actorUserId: 'u-aina',
+    originSessionId: id,
+    originItemId: originItem.id,
+  })
+  assert.equal(again.ok, false)
+})
+
