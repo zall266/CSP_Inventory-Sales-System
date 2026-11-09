@@ -382,5 +382,40 @@ DEV spreadsheet `1TPmkASdzlGssGyAisklf4QkLcxWYbHHhUSxntgLha94` export at 9 Nov 2
 
 ### Deploy and preservation
 
-Filled after merge and Deploy DEV. The UAT row must remain `planned`, date serial/calendar 9 Nov 2026, quantities 45/45, notes unchanged, no duplicate `PROD-20261109-001`, no production stock movements.
+| Item | Evidence |
+| --- | --- |
+| PR | [#103](https://github.com/zall266/CSP_Inventory-Sales-System/pull/103) merged into `cursor/dev-frontend-github-pages-d9ac` at 9 Nov 2026, 8:57 PM MYT |
+| Merge commit | `8623131906052d427e321b0c41e6088dfb172771` |
+| Apps Script | **v21**, `versionDescription=git:8623131906052d427e321b0c41e6088dfb172771`. Same project `1mkRzptY0mzHnzOFB8TA6AGIZyv6q2gJq-QdKPBWtV91oq5okHWVpY4Jj`. Same `/exec` id `AKfycbyMDLwOJ2iqD_nuLFcVMQYrS81WDkkaBhutTGBCrbUClM1Aap1MJiO6CnzzcYuTAoMbDw`. Deploy DEV [42620918774](https://github.com/zall266/CSP_Inventory-Sales-System/actions/runs/42620918774) |
+| GitHub Pages | [42621261016](https://github.com/zall266/CSP_Inventory-Sales-System/actions/runs/42621261016). Live `index.html` loads `assets/index-Txu30SAh.js` |
+| Live bundle | Contains `Date missing` / `Invalid date` parser, `No daily session for ${…}` using that formatter, and `sessions.create`. Does **not** concatenate `productionDate+"T00:00:00+08:00"`. `PROTOTYPE_TODAY` remains for Header/finance/seed only. |
+| `/exec` health | 9 Nov 2026, 8:57 PM MYT: DEV, healthy, spreadsheet and Drive accessible, foundation ready, timezone `Asia/Kuala_Lumpur` |
+
+Post-deploy **direct workbook read** (xlsx export, read-only, 9 Nov 2026, 8:57 PM MYT). This is not API read-back.
+
+| Field | Before | After |
+| --- | --- | --- |
+| Session rows | 1 | 1 |
+| id | `ps_p2lblrm1i` | `ps_p2lblrm1i` |
+| reference | `PROD-20261109-001` | `PROD-20261109-001` |
+| productionDate | serial `46335.0` (9 Nov 2026) | serial `46335.0` (9 Nov 2026) — cell not rewritten |
+| status | `planned` | `planned` |
+| notes | `STEP12-UAT-20261109` | `STEP12-UAT-20261109` |
+| posted | `0` | `0` |
+| createdAt | `2026-11-09T04:49:25.923Z` | `2026-11-09T04:49:25.923Z` |
+| accepted / started / completed | empty | empty |
+| Matcha `p-pack-mt` | target 45, actual 0 | target 45, actual 0 |
+| Chocolate Lava `p-pack-cl` | target 45, actual 0 | target 45, actual 0 |
+
+No duplicate session. No `PROD-20261109-001` stock movement. Accept/start/complete were not called.
+
+### Remaining
+
+Step 12 stays **OWNER UAT REQUIRED**. Do not accept or start `PROD-20261109-001` in this task. The owner resumes UAT on https://zall266.github.io/CSP_Inventory-Sales-System/
+
+Owner checks:
+
+1. Production Planning: `PROD-20261109-001` date **09 Nov 2026**, 2 products, 90 packs, status Planned.
+2. Today's Production: current Malaysia date **09 Nov 2026**, session present. Not 10 Sept 2026.
+3. Do **not** click Accept, Start, Picking, Distribution, or Complete until the owner is ready.
 
