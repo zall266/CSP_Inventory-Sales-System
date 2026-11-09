@@ -1,18 +1,26 @@
 import type { AppState, Bom, PickingLine, Product, ProductionBalance, ProductionSession, ProductionSessionStatus, UserRole } from '@/types'
 import { formatUnit, purchaseConversionQty, qtyToBaseUnit, unitsEqual } from '@/features/products/masterData'
-import { round2, systemDateKey } from '@/utils/format'
+import { calendarDatesEqual, canonicalCalendarDate, liveSystemDateKey, round2 } from '@/utils/format'
 import { scaledRequiredQty } from './helpers'
 
 export function systemProductionDate() {
-  return systemDateKey()
+  return liveSystemDateKey()
+}
+
+export function hydrateProductionSessions(sessions: ProductionSession[]): ProductionSession[] {
+  return sessions.map((session) => {
+    const productionDate = canonicalCalendarDate(session.productionDate) ?? session.productionDate
+    if (productionDate === session.productionDate) return session
+    return { ...session, productionDate }
+  })
 }
 
 export function isSessionOperationalToday(session: Pick<ProductionSession, 'productionDate'>, date = systemProductionDate()) {
-  return session.productionDate === date
+  return calendarDatesEqual(session.productionDate, date)
 }
 
 export function todaySessions(sessions: ProductionSession[], date = systemProductionDate()) {
-  return sessions.filter((item) => item.productionDate === date)
+  return sessions.filter((item) => calendarDatesEqual(item.productionDate, date))
 }
 
 export function todayOperationalSession(sessions: ProductionSession[], date = systemProductionDate()) {

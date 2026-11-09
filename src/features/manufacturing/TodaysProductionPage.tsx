@@ -3,7 +3,7 @@ import { Link, useNavigate, useParams } from 'react-router-dom'
 import { Badge, Button, Card, Field, Modal, PageHeader, StatusBadge } from '@/components/ui'
 import { ProductMark } from '@/components/ProductMark'
 import { useApi, useLookups, useStore } from '@/store/hooks'
-import { formatDate, formatDateTime, formatQty } from '@/utils/format'
+import { formatCalendarDate, formatDate, formatDateTime, formatQty } from '@/utils/format'
 import type { ProductionSession } from '@/types'
 import { hasPermission } from '@/features/settings/permissions'
 import { allocationLabel, sessionAllocatedQty } from './materialClosing'
@@ -36,10 +36,10 @@ export function TodaysProductionPage() {
       <div>
         <PageHeader
           title="Today's Production"
-          subtitle={`${formatDate(today + 'T00:00:00+08:00')} · Today`}
+          subtitle={`${formatCalendarDate(today)} · Today`}
         />
         <Card className="p-6 text-sm text-slate-600">
-          This plan is for {formatDate(linked.productionDate + 'T00:00:00+08:00')} ({linked.reference}).
+          This plan is for {formatCalendarDate(linked.productionDate)} ({linked.reference}).
           Today's Production only runs the current system date. Open Production History to view this record.
           <div className="mt-4">
             <Link to={`/manufacturing/history/${linked.id}`}><Button variant="secondary">View in Production History</Button></Link>
@@ -52,7 +52,7 @@ export function TodaysProductionPage() {
   if (!session) {
     return (
       <div>
-        <PageHeader title="Today's Production" subtitle={`No daily session for ${formatDate(today + 'T00:00:00+08:00')}.`} />
+        <PageHeader title="Today's Production" subtitle={`No daily session for ${formatCalendarDate(today)}.`} />
         <Card className="p-6 text-sm text-slate-500">Create a session from Production Planning.</Card>
       </div>
     )
@@ -115,7 +115,7 @@ function SessionWorkspace({ session }: { session: ProductionSession }) {
       <div className="mb-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
         <Meta label="Production date" value="">
           <div className="flex flex-wrap items-center gap-2">
-            <span>{formatDate(session.productionDate + 'T00:00:00+08:00')}</span>
+            <span>{formatCalendarDate(session.productionDate)}</span>
             <Badge tone="indigo">Today</Badge>
           </div>
         </Meta>
@@ -157,7 +157,7 @@ function SessionWorkspace({ session }: { session: ProductionSession }) {
                           <div className="text-xs text-slate-400">{p?.sku}</div>
                           {origin && (
                             <div className="text-xs text-indigo-700">
-                              Continued from {formatDate(`${origin.productionDate}T00:00:00+08:00`)}
+                              Continued from {formatCalendarDate(origin.productionDate)}
                               {originLine ? ` · original ${originLine.originalTargetQty} packs` : ''}
                             </div>
                           )}

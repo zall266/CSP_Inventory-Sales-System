@@ -10,15 +10,47 @@ function sessionText(value) {
   return value === undefined || value === null ? '' : String(value);
 }
 
+function sessionExcelSerialKey(serial) {
+  if (!(serial >= 20000 && serial <= 80000)) return '';
+  var utc = Date.UTC(1899, 11, 30) + Math.round(serial) * 86400000;
+  var date = new Date(utc);
+  var year = date.getUTCFullYear();
+  var month = String(date.getUTCMonth() + 1);
+  var day = String(date.getUTCDate());
+  if (month.length < 2) month = '0' + month;
+  if (day.length < 2) day = '0' + day;
+  return year + '-' + month + '-' + day;
+}
+
 function sessionDateKey(value) {
+  if (value instanceof Date) {
+    if (isNaN(value.getTime())) return '';
+    return typeof businessDate === 'function' ? businessDate(value) : value.toISOString().slice(0, 10);
+  }
+  if (typeof value === 'number' && isFinite(value)) {
+    return sessionExcelSerialKey(value);
+  }
   var raw = sessionText(value).trim();
-  if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) return raw;
-  if (typeof businessDate === 'function') return businessDate(raw ? new Date(raw) : new Date());
-  return sessionText(raw).slice(0, 10);
+  if (!raw) return '';
+  if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) {
+    var parts = raw.split('-');
+    var year = Number(parts[0]);
+    var month = Number(parts[1]);
+    var day = Number(parts[2]);
+    var check = new Date(Date.UTC(year, month - 1, day));
+    if (check.getUTCFullYear() !== year || check.getUTCMonth() !== month - 1 || check.getUTCDate() !== day) return '';
+    return raw;
+  }
+  if (/^\d+(\.0+)?$/.test(raw)) return sessionExcelSerialKey(Number(raw));
+  var parsed = new Date(raw);
+  if (isNaN(parsed.getTime())) return '';
+  return typeof businessDate === 'function' ? businessDate(parsed) : parsed.toISOString().slice(0, 10);
 }
 
 function sessionIsOperationalToday(session, today) {
-  return sessionDateKey(session && session.productionDate) === sessionDateKey(today);
+  var sessionKey = sessionDateKey(session && session.productionDate);
+  var todayKey = sessionDateKey(today);
+  return Boolean(sessionKey && todayKey && sessionKey === todayKey);
 }
 
 function sessionCanEdit(role, status) {

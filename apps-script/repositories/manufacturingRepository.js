@@ -620,7 +620,7 @@ function createManufacturingRepository(sheetRepository) {
       if (!id) return null;
       var session = {
         id: id,
-        productionDate: text(row.productionDate).trim(),
+        productionDate: sessionDateKey(row.productionDate),
         reference: text(row.reference).trim(),
         status: sessionStatus(row.status),
         warehouseId: text(row.warehouseId).trim(),

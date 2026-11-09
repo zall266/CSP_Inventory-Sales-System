@@ -10,6 +10,7 @@ import type {
   StockMovement,
 } from '@/types'
 import { hydratePackingAssemblies } from '@/features/manufacturing/packingModel'
+import { hydrateProductionSessions } from '@/features/manufacturing/sessionPlan'
 
 export type ManufacturingSlice = {
   packingAssemblies: PackingAssembly[]
@@ -60,7 +61,7 @@ function sliceFrom(data: Partial<ManufacturingSlice> | null): ManufacturingSlice
     batches: Array.isArray(data.batches) ? data.batches : [],
     inventory: data.inventory,
     stockMovements: data.stockMovements,
-    productionSessions: Array.isArray(data.productionSessions) ? data.productionSessions : undefined,
+    productionSessions: Array.isArray(data.productionSessions) ? hydrateProductionSessions(data.productionSessions) : undefined,
     displayStocks: Array.isArray(data.displayStocks) ? data.displayStocks : undefined,
     productionBalances: Array.isArray(data.productionBalances) ? data.productionBalances : undefined,
   }

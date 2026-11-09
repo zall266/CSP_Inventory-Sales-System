@@ -2,7 +2,7 @@ import { Link, useNavigate } from 'react-router-dom'
 import { Button, Card, PageHeader } from '@/components/ui'
 import { ProductMark } from '@/components/ProductMark'
 import { useApi, useLookups, useStore } from '@/store/hooks'
-import { formatDate, formatQty } from '@/utils/format'
+import { formatCalendarDate, formatQty } from '@/utils/format'
 import { hasPermission } from '@/features/settings/permissions'
 import { committedCarryForwardOrigins } from './sessionPlan'
 
@@ -54,7 +54,7 @@ export function CarryForwardPage() {
                         </div>
                       </div>
                     </td>
-                    <td>{formatDate(`${session.productionDate}T00:00:00+08:00`)}</td>
+                    <td>{formatCalendarDate(session.productionDate)}</td>
                     <td className="tabular">{item.originalTargetQty} packs</td>
                     <td className="tabular">{item.actualQty || 0} packs</td>
                     <td className="tabular">{remaining} packs</td>

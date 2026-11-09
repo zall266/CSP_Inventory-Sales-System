@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Button, Card, Field, Input, PageHeader, StatusBadge, Textarea } from '@/components/ui'
 import { useApi, useStore } from '@/store/hooks'
-import { formatDate } from '@/utils/format'
+import { calendarDatesEqual, formatCalendarDate } from '@/utils/format'
 import type { ProductionSession } from '@/types'
 import { sessionTotals, systemProductionDate } from './sessionPlan'
 import {
@@ -15,7 +15,7 @@ import {
 } from './planAmendment'
 
 function sessionPath(session: ProductionSession) {
-  if (session.status === 'cancelled' || session.status === 'completed' || session.productionDate !== systemProductionDate()) {
+  if (session.status === 'cancelled' || session.status === 'completed' || !calendarDatesEqual(session.productionDate, systemProductionDate())) {
     return `/manufacturing/history/${session.id}`
   }
   return '/manufacturing/today'
@@ -25,7 +25,7 @@ export function ProductionPlanningPage() {
   const state = useStore()
   const api = useApi()
   const navigate = useNavigate()
-  const [date, setDate] = useState('2026-09-11')
+  const [date, setDate] = useState(() => systemProductionDate())
   const [notes, setNotes] = useState('')
   const [lines, setLines] = useState<PlanLineDraft[]>([
     { productId: 'p-pack-mt', targetQty: 45 },
@@ -57,7 +57,7 @@ export function ProductionPlanningPage() {
             onClick={() => {
               const created = api.createDailySession({ productionDate: date, items: lines, notes })
               if (created) {
-                navigate(created.productionDate === systemProductionDate() ? '/manufacturing/today' : `/manufacturing/history/${created.id}`)
+                navigate(calendarDatesEqual(created.productionDate, systemProductionDate()) ? '/manufacturing/today' : `/manufacturing/history/${created.id}`)
               }
             }}
           >
@@ -84,7 +84,7 @@ export function ProductionPlanningPage() {
                 const flags = planActionFlags(state, session)
                 return (
                   <tr key={session.id} onClick={() => navigate(sessionPath(session))}>
-                    <td>{formatDate(session.productionDate + 'T00:00:00+08:00')}</td>
+                    <td>{formatCalendarDate(session.productionDate)}</td>
                     <td className="font-medium text-indigo-700">{session.reference}</td>
                     <td>{totals.products}</td>
                     <td className="tabular">{totals.planned}</td>

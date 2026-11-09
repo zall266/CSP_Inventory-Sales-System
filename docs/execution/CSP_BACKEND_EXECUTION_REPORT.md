@@ -1,6 +1,6 @@
 # CSP Backend Execution Report
 
-Steps 9, 10, and 11 are **PASS / LOCKED** by owner authorization dated 9 Nov 2026. Step 12 Daily Sessions is in progress.
+Steps 9, 10, and 11 are **PASS / LOCKED** by owner authorization dated 9 Nov 2026. Step 12 Daily Sessions is **OWNER UAT REQUIRED**. Do not mark Step 12 PASS or LOCKED.
 
 Statuses used here: PASS / PASS / LOCKED / OWNER UAT REQUIRED / BLOCKED / IN PROGRESS. Untouched later modules stay NOT STARTED.
 
@@ -304,9 +304,9 @@ Locked-module protection: do not redesign or refactor Steps 9, 10, or 11. A late
 
 Step 12 Daily Sessions is authorized to begin. This lock section is documentation only. It does not deploy and does not change workbook data.
 
-## Step 12 — Daily Sessions — IN PROGRESS
+## Step 12 — Daily Sessions — OWNER UAT REQUIRED
 
-Backend implementation matches the existing Daily Sessions frontend. Locked Steps 9–11 were not redesigned.
+Backend implementation matches the existing Daily Sessions frontend. Locked Steps 9–11 were not redesigned. Owner UAT started on 9 Nov 2026 and paused after two date defects. Those defects are fixed below. Do not accept, start, pick, distribute, or complete `PROD-20261109-001`. The owner resumes UAT manually.
 
 | Item | Status |
 | --- | --- |
@@ -315,11 +315,72 @@ Backend implementation matches the existing Daily Sessions frontend. Locked Step
 | Complete once | `sessions.complete` is idempotent. A second key after posting returns `CONFLICT`. |
 | Stock | Posted only on complete (and completed-session edits). AUTO components out from material-closing actual used. MANUAL components skip auto-out. Finished goods in. Display qty updates DisplayStocks. |
 | Carry-forward | Remaining target continues once onto today's operational session, or a new planned session. |
-| Frontend | Existing pages unchanged. `db.ts` queues `sessions.*` when the identity API is connected. Hydration reads `productionSessions` from `packing.list` / `sessions.list`. |
-| Automated tests | Manufacturing file 10/10. Full backend suite 106/106. `tsc` and Vite production build passed. |
-| Owner UAT | Required on DEV after Apps Script + Pages deploy. Not started. |
+| Frontend | Existing pages unchanged except date display/filter for Daily Sessions. `db.ts` queues `sessions.*` when the identity API is connected. Hydration reads `productionSessions` from `packing.list` / `sessions.list`. |
+| Automated tests | Manufacturing file 10/10. Session date file 6/6. Calendar date file 10/10. Full backend suite **112/112**. `tsc`, lint, and Vite production build passed. |
+| Owner UAT | **OWNER UAT REQUIRED**. Create of `PROD-20261109-001` is done. Remaining accept/start/picking/complete steps are stopped until the owner resumes. |
 
 Actions: `sessions.list`, `sessions.get`, `sessions.create`, `sessions.accept`, `sessions.start`, `sessions.cancelPlanned`, `sessions.update`, `sessions.amend`, `sessions.changeTarget`, `sessions.togglePicking`, `sessions.addMaterial`, `sessions.saveResult`, `sessions.saveDistribution`, `sessions.saveMaterialClosing`, `sessions.complete`, `sessions.continueCarryForward`, `sessions.editCompleted`, `sessions.editCompletedClosing`.
 
-Owner UAT still required: create/accept/start with recipe photo, picking, the three complete-production steps, display+carton=actual, complete once, AUTO out / MANUAL skip, cashier denial, and carry-forward. Do not treat automated tests as owner UAT.
+Owner UAT still required: accept/start with recipe photo, picking, the three complete-production steps, display+carton=actual, complete once, AUTO out / MANUAL skip, cashier denial, and carry-forward. Do not treat automated tests as owner UAT.
+
+## Step 12 date defects — 9 Nov 2026
+
+Owner UAT of Daily Sessions found two display/filter defects. The existing session was not deleted, recreated, accepted, started, or completed. No stock movement was posted for this fix.
+
+### Pre-fix workbook read (direct xlsx export, read-only)
+
+DEV spreadsheet `1TPmkASdzlGssGyAisklf4QkLcxWYbHHhUSxntgLha94` export at 9 Nov 2026, 8:45 PM MYT.
+
+| Field | Stored value |
+| --- | --- |
+| id | `ps_p2lblrm1i` |
+| reference | `PROD-20261109-001` |
+| productionDate | Excel serial `46335.0` = calendar day **2026-11-09** |
+| status | `planned` |
+| notes | `STEP12-UAT-20261109` |
+| posted | `0` |
+| createdAt | `2026-11-09T04:49:25.923Z` |
+| createdBy | Aina Rahman |
+| items | `p-pack-mt` target 45, `p-pack-cl` target 45 |
+
+### Defect A — Production Planning "Invalid Date"
+
+**Observed:** list showed `PROD-20261109-001`, 2 products, 90 planned packs, Date **Invalid Date**.
+
+**Root cause:** Sheets stores `productionDate` as a Date (xlsx serial `46335`). Apps Script `text(row.productionDate)` stringifies that as `Mon Nov 09 2026 00:00:00 GMT+0800 (...)`. The frontend then did `formatDate(session.productionDate + 'T00:00:00+08:00')`. Concatenating onto a GMT string or a serial produces a JavaScript Invalid Date. Same class of storage as the locked Step 11 `PO-0001` plannedStart observation. This is not a missing row and not a wrong calendar day in the sheet.
+
+**Fix:** canonicalize operational production dates to `YYYY-MM-DD` on read (`sessionDateKey` / `canonicalCalendarDate`) without rewriting the sheet cell. Display with `formatCalendarDate`, which understands date-only, ISO+offset, historical GMT strings, Excel serials, missing, and invalid values. Date-only values are not parsed as UTC midnight. Missing/invalid dates render as `Date missing` / `Invalid date` and never become today.
+
+### Defect B — Today's Production frozen prototype date
+
+**Observed:** Today's Production showed **No daily session for 10 Sept 2026** while the owner UAT date was 9 Nov 2026 and `PROD-20261109-001` existed for `2026-11-09`.
+
+**Root cause:** `systemProductionDate()` called `systemDateKey()` with no argument. `systemDateKey` still defaults to `PROTOTYPE_TODAY` (`2026-09-10T12:00:00+08:00`) for Header, dashboard windows, finance due-today, and seed. Today's Production therefore queried `2026-09-10` instead of the live Malaysia calendar date.
+
+**Fix:** Daily Sessions only. `systemProductionDate()` now uses `liveSystemDateKey()` → `systemDateKey(new Date())` in `Asia/Kuala_Lumpur`. `PROTOTYPE_TODAY` remains the default for `systemDateKey()` and for Header/Finance/seed. The Production Planning create form defaults to the live Malaysia date. Session equality uses canonical dates so GMT/serial stored values still match `2026-11-09`.
+
+### Files changed
+
+- `src/utils/calendarDate.ts` (new shared parser/formatter)
+- `src/utils/format.ts` (re-exports; `systemDateKey` default unchanged)
+- `src/features/manufacturing/sessionPlan.ts`
+- Daily Session pages: Planning, Today's Production, History, Complete, Picking, Carry-forward, plan amendment
+- `src/store/db.ts`, `src/store/manufacturingSync.ts` (hydrate canonical dates)
+- `apps-script/utils/sessionMath.js`, `apps-script/repositories/manufacturingRepository.js` (canonicalize on read)
+- Tests: `src/utils/calendarDate.test.ts`, `apps-script/tests/sessionDate.test.js`
+- `.github/workflows/deploy-dev.yml` (this fix branch)
+
+### Tests
+
+| Suite | Result |
+| --- | --- |
+| `src/utils/calendarDate.test.ts` | 10/10 |
+| `apps-script/tests/sessionDate.test.js` | 6/6 |
+| Full backend `npm run test:backend` | **112/112** (includes existing create/list/accept/start/picking/distribution/complete session tests; no live production writes) |
+| `tsc --noEmit` | pass |
+| Vite production build | pass (`index-ChemMI5e.js` local artifact) |
+
+### Deploy and preservation
+
+Filled after merge and Deploy DEV. The UAT row must remain `planned`, date serial/calendar 9 Nov 2026, quantities 45/45, notes unchanged, no duplicate `PROD-20261109-001`, no production stock movements.
 

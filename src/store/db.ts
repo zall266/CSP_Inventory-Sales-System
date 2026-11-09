@@ -109,7 +109,7 @@ import {
   packingWarehouseError,
   validatePackingQuantities,
 } from '@/features/manufacturing/packingModel'
-import { buildSessionPlan, canAmendPlanStatus, canEditSession, canRunProduction, currentUser, isCarryForwardResumed, isRawStorePickingLine, isSessionOperationalToday, mergePicking, remainingTargetQty, systemProductionDate, todaySessions } from '@/features/manufacturing/sessionPlan'
+import { buildSessionPlan, canAmendPlanStatus, canEditSession, canRunProduction, currentUser, hydrateProductionSessions, isCarryForwardResumed, isRawStorePickingLine, isSessionOperationalToday, mergePicking, remainingTargetQty, systemProductionDate, todaySessions } from '@/features/manufacturing/sessionPlan'
 import { buildSessionMaterialClosing, closingLineFromInput, isSignificantVariance } from '@/features/manufacturing/materialClosing'
 import {
   defaultPermissionsForLegacy,
@@ -219,7 +219,7 @@ import type {
   ProductionMaterialAllocationSource,
 } from '@/types'
 import { mergeUsahaoneUatProducts } from '@/data/usahaoneProductImport'
-import { nextDatedDocNo, nextDocNo, PROTOTYPE_TODAY, formatMoney, formatQty, round2, stockStatus, systemDateKey, uid } from '@/utils/format'
+import { calendarDatesEqual, canonicalCalendarDate, nextDatedDocNo, nextDocNo, PROTOTYPE_TODAY, formatMoney, formatQty, round2, stockStatus, systemDateKey, uid } from '@/utils/format'
 
 const STORAGE_KEY = 'stockflow-prototype-v8'
 
@@ -364,8 +364,9 @@ function hydrateData(data: AppData): AppData {
     salesReturns: hydrateSalesReturns(data.salesReturns),
     returnSources: data.returnSources ?? defaultReturnSources(PROTOTYPE_TODAY.toISOString()),
     returnReasons: data.returnReasons ?? defaultReturnReasons(PROTOTYPE_TODAY.toISOString()),
-    productionSessions: (data.productionSessions ?? []).map((session) => ({
+    productionSessions: hydrateProductionSessions((data.productionSessions ?? []).map((session) => ({
       ...session,
+      productionDate: canonicalCalendarDate(session.productionDate) ?? session.productionDate,
       items: session.items.map((item) => ({
         ...item,
         displayQty: item.displayQty ?? 0,
@@ -373,7 +374,7 @@ function hydrateData(data: AppData): AppData {
         carryForward: item.carryForward ?? false,
       })),
       targetChanges: session.targetChanges ?? [],
-    })),
+    }))),
     settings: {
       ...data.settings,
       legalName: data.settings.legalName ?? '',
@@ -7485,7 +7486,7 @@ export const db = {
     }
     const user = currentUser(state)
     const stamp = input.productionDate.replaceAll('-', '')
-    const seq = String(state.productionSessions.filter((item) => item.productionDate === input.productionDate).length + 1).padStart(3, '0')
+    const seq = String(state.productionSessions.filter((item) => calendarDatesEqual(item.productionDate, input.productionDate)).length + 1).padStart(3, '0')
     const id = uid('ps')
     const session = {
       id,
