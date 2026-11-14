@@ -25,6 +25,7 @@ on:
       - cursor/module-14-sales-returns-d9ac
       - cursor/module-15-sales-import-d9ac
       - cursor/module-16-dispatch-d9ac
+      - cursor/module-17-halal-tasks-expenses-d9ac
 
 permissions:
   contents: read

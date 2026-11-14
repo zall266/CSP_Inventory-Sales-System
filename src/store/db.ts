@@ -17,6 +17,14 @@ import { queueSalesWrite, startSalesHydration } from '@/store/salesSync'
 import { queueSalesReturnWrite, startSalesReturnHydration } from '@/store/salesReturnSync'
 import { queueSalesImportWrite, startSalesImportHydration } from '@/store/salesImportSync'
 import { queueDispatchWrite, startDispatchHydration } from '@/store/dispatchSync'
+import {
+  queueExpenseWrite,
+  queueHalalWrite,
+  queueTaskWrite,
+  startExpenseHydration,
+  startHalalHydration,
+  startTaskHydration,
+} from '@/store/opsSync'
 import { queueReceivingWrite, startReceivingHydration } from '@/store/receivingSync'
 import { queueManufacturingWrite, startManufacturingHydration } from '@/store/manufacturingSync'
 import {
@@ -231,6 +239,37 @@ import { mergeUsahaoneUatProducts } from '@/data/usahaoneProductImport'
 import { calendarDatesEqual, canonicalCalendarDate, nextDatedDocNo, nextDocNo, PROTOTYPE_TODAY, formatMoney, formatQty, round2, stockStatus, systemDateKey, uid } from '@/utils/format'
 
 const STORAGE_KEY = 'stockflow-prototype-v8'
+
+function blobToDataUrl(blob: Blob): Promise<string> {
+  return blob.arrayBuffer().then((buffer) => {
+    const bytes = new Uint8Array(buffer)
+    let binary = ''
+    for (let i = 0; i < bytes.length; i += 1) binary += String.fromCharCode(bytes[i])
+    return `data:${blob.type || 'application/octet-stream'};base64,${btoa(binary)}`
+  })
+}
+
+function staffTaskWritePayload(task: Pick<StaffTask, 'title' | 'description' | 'categoryId' | 'assignedTo' | 'departmentId' | 'priority' | 'frequency' | 'weekDay' | 'monthDay' | 'annualMonth' | 'annualDay' | 'specificDate' | 'time' | 'photoRequirement' | 'referenceType' | 'referenceId' | 'referenceNo'>) {
+  return {
+    title: task.title,
+    description: task.description,
+    categoryId: task.categoryId,
+    assignedTo: task.assignedTo,
+    departmentId: task.departmentId,
+    priority: task.priority,
+    frequency: task.frequency,
+    weekDay: task.weekDay,
+    monthDay: task.monthDay,
+    annualMonth: task.annualMonth,
+    annualDay: task.annualDay,
+    specificDate: task.specificDate,
+    time: task.time,
+    photoRequirement: task.photoRequirement,
+    referenceType: task.referenceType,
+    referenceId: task.referenceId,
+    referenceNo: task.referenceNo,
+  }
+}
 
 const defaultUi = (): UiState => ({
   toasts: [],
@@ -5721,7 +5760,19 @@ export const db = {
     }
     const expense: Expense = { id: uid('exp'), ...input }
     setData({ expenses: [expense, ...state.expenses] })
-    toast('Expense added', input.description)
+    if (identityApiUrl()) {
+      queueExpenseWrite('expenses.create', {
+        clientId: expense.id,
+        date: input.date,
+        category: input.category,
+        description: input.description,
+        amount: input.amount,
+        paymentMethod: input.paymentMethod,
+        notes: input.notes,
+      })
+    } else {
+      toast('Expense added', input.description)
+    }
     return expense
   },
 
@@ -8277,7 +8328,11 @@ export const db = {
         }),
       ),
     })
-    toast('Category added', category.name)
+    if (identityApiUrl()) {
+      queueTaskWrite('tasks.createCategory', { clientId: category.id, name: category.name })
+    } else {
+      toast('Category added', category.name)
+    }
     return category
   },
 
@@ -8314,7 +8369,11 @@ export const db = {
         }),
       ),
     })
-    toast('Category updated', nextName)
+    if (identityApiUrl()) {
+      queueTaskWrite('tasks.updateCategory', { id, name: nextName })
+    } else {
+      toast('Category updated', nextName)
+    }
     return true
   },
 
@@ -8342,7 +8401,11 @@ export const db = {
         }),
       ),
     })
-    toast('Category deactivated', category.name)
+    if (identityApiUrl()) {
+      queueTaskWrite('tasks.deactivateCategory', { id })
+    } else {
+      toast('Category deactivated', category.name)
+    }
     return true
   },
 
@@ -8390,7 +8453,11 @@ export const db = {
       notify('info', 'New task assigned to you.', task.title, '/tasks')
       persist(state)
     }
-    toast('Task created', task.title)
+    if (identityApiUrl()) {
+      queueTaskWrite('tasks.create', { clientId: task.id, ...staffTaskWritePayload(task) })
+    } else {
+      toast('Task created', task.title)
+    }
     return task
   },
 
@@ -8442,7 +8509,11 @@ export const db = {
       notify('info', 'New task assigned to you.', next.title, '/tasks')
       persist(state)
     }
-    toast('Task updated', next.title)
+    if (identityApiUrl()) {
+      queueTaskWrite('tasks.update', { id, ...staffTaskWritePayload(next) })
+    } else {
+      toast('Task updated', next.title)
+    }
     return true
   },
 
@@ -8468,7 +8539,11 @@ export const db = {
         }),
       ),
     })
-    toast('Task deactivated', existing.title)
+    if (identityApiUrl()) {
+      queueTaskWrite('tasks.deactivate', { id })
+    } else {
+      toast('Task deactivated', existing.title)
+    }
     return true
   },
 
@@ -8491,7 +8566,11 @@ export const db = {
         row.id === occurrenceId ? { ...row, status: 'in_progress', startedAt: nowIso() } : row,
       ),
     })
-    toast('Task started', task.title)
+    if (identityApiUrl()) {
+      queueTaskWrite('tasks.start', { id: occurrenceId })
+    } else {
+      toast('Task started', task.title)
+    }
     return true
   },
 
@@ -8535,7 +8614,11 @@ export const db = {
       toast('Photo could not be saved', 'Storage is full or unavailable. The photo was not kept.', 'danger')
       return false
     }
-    toast('Photo uploaded', parsed.name)
+    if (identityApiUrl()) {
+      queueTaskWrite('tasks.attachPhoto', { id: occurrenceId, photoUrl: parsed.url, photoName: parsed.name })
+    } else {
+      toast('Photo uploaded', parsed.name)
+    }
     return true
   },
 
@@ -8603,7 +8686,16 @@ export const db = {
       toast('Could not save completion', 'Storage is full or unavailable.', 'danger')
       return false
     }
-    toast('Task completed', task.title)
+    if (identityApiUrl()) {
+      const payload: Record<string, unknown> = { id: occurrenceId, note: input?.note }
+      if (input?.photoUrl?.startsWith('data:')) {
+        payload.photoUrl = input.photoUrl
+        payload.photoName = input.photoName
+      }
+      queueTaskWrite('tasks.complete', payload, crypto.randomUUID())
+    } else {
+      toast('Task completed', task.title)
+    }
     return true
   },
   createSalesImportAccount(platform: SalesImportPlatform, name: string) {
@@ -9177,7 +9269,19 @@ export const db = {
         newValue: manufacturer.active ? 'active' : 'inactive',
       })),
     })
-    toast('Manufacturer saved', manufacturer.name)
+    if (identityApiUrl()) {
+      queueHalalWrite('halal.saveManufacturer', {
+        clientId: manufacturer.id,
+        name: manufacturer.name,
+        registrationNo: manufacturer.registrationNo,
+        address: manufacturer.address,
+        contact: manufacturer.contact,
+        notes: manufacturer.notes,
+        active: manufacturer.active,
+      })
+    } else {
+      toast('Manufacturer saved', manufacturer.name)
+    }
     return manufacturer
   },
 
@@ -9230,7 +9334,19 @@ export const db = {
         newValue: next.name,
       })),
     })
-    toast('Manufacturer updated', next.name)
+    if (identityApiUrl()) {
+      queueHalalWrite('halal.saveManufacturer', {
+        id: next.id,
+        name: next.name,
+        registrationNo: next.registrationNo,
+        address: next.address,
+        contact: next.contact,
+        notes: next.notes,
+        active: next.active,
+      })
+    } else {
+      toast('Manufacturer updated', next.name)
+    }
     return next
   },
 
@@ -9325,17 +9441,27 @@ export const db = {
     let documentFileId = matched?.documentFileId ?? (input.document ? undefined : currentCertificate?.documentFileId)
     let documentName = matched?.documentName ?? (input.document ? undefined : currentCertificate?.documentName)
     let documentMime = matched?.documentMime ?? (input.document ? undefined : currentCertificate?.documentMime)
+    let documentDataUrl = ''
     if (input.document) {
       documentFileId = uid('hdoc')
       documentName = input.document.fileName
       documentMime = input.document.mimeType === 'image/jpg' ? 'image/jpeg' : input.document.mimeType
-      await putAttachmentBlob({
-        fileId: documentFileId,
-        kind: HALAL_CERTIFICATE_KIND,
-        fileName: documentName,
-        mimeType: documentMime,
-        blob: input.document.blob,
-      })
+      if (identityApiUrl()) {
+        try {
+          documentDataUrl = await blobToDataUrl(input.document.blob)
+        } catch {
+          toast('Certificate document', 'The file could not be read.', 'danger')
+          return null
+        }
+      } else {
+        await putAttachmentBlob({
+          fileId: documentFileId,
+          kind: HALAL_CERTIFICATE_KIND,
+          fileName: documentName,
+          mimeType: documentMime,
+          blob: input.document.blob,
+        })
+      }
     }
 
     const verificationStatus = input.verificationStatus === 'verified' ? 'verified' : 'pending'
@@ -9465,7 +9591,26 @@ export const db = {
         : [compliance, ...(state.halalCompliances ?? [])],
       documentAuditLogs: audits,
     })
-    toast(existingCompliance ? 'Halal compliance updated' : 'Halal compliance saved', product!.name)
+    if (identityApiUrl()) {
+      queueHalalWrite('halal.saveCompliance', {
+        complianceId: existingCompliance?.id,
+        clientId: compliance.id,
+        certificateClientId: certificate.id,
+        productId: product!.id,
+        manufacturerId: manufacturer.id,
+        certificateNo,
+        issuingAuthority,
+        issueDate,
+        expiryDate: input.expiryDate,
+        verificationStatus,
+        notes: input.notes,
+        documentDataUrl: documentDataUrl || undefined,
+        documentName: input.document?.fileName,
+        documentMime: documentMime,
+      })
+    } else {
+      toast(existingCompliance ? 'Halal compliance updated' : 'Halal compliance saved', product!.name)
+    }
     return compliance
   },
 
@@ -10060,6 +10205,77 @@ startOpeningBalanceHydration({
   onSettled() {
     openingBalanceInFlight = false
   },
+})
+
+startHalalHydration({
+  apply(slice) {
+    setData({
+      manufacturers: slice.manufacturers,
+      halalCertificates: slice.halalCertificates,
+      halalCompliances: slice.halalCompliances,
+      ...(slice.documentAuditLogs ? { documentAuditLogs: slice.documentAuditLogs } : {}),
+    })
+  },
+  actorId: () => currentUser(state).id,
+  onError(message) {
+    toast('Could not save to the server', message, 'danger')
+  },
+  onSaved(action, _payload, data) {
+    const manufacturer = data.manufacturer as Manufacturer | undefined
+    if (action === 'halal.saveManufacturer') {
+      toast(_payload.id ? 'Manufacturer updated' : 'Manufacturer saved', manufacturer?.name ?? '')
+    }
+    if (action === 'halal.saveCompliance') {
+      toast('Halal compliance saved')
+    }
+  },
+  onSettled() {},
+})
+
+startTaskHydration({
+  apply(slice) {
+    setData({
+      staffTaskCategories: slice.staffTaskCategories,
+      staffTasks: slice.staffTasks,
+      staffTaskOccurrences: slice.staffTaskOccurrences,
+      ...(slice.documentAuditLogs ? { documentAuditLogs: slice.documentAuditLogs } : {}),
+    })
+  },
+  actorId: () => currentUser(state).id,
+  onError(message) {
+    toast('Could not save to the server', message, 'danger')
+  },
+  onSaved(action, _payload, data) {
+    const category = data.category as { name?: string } | undefined
+    const task = data.task as StaffTask | undefined
+    const occurrence = data.occurrence as { taskId?: string } | undefined
+    const occurrenceTask = (data.staffTasks as StaffTask[] | undefined)?.find((row) => row.id === occurrence?.taskId)
+    if (action === 'tasks.createCategory') toast('Category added', category?.name ?? '')
+    if (action === 'tasks.updateCategory') toast('Category updated', category?.name ?? '')
+    if (action === 'tasks.deactivateCategory') toast('Category deactivated', category?.name ?? '')
+    if (action === 'tasks.create') toast('Task created', task?.title ?? '')
+    if (action === 'tasks.update') toast('Task updated', task?.title ?? '')
+    if (action === 'tasks.deactivate') toast('Task deactivated', task?.title ?? '')
+    if (action === 'tasks.start') toast('Task started', occurrenceTask?.title ?? '')
+    if (action === 'tasks.attachPhoto') toast('Photo uploaded')
+    if (action === 'tasks.complete') toast('Task completed', occurrenceTask?.title ?? '')
+  },
+  onSettled() {},
+})
+
+startExpenseHydration({
+  apply(slice) {
+    setData({ expenses: slice.expenses })
+  },
+  actorId: () => currentUser(state).id,
+  onError(message) {
+    toast('Could not save to the server', message, 'danger')
+  },
+  onSaved(action, _payload, data) {
+    const expense = data.expense as Expense | undefined
+    if (action === 'expenses.create') toast('Expense added', expense?.description ?? '')
+  },
+  onSettled() {},
 })
 
 startDispatchHydration({
