@@ -20,7 +20,8 @@ function defaultBackend() {
     manufacturing: createManufacturingService({ sheetRepository: sheets, driveStorage: drive }),
     sales: createSalesService({ sheetRepository: sheets }),
     salesReturns: createSalesReturnService({ sheetRepository: sheets }),
-    salesImport: createSalesImportService({ sheetRepository: sheets })
+    salesImport: createSalesImportService({ sheetRepository: sheets }),
+    dispatch: createDispatchService({ sheetRepository: sheets })
   };
 }
 

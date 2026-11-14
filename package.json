@@ -9,7 +9,7 @@
     "preview": "vite preview --host",
     "lint": "tsc --noEmit --pretty false",
     "test:dates": "node --experimental-strip-types --test src/utils/calendarDate.test.ts",
-    "test:backend": "node --test apps-script/tests/foundation.test.js apps-script/tests/identity.test.js apps-script/tests/master.test.js apps-script/tests/product.test.js apps-script/tests/party.test.js apps-script/tests/inventory.test.js apps-script/tests/warehouse.test.js apps-script/tests/bom.test.js apps-script/tests/openingBalance.test.js apps-script/tests/purchase.test.js apps-script/tests/receiving.test.js apps-script/tests/manufacturing.test.js apps-script/tests/sessionDate.test.js apps-script/tests/sales.test.js apps-script/tests/salesReturn.test.js apps-script/tests/salesImport.test.js"
+    "test:backend": "node --test apps-script/tests/foundation.test.js apps-script/tests/identity.test.js apps-script/tests/master.test.js apps-script/tests/product.test.js apps-script/tests/party.test.js apps-script/tests/inventory.test.js apps-script/tests/warehouse.test.js apps-script/tests/bom.test.js apps-script/tests/openingBalance.test.js apps-script/tests/purchase.test.js apps-script/tests/receiving.test.js apps-script/tests/manufacturing.test.js apps-script/tests/sessionDate.test.js apps-script/tests/sales.test.js apps-script/tests/salesReturn.test.js apps-script/tests/salesImport.test.js apps-script/tests/dispatch.test.js"
   },
   "dependencies": {
     "clsx": "^2.1.1",

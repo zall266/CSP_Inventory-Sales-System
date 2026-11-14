@@ -1,6 +1,6 @@
 # CSP Backend Execution Report
 
-Steps 9, 10, and 11 are **PASS / LOCKED** by owner authorization dated 9 Nov 2026. Step 12 Daily Sessions is **OWNER UAT REQUIRED**. Do not mark Step 12 PASS or LOCKED. Step 13 Sales documents is **IN PROGRESS** (backend merged; owner UAT not started). Step 14 Sales returns is **IN PROGRESS** (backend merged; owner UAT not started). Step 15 Sales import is **IN PROGRESS** (backend implemented; owner UAT not started). Steps 16–18 remain NOT STARTED.
+Steps 9, 10, and 11 are **PASS / LOCKED** by owner authorization dated 9 Nov 2026. Step 12 Daily Sessions is **OWNER UAT REQUIRED**. Do not mark Step 12 PASS or LOCKED. Step 13 Sales documents is **IN PROGRESS** (backend merged; owner UAT not started). Step 14 Sales returns is **IN PROGRESS** (backend merged; owner UAT not started). Step 15 Sales import is **IN PROGRESS** (backend merged and live-verified; owner UAT not started). Step 16 Dispatch is **IN PROGRESS**. Steps 17–18 remain NOT STARTED.
 
 Statuses used here: PASS / PASS / LOCKED / OWNER UAT REQUIRED / BLOCKED / IN PROGRESS. Untouched later modules stay NOT STARTED.
 
@@ -76,7 +76,42 @@ Backend matches the existing account → batch → picking PDF → optional AWB 
 | Confirm | Same sale post as Step 13. Component SKUs OUT. Duplicate `{PLATFORM}:{account}:{externalOrderId}` does not double-post. |
 | Gates | Missing AWB does not block. Spot-check keys are stored and are not a confirm gate. |
 | Idempotency | Confirm requires a key. Same key replays. A later key on a fully confirmed batch posts 0 extra sales. |
-| Automated tests | **129 pass, 0 fail** on this branch (`npm run test:backend`), including 7 new sales-import tests. TypeScript and production build succeeded. |
+| Automated tests | **129 pass, 0 fail** on the Step 15 branch (`npm run test:backend`), including 7 new sales-import tests. TypeScript and production build succeeded. |
+| Merge | PR #108 merged to `cursor/dev-frontend-github-pages-d9ac` as `f7f16f6` (14 Nov 2026, 2:14 PM MYT). |
+| Owner UAT | **Not started.** Automated tests and live API read-backs are not owner UAT. |
+
+### Live DEV verify — 14 Nov 2026, 2:14–2:20 PM MYT
+
+This block is implementation evidence, not owner UAT. No confirmed sales import was posted. `PROD-20261109-001` was not touched. Step 12 business rules were not changed.
+
+| Check | Evidence |
+| --- | --- |
+| Apps Script version | **v25**, `versionDescription=git:31cf98ae3a5c6938efdfaa3cb2948d16d8201a84`. Deploy DEV run [43565235558](https://github.com/zall266/CSP_Inventory-Sales-System/actions/runs/43565235558). Same `/exec`. |
+| Health | `GET /exec` at 2:16 PM MYT: DEV, healthy, spreadsheet and Drive accessible, foundation ready. |
+| `salesImport.list` | `ok: true`. Batches, files, orders, lines, mappings, and shipments empty. Sales still 0. Inventory 234 rows, 53 stock movements (locked closeout unchanged). |
+| Confirm without key | `VALIDATION_ERROR` "Idempotency key is required." |
+| Permission | Import writes use `sales.create`, matching the frontend. Live `role-cashier` and `role-staff` have that key, so `u-siti` / `u-mei` can create accounts. `u-kumar` (`role-warehouse`, `sales.create` false) `salesImport.createAccount` → `FORBIDDEN` "You cannot import sales." Unknown actor `u-nobody` is also `FORBIDDEN`. |
+| Live-verify artifacts | Account `sia_d7ff7202b4` `coolslurppypowder` plus two permission-probe accounts (`cashier-should-fail`, `should-fail`). No batches and no posted sales. |
+| Regression | `sales.list` 0 sales, 2 payments. `salesReturns.list` 0 returns, 10 sources, 7 reasons. `productionOrders.list` and packing list still `ok`. |
+| Public frontend | Pages deploy [43565363229](https://github.com/zall266/CSP_Inventory-Sales-System/actions/runs/43565363229) for merge `f7f16f6`. Live `index.html` (last-modified 14 Nov 2026, 2:15 PM MYT) loads `assets/index-DQpXlgLm.js`, which contains `salesImport.list`, `salesImport.createAccount`, `salesImport.ingestPicking`, and `salesImport.confirm`. |
+
+Locked Apps Script: `1mkRzptY0mzHnzOFB8TA6AGIZyv6q2gJq-QdKPBWtV91oq5okHWVpY4Jj`.
+DEV spreadsheet: `1TPmkASdzlGssGyAisklf4QkLcxWYbHHhUSxntgLha94`.
+`/exec`: `AKfycbyMDLwOJ2iqD_nuLFcVMQYrS81WDkkaBhutTGBCrbUClM1Aap1MJiO6CnzzcYuTAoMbDw`.
+
+## Step 16 — Dispatch — IN PROGRESS
+
+Backend matches the existing vehicles / dispatch / inspection-group frontend. Locked Steps 9–11 were not redesigned. Step 12 business rules were not changed. `PROD-20261109-001` was not touched. Vehicles were deferred from Step 4 parties and are implemented here. Confirm and void do not post inventory.
+
+| Item | Status |
+| --- | --- |
+| Vehicles | `vehicles.create` / `update` / `setActive`. `settings.edit`. Code unique case-insensitive. Inactive vehicles cannot be used on a draft or confirm. |
+| Dispatch | `dispatch.create` / `update` / `confirm` / `void`. No document series. Status `draft` → `confirmed` → `void`. Confirm snapshots vehicle code/type/plate and tracking, sets `condition: BAIK`. |
+| Lines | Nested on the API snapshot; stored on `DispatchLines`. Shipment must exist. Confirmed shipment cannot be reused until void. Draft update steals the shipment from other drafts. Empty confirm is allowed. |
+| Inspection groups | `dispatch.createInspectionGroup` / `dispatch.release`. `IG-` pad 4. Same date, no courier overlap, confirmed members only. Release clears membership and keeps the row. |
+| Permissions | View: delivery view/create/edit or `settings.edit`. Create/confirm: `sales.delivery.create`. Update: create or edit. Void and groups: `sales.delivery.edit`. |
+| Idempotency | Confirm, void, inspection-group create, and release require a key. Same key replays. |
+| Automated tests | **135 pass, 0 fail** on this branch (`npm run test:backend`), including 6 new dispatch tests. TypeScript and production build succeeded. |
 | Owner UAT | **Not started.** Automated tests are not owner UAT. Do not fabricate UAT. |
 
 Integration branch target: `cursor/dev-frontend-github-pages-d9ac`. Step 12 business rules were not changed. Steps 9–11 remain PASS / LOCKED.
