@@ -13,6 +13,7 @@ import {
   startOpeningBalanceHydration,
 } from '@/store/openingBalanceSync'
 import { queuePurchaseWrite, startPurchaseHydration } from '@/store/purchaseSync'
+import { queueSalesWrite, startSalesHydration } from '@/store/salesSync'
 import { queueReceivingWrite, startReceivingHydration } from '@/store/receivingSync'
 import { queueManufacturingWrite, startManufacturingHydration } from '@/store/manufacturingSync'
 import {
@@ -895,6 +896,8 @@ let agentSaleInFlight = false
 let openingBalanceInFlight = false
 let purchasePostInFlight = false
 let receivingPostInFlight = false
+let salesPostInFlight = false
+let salesQueuePaused = false
 
 function beginReceivingPost() {
   if (receivingPostInFlight) {
@@ -911,6 +914,15 @@ function beginPurchasePost() {
     return false
   }
   purchasePostInFlight = true
+  return true
+}
+
+function beginSalesPost() {
+  if (salesPostInFlight) {
+    toast('Already posting', 'Wait for the current sales update to finish.', 'warning')
+    return false
+  }
+  salesPostInFlight = true
   return true
 }
 
@@ -3324,7 +3336,26 @@ export const db = {
         }),
       ),
     })
-    toast('Quotation created', quotation.quotationNo)
+    if (identityApiUrl()) {
+      queueSalesWrite('quotations.create', {
+        clientId: quotation.id,
+        customerId: quotation.customerId,
+        date: quotation.date,
+        validUntil: quotation.validUntil,
+        salesperson: quotation.salesperson,
+        reference: quotation.reference,
+        notes: quotation.notes,
+        terms: quotation.terms,
+        items: input.items,
+        discount: input.discount ?? 0,
+        tax: input.tax ?? 0,
+        shipping,
+        agentId: agentId ?? '',
+        status: quotation.status,
+      })
+    } else {
+      toast('Quotation created', quotation.quotationNo)
+    }
     return quotation
   },
 
@@ -3393,7 +3424,24 @@ export const db = {
         }),
       ),
     })
-    toast('Quotation updated', current.quotationNo)
+    if (identityApiUrl()) {
+      queueSalesWrite('quotations.update', {
+        id,
+        customerId: input.customerId,
+        validUntil: input.validUntil,
+        salesperson: input.salesperson,
+        reference: input.reference,
+        notes: input.notes,
+        terms: input.terms,
+        items: input.items,
+        discount: input.discount ?? 0,
+        tax: input.tax ?? 0,
+        shipping,
+        agentId: agentId ?? '',
+      })
+    } else {
+      toast('Quotation updated', current.quotationNo)
+    }
     return true
   },
 
@@ -3429,7 +3477,11 @@ export const db = {
         }),
       ),
     })
-    toast('Quotation updated', `${current.quotationNo} · ${status}`)
+    if (identityApiUrl()) {
+      queueSalesWrite('quotations.setStatus', { id, status })
+    } else {
+      toast('Quotation updated', `${current.quotationNo} · ${status}`)
+    }
     return true
   },
 
@@ -3495,29 +3547,35 @@ export const db = {
       toast('Quotation converted', sale.invoiceNo)
       return sale
     }
-    const sale = this.createSale({
-      customerId: quotation.customerId,
-      warehouseId: state.settings.defaultWarehouseId,
-      salesperson: quotation.salesperson,
-      items: quotation.items.map((line) => ({
-        productId: line.productId,
-        qty: line.qty,
-        price: line.price,
-        discount: line.discount,
-        description: line.description,
-      })),
-      discount: quotation.discount,
-      tax: quotation.tax,
-      shipping: quotation.shipping ?? 0,
-      paidAmount: 0,
-      notes: quotation.notes,
-      reference: quotation.reference,
-      datedInvoiceNo: true,
-      quotationId: quotation.id,
-      quotationNo: quotation.quotationNo,
-      dueDate: defaultDueDate(nowIso(), 7),
-      paymentTerms: state.settings.paymentTerms,
-    })
+    salesQueuePaused = true
+    let sale: Sale | null = null
+    try {
+      sale = this.createSale({
+        customerId: quotation.customerId,
+        warehouseId: state.settings.defaultWarehouseId,
+        salesperson: quotation.salesperson,
+        items: quotation.items.map((line) => ({
+          productId: line.productId,
+          qty: line.qty,
+          price: line.price,
+          discount: line.discount,
+          description: line.description,
+        })),
+        discount: quotation.discount,
+        tax: quotation.tax,
+        shipping: quotation.shipping ?? 0,
+        paidAmount: 0,
+        notes: quotation.notes,
+        reference: quotation.reference,
+        datedInvoiceNo: true,
+        quotationId: quotation.id,
+        quotationNo: quotation.quotationNo,
+        dueDate: defaultDueDate(nowIso(), 7),
+        paymentTerms: state.settings.paymentTerms,
+      })
+    } finally {
+      salesQueuePaused = false
+    }
     if (!sale) return null
     setData({
       quotations: state.quotations.map((item) =>
@@ -3544,7 +3602,12 @@ export const db = {
         ...(state.documentAuditLogs ?? []),
       ],
     })
-    toast('Converted to invoice', sale.invoiceNo)
+    if (identityApiUrl()) {
+      if (!beginSalesPost()) return sale
+      queueSalesWrite('quotations.convert', { id, clientSaleId: sale.id }, crypto.randomUUID())
+    } else {
+      toast('Converted to invoice', sale.invoiceNo)
+    }
     return sale
   },
 
@@ -3616,7 +3679,25 @@ export const db = {
         }),
       ),
     })
-    toast('Delivery order created', order.doNo)
+    if (identityApiUrl()) {
+      queueSalesWrite('deliveries.create', {
+        clientId: order.id,
+        customerId: order.customerId,
+        date: order.date,
+        deliveryAddress: order.deliveryAddress,
+        contactPerson: order.contactPerson,
+        contactNumber: order.contactNumber,
+        saleId: order.saleId,
+        quotationId: order.quotationId,
+        transport: order.transport,
+        preparedBy: order.preparedBy,
+        notes: order.notes,
+        items: order.items,
+        status: order.status,
+      })
+    } else {
+      toast('Delivery order created', order.doNo)
+    }
     return order
   },
 
@@ -3664,7 +3745,19 @@ export const db = {
         }),
       ),
     })
-    toast('Delivery order updated', current.doNo)
+    if (identityApiUrl()) {
+      queueSalesWrite('deliveries.update', {
+        id,
+        deliveryAddress: input.deliveryAddress,
+        contactPerson: input.contactPerson,
+        contactNumber: input.contactNumber,
+        transport: input.transport,
+        notes: input.notes,
+        items: input.items,
+      })
+    } else {
+      toast('Delivery order updated', current.doNo)
+    }
     return true
   },
 
@@ -3699,7 +3792,11 @@ export const db = {
         }),
       ),
     })
-    toast('Delivery order updated', `${current.doNo} · ${status}`)
+    if (identityApiUrl()) {
+      queueSalesWrite('deliveries.setStatus', { id, status })
+    } else {
+      toast('Delivery order updated', `${current.doNo} · ${status}`)
+    }
     return true
   },
 
@@ -3729,6 +3826,7 @@ export const db = {
         }),
       ),
     })
+    if (identityApiUrl()) queueSalesWrite('documents.recordPrint', { type, id })
     return true
   },
 
@@ -3887,7 +3985,42 @@ export const db = {
       }
     }
     emit()
-    toast('Sale completed', `${invoiceNo} · ${sale.status === 'paid' ? 'Paid' : 'Recorded'}`)
+    if (identityApiUrl() && !salesQueuePaused) {
+      if (!beginSalesPost()) return sale
+      queueSalesWrite(
+        input.pricingMode === 'wholesale' ? 'sales.createWholesale' : 'sales.create',
+        {
+          clientId: sale.id,
+          customerId: input.customerId,
+          warehouseId,
+          salesperson: sale.salesperson,
+          items: postedItems.map((item) => ({
+            productId: item.productId,
+            qty: item.qty,
+            price: item.price,
+            discount: item.discount,
+            description: item.description,
+          })),
+          discount,
+          tax,
+          shipping,
+          paymentMethod: input.paymentMethod,
+          paidAmount,
+          notes: input.notes,
+          reference: input.reference,
+          date,
+          datedInvoiceNo: Boolean(input.datedInvoiceNo),
+          quotationId: input.quotationId,
+          quotationNo: input.quotationNo,
+          dueDate: input.dueDate,
+          paymentTerms: sale.paymentTerms,
+          pricingMode: input.pricingMode,
+        },
+        crypto.randomUUID(),
+      )
+    } else if (!salesQueuePaused) {
+      toast('Sale completed', `${invoiceNo} · ${sale.status === 'paid' ? 'Paid' : 'Recorded'}`)
+    }
     return sale
   },
 
@@ -3974,7 +4107,12 @@ export const db = {
         }),
       ),
     })
-    toast('Sale voided', sale.invoiceNo, 'warning')
+    if (identityApiUrl()) {
+      if (!beginSalesPost()) return
+      queueSalesWrite('sales.void', { id }, crypto.randomUUID())
+    } else {
+      toast('Sale voided', sale.invoiceNo, 'warning')
+    }
   },
 
   createPurchase(input: PurchaseInput) {
@@ -5454,6 +5592,15 @@ export const db = {
         method: input.method,
         amount,
         status: 'completed' as const,
+      }
+      if (identityApiUrl()) {
+        if (!beginSalesPost()) return false
+        queueSalesWrite(
+          'sales.recordPayment',
+          { invoiceId: input.invoiceId, method: input.method, amount: input.amount },
+          crypto.randomUUID(),
+        )
+        return true
       }
       setData({
         sales: state.sales.map((item) =>
@@ -9757,6 +9904,54 @@ startOpeningBalanceHydration({
   },
   onSettled() {
     openingBalanceInFlight = false
+  },
+})
+
+startSalesHydration({
+  apply(slice) {
+    setData({
+      sales: slice.sales,
+      quotations: slice.quotations,
+      deliveryOrders: slice.deliveryOrders,
+      documentAuditLogs: slice.documentAuditLogs,
+      payments: slice.payments,
+      ...(slice.inventory ? { inventory: slice.inventory } : {}),
+      ...(slice.stockMovements ? { stockMovements: slice.stockMovements } : {}),
+    })
+  },
+  actorId: () => currentUser(state).id,
+  onError(message) {
+    toast('Could not save to the server', message, 'danger')
+  },
+  onSaved(action, _payload, data) {
+    if (action === 'sales.create' || action === 'sales.createWholesale') {
+      const doc = data.sale as Sale | undefined
+      toast('Sale completed', doc ? `${doc.invoiceNo} · ${doc.status === 'paid' ? 'Paid' : 'Recorded'}` : '')
+    }
+    if (action === 'sales.void') {
+      toast('Sale voided', String((data.sale as Sale | undefined)?.invoiceNo ?? ''), 'warning')
+    }
+    if (action === 'sales.recordPayment') {
+      const payment = data.payment as Payment | undefined
+      const doc = data.sale as Sale | undefined
+      toast('Payment recorded', payment && doc ? `${payment.paymentNo} · ${doc.invoiceNo}` : '')
+    }
+    if (action === 'quotations.create') toast('Quotation created', String((data.quotation as Quotation | undefined)?.quotationNo ?? ''))
+    if (action === 'quotations.update') toast('Quotation updated', String((data.quotation as Quotation | undefined)?.quotationNo ?? ''))
+    if (action === 'quotations.setStatus') {
+      const quotation = data.quotation as Quotation | undefined
+      toast('Quotation updated', quotation ? `${quotation.quotationNo} · ${quotation.status}` : '')
+    }
+    if (action === 'quotations.convert') toast('Converted to invoice', String((data.sale as Sale | undefined)?.invoiceNo ?? ''))
+    if (action === 'deliveries.create') toast('Delivery order created', String((data.deliveryOrder as DeliveryOrder | undefined)?.doNo ?? ''))
+    if (action === 'deliveries.update') toast('Delivery order updated', String((data.deliveryOrder as DeliveryOrder | undefined)?.doNo ?? ''))
+    if (action === 'deliveries.setStatus') {
+      const order = data.deliveryOrder as DeliveryOrder | undefined
+      toast('Delivery order updated', order ? `${order.doNo} · ${order.status}` : '')
+    }
+  },
+  onSettled() {
+    salesPostInFlight = false
   },
 })
 

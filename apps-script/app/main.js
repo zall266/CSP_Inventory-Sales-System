@@ -17,7 +17,8 @@ function defaultBackend() {
     openingBalances: createOpeningBalanceService({ sheetRepository: sheets }),
     purchases: createPurchaseService({ sheetRepository: sheets }),
     receivings: createReceivingService({ sheetRepository: sheets, driveStorage: drive }),
-    manufacturing: createManufacturingService({ sheetRepository: sheets, driveStorage: drive })
+    manufacturing: createManufacturingService({ sheetRepository: sheets, driveStorage: drive }),
+    sales: createSalesService({ sheetRepository: sheets })
   };
 }
 
