@@ -1,8 +1,109 @@
 # CSP Backend Execution Report
 
-Steps 9, 10, and 11 are **PASS / LOCKED** by owner authorization dated 9 Nov 2026. Step 12 Daily Sessions is **OWNER UAT REQUIRED**. Do not mark Step 12 PASS or LOCKED. Step 13 Sales documents is **IN PROGRESS** (backend merged; owner UAT not started). Step 14 Sales returns is **IN PROGRESS** (backend merged; owner UAT not started). Step 15 Sales import is **IN PROGRESS** (backend merged and live-verified; owner UAT not started). Step 16 Dispatch is **IN PROGRESS** (backend merged and live-verified; owner UAT not started). Step 17 Halal, tasks, expenses is **IN PROGRESS** (backend merged and live-verified; owner UAT not started). Step 18 Reads is **IN PROGRESS** (backend live-verified; owner UAT not started). Independent development through Step 18 is complete. Owner UAT for Steps 12–18 remains owner-only and is not fabricated.
+Steps 9, 10, and 11 are **PASS / LOCKED** by owner authorization dated 9 Nov 2026. Step 12 Daily Sessions is **OWNER UAT REQUIRED**. Do not mark Step 12 PASS or LOCKED. Steps 13–18 are **OWNER UAT REQUIRED** (backend merged and live-verified; owner UAT not started and is not fabricated). The Final System Completion Program (14 Nov 2026) audited integration, reconciled live inventory, and prepared owner UAT guides. Independent development through Step 18 is complete.
 
-Statuses used here: PASS / PASS / LOCKED / OWNER UAT REQUIRED / BLOCKED / IN PROGRESS. Untouched later modules stay NOT STARTED.
+Statuses used here: PASS / LOCKED / PASS / OWNER UAT REQUIRED / IN PROGRESS / BLOCKED / FAIL.
+
+## FINAL SYSTEM COMPLETION PROGRAM — 14 Nov 2026, MYT
+
+This is integration audit and verification, not a new feature phase. Locked architecture is unchanged: React + Vite SPA, existing routes, Apps Script project `1mkRzptY0mzHnzOFB8TA6AGIZyv6q2gJq-QdKPBWtV91oq5okHWVpY4Jj`, spreadsheet `1TPmkASdzlGssGyAisklf4QkLcxWYbHHhUSxntgLha94`, `/exec` `AKfycbyMDLwOJ2iqD_nuLFcVMQYrS81WDkkaBhutTGBCrbUClM1Aap1MJiO6CnzzcYuTAoMbDw`, Drive root `14vIYpPSNQafvMnWgSEd1EGounerNjK3S`, Controller → Service → Repository, existing GitHub Actions / clasp DEV workflow. Authoritative docs were read from git history (`docs/CSP_MASTER_BACKEND_ARCHITECTURE_V1.md`, `docs/CSP_BACKEND_BIBLE_V1.1.md`, `docs/CSP_EXECUTION_BASELINE_V1.md`). `PROD-20261109-001` was not accepted, started, edited, cancelled, or duplicated. Historical UAT rows were not repaired.
+
+### Step 0–18 status
+
+| Step | Module | Implementation | Merged PR | Deployed | Automated tests | Owner UAT | Status |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| 0–8 | Foundation through opening balance | Backend + frontend adapters on the integration branch | Prior module PRs through opening-balance | Inside live `/exec` (current Apps Script **v29**) | Covered by foundation/identity/master/product/party/inventory/warehouse/bom/openingBalance suites | Used as the baseline for locked Steps 9–11 | **PASS** |
+| 9 | Purchases and returns | Yes | Closeout PRs through v19 | Live | purchase.test.js | Owner accepted 9 Nov 2026 | **PASS / LOCKED** |
+| 10 | Receiving and to-order | Yes | [#99](https://github.com/zall266/CSP_Inventory-Sales-System/pull/99) `9e81fcd` | Live | receiving.test.js | Owner accepted 9 Nov 2026 | **PASS / LOCKED** |
+| 11 | Production orders and packing | Yes | [#100](https://github.com/zall266/CSP_Inventory-Sales-System/pull/100) `c7a88d3` | Live | manufacturing.test.js | Owner accepted 9 Nov 2026 | **PASS / LOCKED** |
+| 12 | Daily sessions | Yes | [#103](https://github.com/zall266/CSP_Inventory-Sales-System/pull/103) `8623131` | Live | manufacturing + sessionDate | Create of `PROD-20261109-001` only. Remaining steps not run | **OWNER UAT REQUIRED** |
+| 13 | Sales documents | Yes | [#105](https://github.com/zall266/CSP_Inventory-Sales-System/pull/105) `e287a0a` | Live | sales.test.js | Not started | **OWNER UAT REQUIRED** |
+| 14 | Sales returns | Yes | [#106](https://github.com/zall266/CSP_Inventory-Sales-System/pull/106) `e912d73` | Live | salesReturn.test.js | Not started | **OWNER UAT REQUIRED** |
+| 15 | Sales import | Yes | [#108](https://github.com/zall266/CSP_Inventory-Sales-System/pull/108) `f7f16f6` | Live | salesImport.test.js | Not started | **OWNER UAT REQUIRED** |
+| 16 | Dispatch | Yes | [#109](https://github.com/zall266/CSP_Inventory-Sales-System/pull/109) `0140e9b` | Live | dispatch.test.js | Not started | **OWNER UAT REQUIRED** |
+| 17 | Halal, tasks, expenses | Yes | [#110](https://github.com/zall266/CSP_Inventory-Sales-System/pull/110) `beb316c` | Live | ops.test.js | Not started | **OWNER UAT REQUIRED** |
+| 18 | Dashboard, reports, PJKM, BMR | Yes | [#111](https://github.com/zall266/CSP_Inventory-Sales-System/pull/111) `66cfe02` | Live | reporting.test.js | Not started | **OWNER UAT REQUIRED** |
+
+Merged does not mean owner-accepted. Deployed does not mean owner-accepted. Automated tests are not owner UAT.
+
+### Deployment verification — 14 Nov 2026, 9:26 PM MYT
+
+| Check | Evidence |
+| --- | --- |
+| Integration branch HEAD | `cursor/dev-frontend-github-pages-d9ac` at `a756a9b` (merge of evidence PR #112) |
+| Latest Apps Script version | **v29**, `versionDescription=git:94a5bfbffcd8fe0b8fb7cb942d6b5d041b5acdb1`. Deploy DEV [43569078514](https://github.com/zall266/CSP_Inventory-Sales-System/actions/runs/43569078514). Source is the Step 18 docs-evidence commit after v28 `b2f3ad3`; Apps Script runtime matches v28 reads. Same project. Same `/exec`. |
+| Health | `GET /exec` at 9:26 PM MYT: DEV, healthy, timezone `Asia/Kuala_Lumpur`, spreadsheet and Drive accessible, foundation ready |
+| Public frontend | Pages [43569258510](https://github.com/zall266/CSP_Inventory-Sales-System/actions/runs/43569258510) for #112. Live `index.html` Last-Modified 14 Nov 2026, 3:04 PM MYT loads `assets/index-BIZo9uFM.js` (same JS hash as #111; #112 was docs-only) |
+| API compatibility | Pages build injects the locked `/exec`. Live `inventory.get`, `sessions.list`, `sales.list`, `expenses.list`, `dashboard.get` returned `ok` envelopes |
+| `PROD-20261109-001` | `sessions.list` read-only: id `ps_p2lblrm1i`, date `2026-11-09`, status `planned`, posted false, notes `STEP12-UAT-20261109` |
+
+### Automated tests — completion branch
+
+| Check | Result |
+| --- | --- |
+| `npm run test:backend` | **150 pass, 0 fail** (was 147). Added `apps-script/tests/integration.test.js` (procurement → payment → purchase return → sale → customer payment → sales-return good → dashboard/reports + cashier deny + ledger recon). Added `reportDateRange` Malaysia end-of-day test |
+| TypeScript `tsc --noEmit` | pass |
+| Vite production build | pass (local artifact `index-Dl80gYdS.js`) |
+| Locked modules 9–11 | Not modified |
+
+### Data reconciliation — live DEV, read-only
+
+`inventory.get` at 9:26 PM MYT: **234** InventoryBalances rows, **53** StockMovements.
+
+Independent check: for each product+warehouse, `opening + stockIn − stockOut` from movements (excluding skip-inventory types) versus InventoryBalances qty. Skip types present in code: `sales_return_repack`, `sales_return_waste`, `production_balance_in`, `production_balance_out`, `production_wastage`. **None of those types exist in the live 53 movements.**
+
+| Movement type | Count |
+| --- | --- |
+| adjustment | 13 |
+| opening_balance | 1 |
+| production_in | 3 |
+| production_out | 3 |
+| purchase | 11 |
+| purchase_return | 8 |
+| receiving | 5 |
+| stock_count | 1 |
+| stock_usage | 2 |
+| transfer_in | 3 |
+| transfer_out | 3 |
+
+**Unexplained differences: 0.** No duplicate-movement repair was applied. No historical row was edited.
+
+Live sales = 0. Payments = 2 (`PAY-000001` / `PAY-000002` from locked closeout). Expenses = 0. Dashboard `today=2026-11-14` preset `30d`: sales 0, purchases 7 totaling 39, inventory value 477.22, receivables 0, payables 99. Dashboard `today=2026-09-10` (frontend prototype date) preset `30d`: purchases 8 totaling 86, same inventory value 477.22.
+
+### Permission testing
+
+| Actor | Result |
+| --- | --- |
+| Owner `u-aina` | Live reads ok (inventory, sessions, sales, expenses, dashboard) |
+| Cashier `u-siti` | Live `dashboard.get` → `FORBIDDEN` “You cannot view the dashboard.” Integration/ops tests: cannot create purchases or expenses |
+| Staff `u-mei` | Automated: cannot manage Halal/expenses; can read dashboard/reports when the matrix includes those view keys |
+| Backend vs UI | Unauthorized writes are rejected by `requirePermission`. Hidden buttons are not the only control for expenses after the completion-program frontend fix |
+
+Known architecture (not changed): early list/get actions such as `inventory.get` do not require a view key; later modules do. Identity is `payload.actorUserId`. Do not invent a new auth model.
+
+### Defects and fixes
+
+| ID | Severity | Finding | Action |
+| --- | --- | --- | --- |
+| C1 | MEDIUM | Expenses page showed Add expense with no `expenses.manage` check. Backend already returned `FORBIDDEN` | Frontend now hides the button, denies the route without `finance.view` / `expenses.manage`, and `createExpense` toasts “You cannot manage expenses.” Regression assertion in ops.test.js |
+| C2 | MEDIUM | `reportDateRange` used host-local `setHours` / `setDate`. Node UTC tests dropped same-day sales. Apps Script KL timezone happened to work | Range bounds are now explicit `Asia/Kuala_Lumpur` `+08:00` calendar days. Reporting + integration tests cover it |
+| K1 | LOW | Frontend report overlay sends `today=PROTOTYPE_TODAY` (`2026-09-10`), so Dashboard/Reports show the prototype calendar, not the live Malaysia operating date used by Daily Sessions | **Documented.** Not changed — existing frontend convention. Owner UAT of Step 18 must select the intended range |
+| K2 | LOW | Agent sales remain on local `createAgentSale`. Sales-return confirm does not upload Drive blobs. Purchase-return qty is compared to purchase-line qty (bags) while stock-out uses that same number as base units — locked Step 9 behaviour | Documented. Not redesigned |
+
+No CRITICAL live inventory defect. No locked-module code change.
+
+### Owner UAT preparation
+
+- Step 12 fresh-session guide: `docs/execution/STEP12_FRESH_SESSION_UAT.md`. Create a **new** session on the actual Malaysia operating date. Do not use `PROD-20261109-001`.
+- Steps 13–18 checklists: `docs/execution/STEPS_13_18_OWNER_UAT.md`. Isolated `UAT13-`…`UAT18-` records.
+
+### Remaining blockers
+
+1. Owner UAT of Step 12 on a **new** today-dated session (accept / start with recipe photo / picking / three complete steps / display+carton=actual / complete once / AUTO out / MANUAL skip / cashier denial / carry-forward).
+2. Owner UAT of Steps 13–18 using the checklists above.
+3. Owner decision if Dashboard/Reports should switch from `PROTOTYPE_TODAY` to the live Malaysia date (not implemented).
+
+Do not lock Steps 12–18 without owner UAT approval.
 
 ## Owner decision — Step 12 past-date accept/start (14 Nov 2026, MYT)
 
@@ -141,7 +242,7 @@ Backend matches the existing Halal Compliance, staff tasks, and expenses fronten
 | --- | --- |
 | Halal | `halal.list` / `saveManufacturer` / `saveCompliance`. Unique manufacturer names. Certificate document required. Renew with a new file creates a new certificate and keeps previous ids. |
 | Tasks | `tasks.list` seeds default categories (`tcat-cleaning` … `tcat-general`). Category CRUD, task create/update/deactivate, start, attach photo, complete. Photo-required complete is blocked without a photo. |
-| Expenses | `expenses.list` / `expenses.create`. Create requires `expenses.manage` (architecture). The current frontend `/expenses` page does not check that key; that is a documented frontend gap, not an owner stop. |
+| Expenses | `expenses.list` / `expenses.create`. Create requires `expenses.manage` (architecture). Completion-program frontend now checks that key on the Expenses page and in `createExpense`. |
 | Idempotency | `tasks.complete` requires a key. Same key replays. |
 | Automated tests | **141 pass, 0 fail** on this branch (`npm run test:backend`), including 6 new ops tests. TypeScript and production build succeeded. |
 | Merge | PR #110 merged to `cursor/dev-frontend-github-pages-d9ac` as `beb316c` (14 Nov 2026, MYT). |
@@ -177,7 +278,7 @@ Backend matches the existing dashboard, report, PJKM, and BMR page math. Locked 
 | Reports | `reports.sales` / `purchases` / `inventory` / `profit` / `manufacturing`. `reports.view`. No summary sheets. Print stays in the browser. |
 | PJKM | `pjkm.511` / `911` / `1011`. Month `YYYY-MM`. `receiving.view`. 9.1.1 unique AWB tracking count, not parcel sum. |
 | BMR | `bmr.list` / `bmr.get`. Completed and posted sessions only. `manufacturing.history.view`. Grams per pack = `bulkYieldGrams / outputQty`. |
-| Automated tests | **147 pass, 0 fail** on this branch (`npm run test:backend`), including 6 new reporting tests. TypeScript and production build succeeded. |
+| Automated tests | **147 pass, 0 fail** on the Step 18 branch. Completion-program suite is **150 pass, 0 fail** including the Malaysia date-range test. TypeScript and production build succeeded. |
 | Merge | PR #111 merged to `cursor/dev-frontend-github-pages-d9ac` as `66cfe02` (14 Nov 2026, 3:01 PM MYT). |
 | Owner UAT | **Not started.** Automated tests and live API read-backs are not owner UAT. Do not fabricate UAT. |
 
