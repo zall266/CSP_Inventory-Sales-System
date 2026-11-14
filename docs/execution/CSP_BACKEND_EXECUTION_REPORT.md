@@ -43,9 +43,22 @@ Backend matches the existing good / repack / waste sales-return frontend. Locked
 | Lookups | Default Return Sources / Reasons seeded on first list. Inactive source/reason rejected. |
 | Idempotency | Confirm requires a key. Same key replays. A second key returns `CONFLICT`. |
 | Automated tests | **122 pass, 0 fail** on this branch (`npm run test:backend`), including 4 new sales-return tests. TypeScript and production build succeeded. |
-| Owner UAT | **Not started.** Automated tests are not owner UAT. |
+| Merge | PR #106 merged to `cursor/dev-frontend-github-pages-d9ac` as `e912d73` (14 Nov 2026, 2:00 PM MYT). |
+| Owner UAT | **Not started.** Automated tests and live API read-backs are not owner UAT. |
 
-Live DEV verify and Pages verify follow merge of this module into the integration branch. This block is implementation evidence, not owner UAT.
+### Live DEV verify — 14 Nov 2026, 2:00–2:01 PM MYT
+
+This block is implementation evidence, not owner UAT. No confirmed sales return was posted. `PROD-20261109-001` was not touched.
+
+| Check | Evidence |
+| --- | --- |
+| Apps Script version | **v24**, `versionDescription=git:ae944b0b98b59e52634d651f6d2e0131e7682b64`. Deploy DEV run [43564130043](https://github.com/zall266/CSP_Inventory-Sales-System/actions/runs/43564130043). Same `/exec`. |
+| Health | `GET /exec` at 2:00 PM MYT: DEV, healthy, spreadsheet and Drive accessible, foundation ready. |
+| `salesReturns.list` | `ok: true`. `salesReturns` empty. Default Return Sources (10) and Return Reasons (7) seeded. Existing production balances `pb-mt-1` / `pb-st-1` / `pb-cl-1` unchanged. |
+| Confirm without key | `VALIDATION_ERROR` "Idempotency key is required." |
+| Cashier deny | `u-siti` `salesReturns.save` → `FORBIDDEN` "You cannot create a sales return." |
+| Regression Step 13 | `sales.list` still `ok`; 0 sales, 2 payments (`PAY-000001` / `PAY-000002` from the locked closeout). |
+| Public frontend | Pages deploy [43564241590](https://github.com/zall266/CSP_Inventory-Sales-System/actions/runs/43564241590) for merge `e912d73`. Live `index.html` loads `assets/index-C0iH2OAm.js`, which contains `salesReturns.list`, `salesReturns.save`, `salesReturns.confirm`, `sales_return_good`, and `returnSources.upsert`. |
 
 Locked Apps Script: `1mkRzptY0mzHnzOFB8TA6AGIZyv6q2gJq-QdKPBWtV91oq5okHWVpY4Jj`.
 DEV spreadsheet: `1TPmkASdzlGssGyAisklf4QkLcxWYbHHhUSxntgLha94`.
