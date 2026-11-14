@@ -210,6 +210,7 @@ function createProductService(deps) {
       ['QuotationLines', 'productId'],
       ['DeliveryOrders', 'items'],
       ['DeliveryOrderLines', 'productId'],
+      ['SalesReturnLines', 'productId'],
       ['Boms', 'productId']
     ];
     for (var i = 0; i < later.length; i += 1) {

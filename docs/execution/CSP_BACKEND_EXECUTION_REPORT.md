@@ -1,6 +1,6 @@
 # CSP Backend Execution Report
 
-Steps 9, 10, and 11 are **PASS / LOCKED** by owner authorization dated 9 Nov 2026. Step 12 Daily Sessions is **OWNER UAT REQUIRED**. Do not mark Step 12 PASS or LOCKED. Step 13 Sales documents is **IN PROGRESS** (backend implemented; owner UAT not started). Steps 14–18 remain NOT STARTED.
+Steps 9, 10, and 11 are **PASS / LOCKED** by owner authorization dated 9 Nov 2026. Step 12 Daily Sessions is **OWNER UAT REQUIRED**. Do not mark Step 12 PASS or LOCKED. Step 13 Sales documents is **IN PROGRESS** (backend merged; owner UAT not started). Step 14 Sales returns is **IN PROGRESS** (backend implemented; owner UAT not started). Steps 15–18 remain NOT STARTED.
 
 Statuses used here: PASS / PASS / LOCKED / OWNER UAT REQUIRED / BLOCKED / IN PROGRESS. Untouched later modules stay NOT STARTED.
 
@@ -21,12 +21,32 @@ Backend matches the existing Sales / POS / quotation / delivery / customer-payme
 | Quotations | Create/update/status. Convert posts a dated `INV-YYYYMMDD-###` once. Agent quotations are not converted here. |
 | Delivery orders | No stock movements on create, issue, deliver, or cancel. |
 | Print | `documents.recordPrint` writes `DocumentAuditLogs` only. Browser print is unchanged. |
-| Automated tests | **118 pass, 0 fail** on this branch (`npm run test:backend`). TypeScript and production build succeeded. |
-| Owner UAT | **Not started.** Automated tests are not owner UAT. |
+| Automated tests | **118 pass, 0 fail** on the Step 13 branch (`npm run test:backend`). TypeScript and production build succeeded. |
+| Owner UAT | **Not started.** Automated tests are not owner UAT. Do not fabricate UAT. |
+| Merge | PR #105 merged to `cursor/dev-frontend-github-pages-d9ac` as `e287a0a` (14 Nov 2026, MYT). |
 
 Locked DEV resources remain the existing Apps Script project, spreadsheet, Drive root, and `/exec`. Historical closeout evidence below is unchanged.
 
-Integration branch: `cursor/dev-frontend-github-pages-d9ac` at `c7a88d33797511922b09a2b99632c8b41fb347db` (merge of PR #100).
+Integration branch: `cursor/dev-frontend-github-pages-d9ac` at `e287a0a` (merge of PR #105). Step 12 business rules were not changed. `PROD-20261109-001` was not touched.
+
+## Step 14 — Sales returns — IN PROGRESS
+
+Backend matches the existing good / repack / waste sales-return frontend. Locked Steps 9–11 were not redesigned. Step 12 business rules were not changed. Agent sales (`SAL-`) and agent warehouses are rejected. Evidence stays metadata JSON; Drive blob upload on confirm is not in this module.
+
+| Item | Status |
+| --- | --- |
+| Draft save | `salesReturns.save` / `update` / `cancel`. No inventory or production-balance write. `RT-` numbers. |
+| Confirm good | `sales_return_good` IN to company warehouse finished-goods qty. |
+| Confirm repack | `sales_return_repack` skip-inventory; `production_balance_in` skip-inventory; grams posted to the selected Box 1/2/3. |
+| Confirm waste | `sales_return_waste` skip-inventory (finished-goods qty unchanged). |
+| Original sale | Confirmed return adds `returnedQty` on the linked sale. Fully returned sales become `returned`. |
+| Lookups | Default Return Sources / Reasons seeded on first list. Inactive source/reason rejected. |
+| Idempotency | Confirm requires a key. Same key replays. A second key returns `CONFLICT`. |
+| Automated tests | **122 pass, 0 fail** on this branch (`npm run test:backend`), including 4 new sales-return tests. TypeScript and production build succeeded. |
+| Owner UAT | **Not started.** Automated tests are not owner UAT. |
+
+Live DEV verify and Pages verify follow merge of this module into the integration branch. This block is implementation evidence, not owner UAT.
+
 Locked Apps Script: `1mkRzptY0mzHnzOFB8TA6AGIZyv6q2gJq-QdKPBWtV91oq5okHWVpY4Jj`.
 DEV spreadsheet: `1TPmkASdzlGssGyAisklf4QkLcxWYbHHhUSxntgLha94`.
 `/exec`: `AKfycbyMDLwOJ2iqD_nuLFcVMQYrS81WDkkaBhutTGBCrbUClM1Aap1MJiO6CnzzcYuTAoMbDw`.
