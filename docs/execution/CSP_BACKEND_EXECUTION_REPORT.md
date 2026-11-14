@@ -1,8 +1,30 @@
 # CSP Backend Execution Report
 
-Steps 9, 10, and 11 are **PASS / LOCKED** by owner authorization dated 9 Nov 2026. Step 12 Daily Sessions is **OWNER UAT REQUIRED**. Do not mark Step 12 PASS or LOCKED.
+Steps 9, 10, and 11 are **PASS / LOCKED** by owner authorization dated 9 Nov 2026. Step 12 Daily Sessions is **OWNER UAT REQUIRED**. Do not mark Step 12 PASS or LOCKED. Step 13 Sales documents is **IN PROGRESS** (backend implemented; owner UAT not started). Steps 14–18 remain NOT STARTED.
 
 Statuses used here: PASS / PASS / LOCKED / OWNER UAT REQUIRED / BLOCKED / IN PROGRESS. Untouched later modules stay NOT STARTED.
+
+## Owner decision — Step 12 past-date accept/start (14 Nov 2026, MYT)
+
+The owner kept the existing Daily Sessions past-date restriction. Options A and C were not implemented. `PROD-20261109-001` was not accepted, started, edited, cancelled, or duplicated. Step 12 stays **OWNER UAT REQUIRED**. This is **DOCUMENTED BUSINESS RULE** as of this owner decision; the prior audit classified the code path as an **IMPLEMENTATION RESTRICTION** that the owner has now confirmed.
+
+## Step 13 — Sales documents — IN PROGRESS
+
+Backend matches the existing Sales / POS / quotation / delivery / customer-payment / print-audit frontend. Locked Steps 9–11 were not redesigned. Step 12 business rules were not changed. Agent sales remain on the existing local `createAgentSale` path (`agents.createSale` is not this module).
+
+| Item | Status |
+| --- | --- |
+| Sale create | POS and invoice `sales.create`. Component snapshot OUT on component SKUs only. Agent warehouse rejected. |
+| Wholesale | `sales.createWholesale` uses customer wholesale price, then product wholesale, then selling price. |
+| Void | Restores remaining qty as `sales_return` with `{invoiceNo}-VOID`. Payments are not reversed. |
+| Customer payment | Shared `Payments` / `PAY-` series with Step 9 supplier payments. Status `paid` / `partial`. |
+| Quotations | Create/update/status. Convert posts a dated `INV-YYYYMMDD-###` once. Agent quotations are not converted here. |
+| Delivery orders | No stock movements on create, issue, deliver, or cancel. |
+| Print | `documents.recordPrint` writes `DocumentAuditLogs` only. Browser print is unchanged. |
+| Automated tests | **118 pass, 0 fail** on this branch (`npm run test:backend`). TypeScript and production build succeeded. |
+| Owner UAT | **Not started.** Automated tests are not owner UAT. |
+
+Locked DEV resources remain the existing Apps Script project, spreadsheet, Drive root, and `/exec`. Historical closeout evidence below is unchanged.
 
 Integration branch: `cursor/dev-frontend-github-pages-d9ac` at `c7a88d33797511922b09a2b99632c8b41fb347db` (merge of PR #100).
 Locked Apps Script: `1mkRzptY0mzHnzOFB8TA6AGIZyv6q2gJq-QdKPBWtV91oq5okHWVpY4Jj`.
@@ -132,8 +154,13 @@ The owner-action list and module statuses below this paragraph are replaced by *
 | 9 Purchases and returns | **PASS / LOCKED** — owner accepted the 2026-11-08 workbook reconciliation on 9 Nov 2026 |
 | 10 Receiving and to-order | **PASS / LOCKED** — owner accepted the 2026-11-08 workbook reconciliation on 9 Nov 2026 |
 | 11 Production orders and packing | **PASS / LOCKED** — owner accepted the 2026-11-08 workbook reconciliation on 9 Nov 2026 |
-| 12 Daily sessions | IN PROGRESS |
-| 13–18 | NOT STARTED |
+| 12 Daily sessions | **OWNER UAT REQUIRED** — past-date accept/start restriction kept; `PROD-20261109-001` unchanged |
+| 13 Sales documents | **IN PROGRESS** — backend + tests implemented; owner UAT not started |
+| 14 Sales returns | NOT STARTED |
+| 15 Sales import | NOT STARTED |
+| 16 Dispatch | NOT STARTED |
+| 17 Halal, tasks, expenses | NOT STARTED |
+| 18 Reads | NOT STARTED |
 
 PRs: Step 10 linkage [#99](https://github.com/zall266/CSP_Inventory-Sales-System/pull/99) merged `9e81fcd`. Step 11 [#100](https://github.com/zall266/CSP_Inventory-Sales-System/pull/100) merged `c7a88d3`. This closeout report is a docs-only follow-up; it does not deploy.
 

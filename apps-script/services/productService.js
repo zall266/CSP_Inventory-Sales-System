@@ -197,6 +197,8 @@ function createProductService(deps) {
     })) return true;
     var later = [
       ['Sales', 'items'],
+      ['SaleLines', 'productId'],
+      ['SaleLineComponents', 'productId'],
       ['Purchases', 'items'],
       ['Receivings', 'items'],
       ['OpeningBalances', 'items'],
@@ -205,7 +207,9 @@ function createProductService(deps) {
       ['PackingAssemblies', 'productId'],
       ['AgentSales', 'items'],
       ['Quotations', 'items'],
+      ['QuotationLines', 'productId'],
       ['DeliveryOrders', 'items'],
+      ['DeliveryOrderLines', 'productId'],
       ['Boms', 'productId']
     ];
     for (var i = 0; i < later.length; i += 1) {

@@ -11,6 +11,7 @@ function createRouter(backend) {
   var purchases = backend && backend.purchases ? backend.purchases : null;
   var receivings = backend && backend.receivings ? backend.receivings : null;
   var manufacturing = backend && backend.manufacturing ? backend.manufacturing : null;
+  var sales = backend && backend.sales ? backend.sales : null;
 
   function dispatch(request) {
     if (!request || request.v !== 1 || typeof request.action !== 'string' || !request.action) {
@@ -37,6 +38,7 @@ function createRouter(backend) {
     if (purchases && purchases.canHandle(request.action)) return purchases.dispatch(request);
     if (receivings && receivings.canHandle(request.action)) return receivings.dispatch(request);
     if (manufacturing && manufacturing.canHandle(request.action)) return manufacturing.dispatch(request);
+    if (sales && sales.canHandle(request.action)) return sales.dispatch(request);
     return errorEnvelope('UNKNOWN_ACTION', 'The action is not available.', { requestId: requestId });
   }
 
