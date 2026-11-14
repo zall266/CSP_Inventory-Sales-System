@@ -1,6 +1,6 @@
 # CSP Backend Execution Report
 
-Steps 9, 10, and 11 are **PASS / LOCKED** by owner authorization dated 9 Nov 2026. Step 12 Daily Sessions is **OWNER UAT REQUIRED**. Do not mark Step 12 PASS or LOCKED. Step 13 Sales documents is **IN PROGRESS** (backend merged; owner UAT not started). Step 14 Sales returns is **IN PROGRESS** (backend merged; owner UAT not started). Step 15 Sales import is **IN PROGRESS** (backend merged and live-verified; owner UAT not started). Step 16 Dispatch is **IN PROGRESS**. Steps 17–18 remain NOT STARTED.
+Steps 9, 10, and 11 are **PASS / LOCKED** by owner authorization dated 9 Nov 2026. Step 12 Daily Sessions is **OWNER UAT REQUIRED**. Do not mark Step 12 PASS or LOCKED. Step 13 Sales documents is **IN PROGRESS** (backend merged; owner UAT not started). Step 14 Sales returns is **IN PROGRESS** (backend merged; owner UAT not started). Step 15 Sales import is **IN PROGRESS** (backend merged and live-verified; owner UAT not started). Step 16 Dispatch is **IN PROGRESS** (backend merged and live-verified; owner UAT not started). Step 17 Halal, tasks, expenses is **IN PROGRESS**. Step 18 remains NOT STARTED.
 
 Statuses used here: PASS / PASS / LOCKED / OWNER UAT REQUIRED / BLOCKED / IN PROGRESS. Untouched later modules stay NOT STARTED.
 
@@ -111,7 +111,39 @@ Backend matches the existing vehicles / dispatch / inspection-group frontend. Lo
 | Inspection groups | `dispatch.createInspectionGroup` / `dispatch.release`. `IG-` pad 4. Same date, no courier overlap, confirmed members only. Release clears membership and keeps the row. |
 | Permissions | View: delivery view/create/edit or `settings.edit`. Create/confirm: `sales.delivery.create`. Update: create or edit. Void and groups: `sales.delivery.edit`. |
 | Idempotency | Confirm, void, inspection-group create, and release require a key. Same key replays. |
-| Automated tests | **135 pass, 0 fail** on this branch (`npm run test:backend`), including 6 new dispatch tests. TypeScript and production build succeeded. |
+| Automated tests | **135 pass, 0 fail** on the Step 16 branch (`npm run test:backend`), including 6 new dispatch tests. TypeScript and production build succeeded. |
+| Merge | PR #109 merged to `cursor/dev-frontend-github-pages-d9ac` as `0140e9b` (14 Nov 2026, MYT). |
+| Owner UAT | **Not started.** Automated tests and live API read-backs are not owner UAT. Do not fabricate UAT. |
+
+### Live DEV verify — 14 Nov 2026, MYT
+
+This block is implementation evidence, not owner UAT. No vehicle, dispatch, or inspection group was created. No confirmed dispatch was posted. `PROD-20261109-001` was not touched. Step 12 business rules were not changed.
+
+| Check | Evidence |
+| --- | --- |
+| Apps Script version | **v26**, `versionDescription=git:efda109f331f875cb76317ac1b709dcd9ce2fb54`. Deploy DEV run [43566472547](https://github.com/zall266/CSP_Inventory-Sales-System/actions/runs/43566472547). Same `/exec`. |
+| Health | `GET /exec`: DEV, healthy, spreadsheet and Drive accessible, foundation ready. |
+| `dispatch.list` | `ok: true`. Vehicles, dispatches, and inspection groups empty. Inventory 234 rows, 53 stock movements (locked closeout unchanged). |
+| Confirm without key | `VALIDATION_ERROR`. |
+| Permission | `u-siti` `vehicles.create` → `FORBIDDEN` "You cannot maintain vehicles." `u-siti` `dispatch.create` → `FORBIDDEN` "You cannot create a dispatch." `u-kumar` list ok. |
+| Regression | `salesImport.list` still 3 accounts, 0 batches, 0 sales. `sales.list` 2 payments. `salesReturns.list` 0 returns. |
+| Public frontend | Pages deploy [43566603331](https://github.com/zall266/CSP_Inventory-Sales-System/actions/runs/43566603331) for merge `0140e9b`. Live bundle `assets/index-C4Goe4h1.js` contains `dispatch.list`, `dispatch.confirm`, and `vehicles.create`. |
+
+Locked Apps Script: `1mkRzptY0mzHnzOFB8TA6AGIZyv6q2gJq-QdKPBWtV91oq5okHWVpY4Jj`.
+DEV spreadsheet: `1TPmkASdzlGssGyAisklf4QkLcxWYbHHhUSxntgLha94`.
+`/exec`: `AKfycbyMDLwOJ2iqD_nuLFcVMQYrS81WDkkaBhutTGBCrbUClM1Aap1MJiO6CnzzcYuTAoMbDw`.
+
+## Step 17 — Halal, tasks, expenses — IN PROGRESS
+
+Backend matches the existing Halal Compliance, staff tasks, and expenses frontend. Locked Steps 9–11 were not redesigned. Step 12 business rules were not changed. `PROD-20261109-001` was not touched. Certificate PDFs/JPG/PNG upload to Drive folder `HalalCertificates`. Task photos upload to `TaskPhotos`. Ops writes do not post inventory.
+
+| Item | Status |
+| --- | --- |
+| Halal | `halal.list` / `saveManufacturer` / `saveCompliance`. Unique manufacturer names. Certificate document required. Renew with a new file creates a new certificate and keeps previous ids. |
+| Tasks | `tasks.list` seeds default categories (`tcat-cleaning` … `tcat-general`). Category CRUD, task create/update/deactivate, start, attach photo, complete. Photo-required complete is blocked without a photo. |
+| Expenses | `expenses.list` / `expenses.create`. Create requires `expenses.manage` (architecture). The current frontend `/expenses` page does not check that key; that is a documented frontend gap, not an owner stop. |
+| Idempotency | `tasks.complete` requires a key. Same key replays. |
+| Automated tests | **141 pass, 0 fail** on this branch (`npm run test:backend`), including 6 new ops tests. TypeScript and production build succeeded. |
 | Owner UAT | **Not started.** Automated tests are not owner UAT. Do not fabricate UAT. |
 
 Integration branch target: `cursor/dev-frontend-github-pages-d9ac`. Step 12 business rules were not changed. Steps 9–11 remain PASS / LOCKED.
