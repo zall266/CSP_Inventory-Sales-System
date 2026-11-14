@@ -16,6 +16,7 @@ import { queuePurchaseWrite, startPurchaseHydration } from '@/store/purchaseSync
 import { queueSalesWrite, startSalesHydration } from '@/store/salesSync'
 import { queueSalesReturnWrite, startSalesReturnHydration } from '@/store/salesReturnSync'
 import { queueSalesImportWrite, startSalesImportHydration } from '@/store/salesImportSync'
+import { queueDispatchWrite, startDispatchHydration } from '@/store/dispatchSync'
 import { queueReceivingWrite, startReceivingHydration } from '@/store/receivingSync'
 import { queueManufacturingWrite, startManufacturingHydration } from '@/store/manufacturingSync'
 import {
@@ -155,11 +156,13 @@ import type {
   DeliveryOrderInput,
   DeliveryOrderStatus,
   DispatchCourierKey,
+  DispatchRecord,
   DocumentAuditAction,
   DocumentAuditLog,
   DrawerState,
   Expense,
   ExpenseCategory,
+  InspectionGroup,
   InventoryRow,
   LineItem,
   MovementType,
@@ -213,6 +216,7 @@ import type {
   UserAuditAction,
   UserAuditLog,
   UserStatus,
+  Vehicle,
   WastageKind,
   BalanceUsageReason,
   HalalCertificate,
@@ -9493,7 +9497,11 @@ export const db = {
         newValue: `${vehicle.vehicleType} ${vehicle.plateNumber}`,
       })),
     })
-    toast('Vehicle saved', vehicle.code)
+    if (identityApiUrl()) {
+      queueDispatchWrite('vehicles.create', { clientId: vehicle.id, code, vehicleType, plateNumber })
+    } else {
+      toast('Vehicle saved', vehicle.code)
+    }
     return vehicle
   },
 
@@ -9527,7 +9535,11 @@ export const db = {
         newValue: `${vehicle.vehicleType} ${vehicle.plateNumber}`,
       })),
     })
-    toast('Vehicle updated', vehicle.code)
+    if (identityApiUrl()) {
+      queueDispatchWrite('vehicles.update', { id, code, vehicleType, plateNumber })
+    } else {
+      toast('Vehicle updated', vehicle.code)
+    }
     return vehicle
   },
 
@@ -9550,7 +9562,11 @@ export const db = {
         newValue: active ? 'active' : 'inactive',
       })),
     })
-    toast(active ? 'Vehicle activated' : 'Vehicle deactivated', vehicle.code)
+    if (identityApiUrl()) {
+      queueDispatchWrite('vehicles.setActive', { id, active })
+    } else {
+      toast(active ? 'Vehicle activated' : 'Vehicle deactivated', vehicle.code)
+    }
     return true
   },
 
@@ -9592,6 +9608,13 @@ export const db = {
         newValue: vehicle?.code ?? '',
       })),
     })
+    if (identityApiUrl()) {
+      queueDispatchWrite('dispatch.create', {
+        clientId: dispatch.id,
+        dispatchDate,
+        ...(vehicle ? { vehicleId: vehicle.id } : {}),
+      })
+    }
     return dispatch
   },
 
@@ -9645,6 +9668,16 @@ export const db = {
         return row
       }),
     })
+    if (identityApiUrl()) {
+      queueDispatchWrite('dispatch.update', {
+        id,
+        dispatchDate,
+        vehicleId,
+        ...(input.lines
+          ? { lines: lines.map((line) => ({ shipmentId: line.shipmentId, courierKey: line.courierKey, parcelQty: line.parcelQty })) }
+          : {}),
+      })
+    }
     return true
   },
 
@@ -9698,7 +9731,11 @@ export const db = {
         newValue: confirmed.plateNumber,
       })),
     })
-    toast('Dispatch confirmed', `${confirmed.vehicleCode} · ${confirmed.dispatchDate}`)
+    if (identityApiUrl()) {
+      queueDispatchWrite('dispatch.confirm', { id }, crypto.randomUUID())
+    } else {
+      toast('Dispatch confirmed', `${confirmed.vehicleCode} · ${confirmed.dispatchDate}`)
+    }
     return true
   },
 
@@ -9724,7 +9761,11 @@ export const db = {
         newValue: 'void',
       })),
     })
-    toast('Dispatch voided', voided.vehicleCode)
+    if (identityApiUrl()) {
+      queueDispatchWrite('dispatch.void', { id }, crypto.randomUUID())
+    } else {
+      toast('Dispatch voided', voided.vehicleCode)
+    }
     return true
   },
 
@@ -9769,7 +9810,11 @@ export const db = {
         newValue: group.dispatchIds.join(','),
       })),
     })
-    toast('Inspection group confirmed', group.groupNo)
+    if (identityApiUrl()) {
+      queueDispatchWrite('dispatch.createInspectionGroup', { clientId: group.id, dispatchIds: group.dispatchIds }, crypto.randomUUID())
+    } else {
+      toast('Inspection group confirmed', group.groupNo)
+    }
     return group
   },
 
@@ -9796,7 +9841,11 @@ export const db = {
         newValue: 'released',
       })),
     })
-    toast('Inspection group released', released.groupNo)
+    if (identityApiUrl()) {
+      queueDispatchWrite('dispatch.release', { id }, crypto.randomUUID())
+    } else {
+      toast('Inspection group released', released.groupNo)
+    }
     return true
   },
 
@@ -10011,6 +10060,40 @@ startOpeningBalanceHydration({
   onSettled() {
     openingBalanceInFlight = false
   },
+})
+
+startDispatchHydration({
+  apply(slice) {
+    setData({
+      vehicles: slice.vehicles,
+      dispatches: slice.dispatches,
+      inspectionGroups: slice.inspectionGroups,
+      ...(slice.documentAuditLogs ? { documentAuditLogs: slice.documentAuditLogs } : {}),
+      ...(slice.inventory ? { inventory: slice.inventory } : {}),
+      ...(slice.stockMovements ? { stockMovements: slice.stockMovements } : {}),
+    })
+  },
+  actorId: () => currentUser(state).id,
+  onError(message) {
+    toast('Could not save to the server', message, 'danger')
+  },
+  onSaved(action, _payload, data) {
+    const vehicle = data.vehicle as Vehicle | undefined
+    const dispatch = data.dispatch as DispatchRecord | undefined
+    const group = data.group as InspectionGroup | undefined
+    if (action === 'vehicles.create') toast('Vehicle saved', vehicle?.code ?? '')
+    if (action === 'vehicles.update') toast('Vehicle updated', vehicle?.code ?? '')
+    if (action === 'vehicles.setActive') {
+      toast(vehicle?.active === false ? 'Vehicle deactivated' : 'Vehicle activated', vehicle?.code ?? '')
+    }
+    if (action === 'dispatch.confirm') {
+      toast('Dispatch confirmed', dispatch ? `${dispatch.vehicleCode} · ${dispatch.dispatchDate}` : '')
+    }
+    if (action === 'dispatch.void') toast('Dispatch voided', dispatch?.vehicleCode ?? '')
+    if (action === 'dispatch.createInspectionGroup') toast('Inspection group confirmed', group?.groupNo ?? '')
+    if (action === 'dispatch.release') toast('Inspection group released', group?.groupNo ?? '')
+  },
+  onSettled() {},
 })
 
 startSalesImportHydration({
