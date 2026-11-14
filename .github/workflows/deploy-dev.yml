@@ -22,6 +22,7 @@ on:
       - cursor/module-12-daily-sessions-d9ac
       - cursor/step12-session-date-fix-d9ac
       - cursor/module-13-sales-documents-d9ac
+      - cursor/module-14-sales-returns-d9ac
 
 permissions:
   contents: read

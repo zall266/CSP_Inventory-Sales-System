@@ -14,6 +14,7 @@ import {
 } from '@/store/openingBalanceSync'
 import { queuePurchaseWrite, startPurchaseHydration } from '@/store/purchaseSync'
 import { queueSalesWrite, startSalesHydration } from '@/store/salesSync'
+import { queueSalesReturnWrite, startSalesReturnHydration } from '@/store/salesReturnSync'
 import { queueReceivingWrite, startReceivingHydration } from '@/store/receivingSync'
 import { queueManufacturingWrite, startManufacturingHydration } from '@/store/manufacturingSync'
 import {
@@ -966,6 +967,36 @@ function beginBomPost() {
 }
 let salesImportConfirmInFlight = false
 let salesReturnInFlight = false
+
+function salesReturnRemotePayload(doc: SalesReturn): Record<string, unknown> {
+  return {
+    id: doc.id,
+    clientId: doc.id,
+    returnDate: doc.returnDate,
+    sourceId: doc.sourceId,
+    originalSaleId: doc.originalSaleId,
+    originalDocumentNo: doc.originalDocumentNo,
+    customerId: doc.customerId,
+    reasonId: doc.reasonId,
+    warehouseId: doc.warehouseId,
+    notes: doc.notes,
+    photoUrl: doc.photoUrl,
+    photoName: doc.photoName,
+    evidence: doc.evidence,
+    items: doc.items.map((line) => ({
+      productId: line.productId,
+      returnedQty: line.returnedQty,
+      unit: line.unit,
+      goodQty: line.goodQty,
+      repackQty: line.repackQty,
+      repackRecoveredGrams: line.repackRecoveredGrams,
+      repackStorageBoxId: line.repackStorageBoxId,
+      wasteQty: line.wasteQty,
+      wasteReason: line.wasteReason,
+      notes: line.notes,
+    })),
+  }
+}
 let packingConfirmInFlight = false
 let manufacturingPostInFlight = false
 
@@ -1298,7 +1329,7 @@ function postConfirmedSalesReturn(doc: SalesReturn) {
       }),
     ),
   })
-  toast('Return confirmed', doc.returnNo)
+  if (!identityApiUrl()) toast('Return confirmed', doc.returnNo)
   return true
 }
 
@@ -5109,16 +5140,19 @@ export const db = {
     }
     salesReturnInFlight = true
     try {
-      const saved = this.saveSalesReturn(input)
+      const saved = this.saveSalesReturn(input, { sync: false })
       if (!saved) return null
       const ok = postConfirmedSalesReturn(saved)
+      if (ok && identityApiUrl()) {
+        queueSalesReturnWrite('salesReturns.confirm', salesReturnRemotePayload(saved), crypto.randomUUID())
+      }
       return ok ? (state.salesReturns ?? []).find((row) => row.id === saved.id) ?? saved : null
     } finally {
       salesReturnInFlight = false
     }
   },
 
-  saveSalesReturn(input: SalesReturnInput) {
+  saveSalesReturn(input: SalesReturnInput, options?: { sync?: boolean }) {
     if (!hasPermission(state, 'sales_return.create')) {
       toast('Permission denied', 'You cannot create a sales return.', 'danger')
       return null
@@ -5196,7 +5230,8 @@ export const db = {
       toast('Photo could not be saved', 'Storage is full or unavailable. The photo was not kept.', 'danger')
       return null
     }
-    toast('Return saved', returnNo)
+    if (options?.sync !== false && identityApiUrl()) queueSalesReturnWrite('salesReturns.save', salesReturnRemotePayload(doc))
+    else if (!identityApiUrl()) toast('Return saved', returnNo)
     return doc
   },
 
@@ -5260,7 +5295,8 @@ export const db = {
       salesReturns: (state.salesReturns ?? []).map((row) => (row.id === id ? doc : row)),
     })
     releaseOrphanReturnEvidence(current, doc)
-    toast('Return updated', doc.returnNo)
+    if (identityApiUrl()) queueSalesReturnWrite('salesReturns.update', salesReturnRemotePayload(doc))
+    else toast('Return updated', doc.returnNo)
     return doc
   },
 
@@ -5318,7 +5354,12 @@ export const db = {
     }
     salesReturnInFlight = true
     try {
-      return postConfirmedSalesReturn({ ...doc, items: built.lines, warehouseId: built.warehouseId })
+      const confirmed = { ...doc, items: built.lines, warehouseId: built.warehouseId }
+      const ok = postConfirmedSalesReturn(confirmed)
+      if (ok && identityApiUrl()) {
+        queueSalesReturnWrite('salesReturns.confirm', salesReturnRemotePayload(confirmed), crypto.randomUUID())
+      }
+      return ok
     } finally {
       salesReturnInFlight = false
     }
@@ -5361,7 +5402,8 @@ export const db = {
         }),
       ),
     })
-    toast('Return cancelled', doc.returnNo)
+    if (identityApiUrl()) queueSalesReturnWrite('salesReturns.cancel', { id })
+    else toast('Return cancelled', doc.returnNo)
     return true
   },
 
@@ -5389,7 +5431,8 @@ export const db = {
       setData({
         returnSources: (state.returnSources ?? []).map((row) => (row.id === existing.id ? next : row)),
       })
-      toast('Return Source updated', next.name)
+      if (identityApiUrl()) queueSalesReturnWrite('returnSources.upsert', { id: next.id, name: next.name, active: next.active })
+      else toast('Return Source updated', next.name)
       return next
     }
     const created = {
@@ -5400,7 +5443,8 @@ export const db = {
       updatedAt: stamp,
     }
     setData({ returnSources: [...(state.returnSources ?? []), created] })
-    toast('Return Source added', created.name)
+    if (identityApiUrl()) queueSalesReturnWrite('returnSources.upsert', { id: created.id, clientId: created.id, name: created.name, active: created.active })
+    else toast('Return Source added', created.name)
     return created
   },
 
@@ -5419,7 +5463,8 @@ export const db = {
         row.id === id ? { ...row, active, updatedAt: nowIso() } : row,
       ),
     })
-    toast(active ? 'Return Source activated' : 'Return Source deactivated', existing.name)
+    if (identityApiUrl()) queueSalesReturnWrite('returnSources.setActive', { id, active })
+    else toast(active ? 'Return Source activated' : 'Return Source deactivated', existing.name)
     return true
   },
 
@@ -5447,7 +5492,8 @@ export const db = {
       setData({
         returnReasons: (state.returnReasons ?? []).map((row) => (row.id === existing.id ? next : row)),
       })
-      toast('Return Reason updated', next.name)
+      if (identityApiUrl()) queueSalesReturnWrite('returnReasons.upsert', { id: next.id, name: next.name, active: next.active })
+      else toast('Return Reason updated', next.name)
       return next
     }
     const created = {
@@ -5458,7 +5504,8 @@ export const db = {
       updatedAt: stamp,
     }
     setData({ returnReasons: [...(state.returnReasons ?? []), created] })
-    toast('Return Reason added', created.name)
+    if (identityApiUrl()) queueSalesReturnWrite('returnReasons.upsert', { id: created.id, clientId: created.id, name: created.name, active: created.active })
+    else toast('Return Reason added', created.name)
     return created
   },
 
@@ -5477,7 +5524,8 @@ export const db = {
         row.id === id ? { ...row, active, updatedAt: nowIso() } : row,
       ),
     })
-    toast(active ? 'Return Reason activated' : 'Return Reason deactivated', existing.name)
+    if (identityApiUrl()) queueSalesReturnWrite('returnReasons.setActive', { id, active })
+    else toast(active ? 'Return Reason activated' : 'Return Reason deactivated', existing.name)
     return true
   },
 
@@ -9904,6 +9952,44 @@ startOpeningBalanceHydration({
   },
   onSettled() {
     openingBalanceInFlight = false
+  },
+})
+
+startSalesReturnHydration({
+  apply(slice) {
+    setData({
+      salesReturns: hydrateSalesReturns(slice.salesReturns),
+      returnSources: slice.returnSources,
+      returnReasons: slice.returnReasons,
+      ...(slice.sales ? { sales: slice.sales } : {}),
+      ...(slice.documentAuditLogs ? { documentAuditLogs: slice.documentAuditLogs } : {}),
+      ...(slice.inventory ? { inventory: slice.inventory } : {}),
+      ...(slice.stockMovements ? { stockMovements: slice.stockMovements } : {}),
+      ...(slice.productionBalances ? { productionBalances: slice.productionBalances } : {}),
+    })
+  },
+  actorId: () => currentUser(state).id,
+  onError(message) {
+    toast('Could not save to the server', message, 'danger')
+  },
+  onSaved(action, _payload, data) {
+    if (action === 'salesReturns.save') toast('Return saved', String((data.salesReturn as SalesReturn | undefined)?.returnNo ?? ''))
+    if (action === 'salesReturns.update') toast('Return updated', String((data.salesReturn as SalesReturn | undefined)?.returnNo ?? ''))
+    if (action === 'salesReturns.confirm') toast('Return confirmed', String((data.salesReturn as SalesReturn | undefined)?.returnNo ?? ''))
+    if (action === 'salesReturns.cancel') toast('Return cancelled', String((data.salesReturn as SalesReturn | undefined)?.returnNo ?? ''))
+    if (action === 'returnSources.upsert') toast('Return Source saved', String((data.returnSource as { name?: string } | undefined)?.name ?? ''))
+    if (action === 'returnSources.setActive') {
+      const source = data.returnSource as { name?: string; active?: boolean } | undefined
+      toast(source?.active ? 'Return Source activated' : 'Return Source deactivated', source?.name ?? '')
+    }
+    if (action === 'returnReasons.upsert') toast('Return Reason saved', String((data.returnReason as { name?: string } | undefined)?.name ?? ''))
+    if (action === 'returnReasons.setActive') {
+      const reason = data.returnReason as { name?: string; active?: boolean } | undefined
+      toast(reason?.active ? 'Return Reason activated' : 'Return Reason deactivated', reason?.name ?? '')
+    }
+  },
+  onSettled() {
+    salesReturnInFlight = false
   },
 })
 

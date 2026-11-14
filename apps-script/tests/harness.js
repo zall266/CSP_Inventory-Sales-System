@@ -34,6 +34,7 @@ const files = [
   'repositories/receivingRepository.js',
   'repositories/manufacturingRepository.js',
   'repositories/salesRepository.js',
+  'repositories/salesReturnRepository.js',
   'services/auditService.js',
   'services/idempotencyService.js',
   'services/counterService.js',
@@ -51,6 +52,7 @@ const files = [
   'services/receivingService.js',
   'services/manufacturingService.js',
   'services/salesService.js',
+  'services/salesReturnService.js',
   'app/router.js',
   'app/main.js',
 ]
