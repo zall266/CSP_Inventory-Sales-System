@@ -15,6 +15,7 @@ import {
 import { queuePurchaseWrite, startPurchaseHydration } from '@/store/purchaseSync'
 import { queueSalesWrite, startSalesHydration } from '@/store/salesSync'
 import { queueSalesReturnWrite, startSalesReturnHydration } from '@/store/salesReturnSync'
+import { queueSalesImportWrite, startSalesImportHydration } from '@/store/salesImportSync'
 import { queueReceivingWrite, startReceivingHydration } from '@/store/receivingSync'
 import { queueManufacturingWrite, startManufacturingHydration } from '@/store/manufacturingSync'
 import {
@@ -190,6 +191,8 @@ import type {
   Sale,
   SaleInput,
   SaleStatus,
+  ImportBatch,
+  ImportFile,
   SalesImportAccount,
   SalesImportLine,
   SalesImportMapping,
@@ -8616,6 +8619,9 @@ export const db = {
     if (existing) return existing
     const account: SalesImportAccount = { id: uid('sia'), platform, name: trimmed, active: true, createdAt: nowIso() }
     setData({ salesImportAccounts: [account, ...(state.salesImportAccounts ?? [])] })
+    if (identityApiUrl()) {
+      queueSalesImportWrite('salesImport.createAccount', { clientId: account.id, platform, name: trimmed })
+    }
     return account
   },
 
@@ -8646,7 +8652,11 @@ export const db = {
         }),
       ),
     })
-    toast('Import batch created', `${platform} · ${account.name}`)
+    if (identityApiUrl()) {
+      queueSalesImportWrite('salesImport.createBatch', { clientId: batch.id, platform, accountId })
+    } else {
+      toast('Import batch created', `${platform} · ${account.name}`)
+    }
     return batch
   },
 
@@ -8691,7 +8701,17 @@ export const db = {
     }
     setData({ salesImportFiles: [...(state.salesImportFiles ?? []), file] })
     replaceOpenSalesImportOrders(batchId)
-    toast(parsed.error ? 'Parse error' : 'Picking list processed', parsed.error ?? input.fileName, parsed.error ? 'danger' : 'success')
+    if (identityApiUrl()) {
+      queueSalesImportWrite('salesImport.ingestPicking', {
+        batchId,
+        clientId: file.id,
+        fileName: file.fileName,
+        fileHash,
+        items: input.items ?? [],
+      })
+    } else {
+      toast(parsed.error ? 'Parse error' : 'Picking list processed', parsed.error ?? input.fileName, parsed.error ? 'danger' : 'success')
+    }
     return { ok: true as const, fileId: file.id, error: parsed.error }
   },
 
@@ -8727,10 +8747,24 @@ export const db = {
       warnings: [] as string[],
     }
     const mismatch = Boolean(parsed.identityReliable && parsed.detectedUsername && parsed.detectedUsername.trim().toLowerCase() !== account.name.trim().toLowerCase())
+    const queueAwb = () => {
+      if (identityApiUrl()) {
+        queueSalesImportWrite('salesImport.ingestAwb', {
+          batchId,
+          clientId: fileId,
+          fileName: file.fileName,
+          fileHash,
+          items: input.items ?? [],
+        })
+      }
+    }
     setData({ salesImportFiles: [...(state.salesImportFiles ?? []), file] })
     if (parsed.error || mismatch) {
       replaceOpenSalesImportOrders(batchId)
-      toast(mismatch ? 'Account mismatch' : 'Parse error', mismatch ? `${parsed.detectedUsername} does not match ${account.name}.` : parsed.error, 'danger')
+      queueAwb()
+      if (!identityApiUrl()) {
+        toast(mismatch ? 'Account mismatch' : 'Parse error', mismatch ? `${parsed.detectedUsername} does not match ${account.name}.` : parsed.error, 'danger')
+      }
       return { ok: true as const, fileId, error: mismatch ? 'Account mismatch' : parsed.error }
     }
     const existing = state.salesImportShipments ?? []
@@ -8797,7 +8831,8 @@ export const db = {
       }))
     }
     setData({ documentAuditLogs: [...audits].reverse().reduce((logs, entry) => [entry, ...logs], state.documentAuditLogs ?? []) })
-    toast('AWB processed', `${created} shipment${created === 1 ? '' : 's'} from ${input.fileName}`)
+    queueAwb()
+    if (!identityApiUrl()) toast('AWB processed', `${created} shipment${created === 1 ? '' : 's'} from ${input.fileName}`)
     return { ok: true as const, fileId, created }
   },
 
@@ -8829,7 +8864,8 @@ export const db = {
           : item,
       ),
     })
-    toast('Account acknowledged', `${batch.platform} · ${account.name}`)
+    if (identityApiUrl()) queueSalesImportWrite('salesImport.acknowledge', { batchId })
+    else toast('Account acknowledged', `${batch.platform} · ${account.name}`)
     return true
   },
 
@@ -8846,6 +8882,7 @@ export const db = {
         item.id === batchId ? { ...item, spotCheckedKeys: [...current] } : item,
       ),
     })
+    if (identityApiUrl()) queueSalesImportWrite('salesImport.spotCheck', { batchId, key: sampleKey, checked })
     return true
   },
 
@@ -8883,7 +8920,17 @@ export const db = {
       (state.salesImportOrders ?? []).filter((order) => openOrderIds.has(order.id)).map((order) => order.batchId),
     )
     for (const id of touched) replaceOpenSalesImportOrders(id)
-    toast('Mapping saved', product.name)
+    if (identityApiUrl()) {
+      queueSalesImportWrite('salesImport.saveMapping', {
+        batchId: input.batchId,
+        clientId: existing?.id ?? nextMappings[0]?.id,
+        keyType: input.keyType,
+        key,
+        productId: product.id,
+      })
+    } else {
+      toast('Mapping saved', product.name)
+    }
     return true
   },
 
@@ -8911,7 +8958,8 @@ export const db = {
     setData({
       salesImportMappings: mappings.map((row) => (row.id === current.id ? { ...row, productId: product.id } : row)),
     })
-    toast('Mapping updated.')
+    if (identityApiUrl()) queueSalesImportWrite('salesImport.updateMapping', { id: current.id, productId: product.id })
+    else toast('Mapping updated.')
     return true
   },
 
@@ -8938,7 +8986,8 @@ export const db = {
     setData({
       salesImportMappings: mappings.map((row) => (row.id === current.id ? { ...row, active: input.active } : row)),
     })
-    toast(input.active ? 'Mapping activated.' : 'Mapping deactivated.')
+    if (identityApiUrl()) queueSalesImportWrite('salesImport.setMappingActive', { id: current.id, active: input.active })
+    else toast(input.active ? 'Mapping activated.' : 'Mapping deactivated.')
     return true
   },
 
@@ -8995,6 +9044,8 @@ export const db = {
         }
       }
       const posted: string[] = []
+      salesQueuePaused = true
+      try {
       for (const order of ready) {
         const current = (state.salesImportOrders ?? []).find((item) => item.id === order.id)
         if (!current || current.status === 'confirmed') continue
@@ -9038,6 +9089,9 @@ export const db = {
         })
         if (!linked) posted.push(sale.invoiceNo)
       }
+      } finally {
+        salesQueuePaused = false
+      }
       const filesNow = (state.salesImportFiles ?? []).filter((file) => file.batchId === batchId)
       const refreshed = (state.salesImportOrders ?? [])
         .filter((order) => order.batchId === batchId)
@@ -9062,7 +9116,11 @@ export const db = {
             )
           : state.documentAuditLogs,
       })
-      if (posted.length) toast('Sales import confirmed', `${posted.length} sale${posted.length === 1 ? '' : 's'} posted`)
+      if (identityApiUrl()) {
+        queueSalesImportWrite('salesImport.confirm', { batchId }, crypto.randomUUID())
+      } else if (posted.length) {
+        toast('Sales import confirmed', `${posted.length} sale${posted.length === 1 ? '' : 's'} posted`)
+      }
       return { ok: true as const, posted: posted.length }
     } finally {
       salesImportConfirmInFlight = false
@@ -9953,6 +10011,54 @@ startOpeningBalanceHydration({
   onSettled() {
     openingBalanceInFlight = false
   },
+})
+
+startSalesImportHydration({
+  apply(slice) {
+    setData({
+      salesImportAccounts: slice.salesImportAccounts,
+      salesImportBatches: slice.salesImportBatches,
+      salesImportFiles: slice.salesImportFiles,
+      salesImportOrders: slice.salesImportOrders,
+      salesImportLines: slice.salesImportLines,
+      salesImportMappings: slice.salesImportMappings,
+      salesImportShipments: slice.salesImportShipments,
+      ...(slice.sales ? { sales: slice.sales } : {}),
+      ...(slice.documentAuditLogs ? { documentAuditLogs: slice.documentAuditLogs } : {}),
+      ...(slice.inventory ? { inventory: slice.inventory } : {}),
+      ...(slice.stockMovements ? { stockMovements: slice.stockMovements } : {}),
+    })
+  },
+  actorId: () => currentUser(state).id,
+  onError(message) {
+    toast('Could not save to the server', message, 'danger')
+  },
+  onSaved(action, _payload, data) {
+    const batch = data.batch as ImportBatch | undefined
+    const account = data.account as SalesImportAccount | undefined
+    const file = data.file as ImportFile | undefined
+    if (action === 'salesImport.createAccount') toast('Import account saved', account?.name ?? '')
+    if (action === 'salesImport.createBatch') toast('Import batch created', batch ? `${batch.platform}` : '')
+    if (action === 'salesImport.ingestPicking') {
+      const error = file?.parseError
+      toast(error ? 'Parse error' : 'Picking list processed', error ?? file?.fileName ?? '', error ? 'danger' : 'success')
+    }
+    if (action === 'salesImport.ingestAwb') {
+      toast(file?.parseError ? 'Parse error' : 'AWB processed', file?.parseError ?? file?.fileName ?? '', file?.parseError ? 'danger' : 'success')
+    }
+    if (action === 'salesImport.acknowledge') toast('Account acknowledged', batch ? `${batch.platform}` : '')
+    if (action === 'salesImport.saveMapping') toast('Mapping saved')
+    if (action === 'salesImport.updateMapping') toast('Mapping updated.')
+    if (action === 'salesImport.setMappingActive') {
+      const mapping = data.mapping as SalesImportMapping | undefined
+      toast(mapping?.active === false ? 'Mapping deactivated.' : 'Mapping activated.')
+    }
+    if (action === 'salesImport.confirm') {
+      const posted = Number(data.posted || 0)
+      if (posted) toast('Sales import confirmed', `${posted} sale${posted === 1 ? '' : 's'} posted`)
+    }
+  },
+  onSettled() {},
 })
 
 startSalesReturnHydration({

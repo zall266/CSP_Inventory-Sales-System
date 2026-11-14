@@ -211,6 +211,7 @@ function createProductService(deps) {
       ['DeliveryOrders', 'items'],
       ['DeliveryOrderLines', 'productId'],
       ['SalesReturnLines', 'productId'],
+      ['SalesImportLines', 'mappedProductId'],
       ['Boms', 'productId']
     ];
     for (var i = 0; i < later.length; i += 1) {

@@ -1353,5 +1353,9 @@ function createSalesService(deps) {
     });
   }
 
-  return { canHandle: canHandle, dispatch: dispatch };
+  function createImportedSale(spreadsheet, payload, requestId, actor) {
+    return createSale(spreadsheet, payload, requestId, actor, {});
+  }
+
+  return { canHandle: canHandle, dispatch: dispatch, createImportedSale: createImportedSale };
 }
