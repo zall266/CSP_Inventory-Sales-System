@@ -12,7 +12,7 @@ This is integration audit and verification, not a new feature phase. Locked arch
 
 | Step | Module | Implementation | Merged PR | Deployed | Automated tests | Owner UAT | Status |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| 0–8 | Foundation through opening balance | Backend + frontend adapters on the integration branch | Prior module PRs through opening-balance | Inside live `/exec` (current Apps Script **v29**) | Covered by foundation/identity/master/product/party/inventory/warehouse/bom/openingBalance suites | Used as the baseline for locked Steps 9–11 | **PASS** |
+| 0–8 | Foundation through opening balance | Backend + frontend adapters on the integration branch | Prior module PRs through opening-balance | Inside live `/exec` (current Apps Script **v30**) | Covered by foundation/identity/master/product/party/inventory/warehouse/bom/openingBalance suites | Used as the baseline for locked Steps 9–11 | **PASS** |
 | 9 | Purchases and returns | Yes | Closeout PRs through v19 | Live | purchase.test.js | Owner accepted 9 Nov 2026 | **PASS / LOCKED** |
 | 10 | Receiving and to-order | Yes | [#99](https://github.com/zall266/CSP_Inventory-Sales-System/pull/99) `9e81fcd` | Live | receiving.test.js | Owner accepted 9 Nov 2026 | **PASS / LOCKED** |
 | 11 | Production orders and packing | Yes | [#100](https://github.com/zall266/CSP_Inventory-Sales-System/pull/100) `c7a88d3` | Live | manufacturing.test.js | Owner accepted 9 Nov 2026 | **PASS / LOCKED** |
@@ -31,11 +31,13 @@ Merged does not mean owner-accepted. Deployed does not mean owner-accepted. Auto
 | Check | Evidence |
 | --- | --- |
 | Integration branch HEAD | `cursor/dev-frontend-github-pages-d9ac` at `a756a9b` (merge of evidence PR #112) |
-| Latest Apps Script version | **v29**, `versionDescription=git:94a5bfbffcd8fe0b8fb7cb942d6b5d041b5acdb1`. Deploy DEV [43569078514](https://github.com/zall266/CSP_Inventory-Sales-System/actions/runs/43569078514). Source is the Step 18 docs-evidence commit after v28 `b2f3ad3`; Apps Script runtime matches v28 reads. Same project. Same `/exec`. |
-| Health | `GET /exec` at 9:26 PM MYT: DEV, healthy, timezone `Asia/Kuala_Lumpur`, spreadsheet and Drive accessible, foundation ready |
+| Latest Apps Script version | **v30**, `versionDescription=git:ea910f2c0d7e78039339074212f4c4aa42f018d5`. Deploy DEV [43599997388](https://github.com/zall266/CSP_Inventory-Sales-System/actions/runs/43599997388) from this completion-program branch. Same project. Same `/exec`. Prior live audit used v29 `git:94a5bfb`. |
+| Health | `GET /exec` at 9:30 PM MYT: DEV, healthy, timezone `Asia/Kuala_Lumpur`, spreadsheet and Drive accessible, foundation ready. Same result at 9:26 PM MYT on v29. |
 | Public frontend | Pages [43569258510](https://github.com/zall266/CSP_Inventory-Sales-System/actions/runs/43569258510) for #112. Live `index.html` Last-Modified 14 Nov 2026, 3:04 PM MYT loads `assets/index-BIZo9uFM.js` (same JS hash as #111; #112 was docs-only) |
 | API compatibility | Pages build injects the locked `/exec`. Live `inventory.get`, `sessions.list`, `sales.list`, `expenses.list`, `dashboard.get` returned `ok` envelopes |
 | `PROD-20261109-001` | `sessions.list` read-only: id `ps_p2lblrm1i`, date `2026-11-09`, status `planned`, posted false, notes `STEP12-UAT-20261109` |
+
+Post-deploy read-back on **v30** at 9:30 PM MYT (same `/exec`): dashboard `today=2026-11-14` still sales 0 / purchases 7 totaling 39 / inventory value 477.22; cashier `dashboard.get` still `FORBIDDEN`; inventory still 234 rows / 53 movements; `PROD-20261109-001` unchanged. No live posting.
 
 ### Automated tests — completion branch
 
