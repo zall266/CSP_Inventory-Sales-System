@@ -1,5 +1,32 @@
+import { identityApiUrl } from '@/api/identityApi'
 import { createSeedData, CURRENT_USER } from '@/data/seed'
 import { queueIdentityWrite, queueSettingsPatch, startIdentityHydration } from '@/store/identitySync'
+import { queueMasterWrite, startMasterHydration } from '@/store/masterSync'
+import { queueProductWrite, startProductHydration } from '@/store/productSync'
+import { queuePartyWrite, startPartyHydration } from '@/store/partySync'
+import { queueInventoryWrite, refreshInventory, startInventoryHydration } from '@/store/inventorySync'
+import { queueWarehouseWrite, startWarehouseHydration } from '@/store/warehouseSync'
+import { bomCostsReady, markBomCostsReady, queueBomWrite, startBomHydration } from '@/store/bomSync'
+import {
+  markOpeningBalanceConfirmAfterSave,
+  queueOpeningBalanceWrite,
+  startOpeningBalanceHydration,
+} from '@/store/openingBalanceSync'
+import { queuePurchaseWrite, startPurchaseHydration } from '@/store/purchaseSync'
+import { queueSalesWrite, startSalesHydration } from '@/store/salesSync'
+import { queueSalesReturnWrite, startSalesReturnHydration } from '@/store/salesReturnSync'
+import { queueSalesImportWrite, startSalesImportHydration } from '@/store/salesImportSync'
+import { queueDispatchWrite, startDispatchHydration } from '@/store/dispatchSync'
+import {
+  queueExpenseWrite,
+  queueHalalWrite,
+  queueTaskWrite,
+  startExpenseHydration,
+  startHalalHydration,
+  startTaskHydration,
+} from '@/store/opsSync'
+import { queueReceivingWrite, startReceivingHydration } from '@/store/receivingSync'
+import { queueManufacturingWrite, startManufacturingHydration } from '@/store/manufacturingSync'
 import {
   applyDisplayDelta,
   createMainWarehouseLayout,
@@ -45,6 +72,7 @@ import {
   RECEIVING_PERMISSION_KEYS,
   buildReceivingLines,
   parseReceivingPhoto,
+  receivingPurchaseMismatchMessage,
 } from '@/features/receiving/receivingModel'
 import { INVENTORY_USAGE_PERMISSION_KEYS, activeStockOrder } from '@/features/inventory/toOrderModel'
 import {
@@ -93,7 +121,7 @@ import {
   packingWarehouseError,
   validatePackingQuantities,
 } from '@/features/manufacturing/packingModel'
-import { buildSessionPlan, canAmendPlanStatus, canEditSession, canRunProduction, currentUser, isCarryForwardResumed, isRawStorePickingLine, isSessionOperationalToday, mergePicking, remainingTargetQty, systemProductionDate, todaySessions } from '@/features/manufacturing/sessionPlan'
+import { buildSessionPlan, canAmendPlanStatus, canEditSession, canRunProduction, currentUser, hydrateProductionSessions, isCarryForwardResumed, isRawStorePickingLine, isSessionOperationalToday, mergePicking, remainingTargetQty, systemProductionDate, todaySessions } from '@/features/manufacturing/sessionPlan'
 import { buildSessionMaterialClosing, closingLineFromInput, isSignificantVariance } from '@/features/manufacturing/materialClosing'
 import {
   defaultPermissionsForLegacy,
@@ -136,11 +164,13 @@ import type {
   DeliveryOrderInput,
   DeliveryOrderStatus,
   DispatchCourierKey,
+  DispatchRecord,
   DocumentAuditAction,
   DocumentAuditLog,
   DrawerState,
   Expense,
   ExpenseCategory,
+  InspectionGroup,
   InventoryRow,
   LineItem,
   MovementType,
@@ -148,14 +178,18 @@ import type {
   OpeningBalanceInput,
   PackingAssembly,
   PackingInput,
+  ProductionOrder,
   PaymentMethod,
   PermissionKey,
   ProductInput,
   ProductStatus,
   ProductionInput,
   ProductionWastage,
+  Purchase,
   PurchaseInput,
+  PurchaseReturn,
   PurchaseStatus,
+  Payment,
   Receiving,
   ReceivingInput,
   QuickModal,
@@ -168,6 +202,8 @@ import type {
   Sale,
   SaleInput,
   SaleStatus,
+  ImportBatch,
+  ImportFile,
   SalesImportAccount,
   SalesImportLine,
   SalesImportMapping,
@@ -188,6 +224,7 @@ import type {
   UserAuditAction,
   UserAuditLog,
   UserStatus,
+  Vehicle,
   WastageKind,
   BalanceUsageReason,
   HalalCertificate,
@@ -199,9 +236,40 @@ import type {
   ProductionMaterialAllocationSource,
 } from '@/types'
 import { mergeUsahaoneUatProducts } from '@/data/usahaoneProductImport'
-import { nextDatedDocNo, nextDocNo, PROTOTYPE_TODAY, formatMoney, formatQty, round2, stockStatus, systemDateKey, uid } from '@/utils/format'
+import { calendarDatesEqual, canonicalCalendarDate, nextDatedDocNo, nextDocNo, PROTOTYPE_TODAY, formatMoney, formatQty, round2, stockStatus, systemDateKey, uid } from '@/utils/format'
 
 const STORAGE_KEY = 'stockflow-prototype-v8'
+
+function blobToDataUrl(blob: Blob): Promise<string> {
+  return blob.arrayBuffer().then((buffer) => {
+    const bytes = new Uint8Array(buffer)
+    let binary = ''
+    for (let i = 0; i < bytes.length; i += 1) binary += String.fromCharCode(bytes[i])
+    return `data:${blob.type || 'application/octet-stream'};base64,${btoa(binary)}`
+  })
+}
+
+function staffTaskWritePayload(task: Pick<StaffTask, 'title' | 'description' | 'categoryId' | 'assignedTo' | 'departmentId' | 'priority' | 'frequency' | 'weekDay' | 'monthDay' | 'annualMonth' | 'annualDay' | 'specificDate' | 'time' | 'photoRequirement' | 'referenceType' | 'referenceId' | 'referenceNo'>) {
+  return {
+    title: task.title,
+    description: task.description,
+    categoryId: task.categoryId,
+    assignedTo: task.assignedTo,
+    departmentId: task.departmentId,
+    priority: task.priority,
+    frequency: task.frequency,
+    weekDay: task.weekDay,
+    monthDay: task.monthDay,
+    annualMonth: task.annualMonth,
+    annualDay: task.annualDay,
+    specificDate: task.specificDate,
+    time: task.time,
+    photoRequirement: task.photoRequirement,
+    referenceType: task.referenceType,
+    referenceId: task.referenceId,
+    referenceNo: task.referenceNo,
+  }
+}
 
 const defaultUi = (): UiState => ({
   toasts: [],
@@ -344,8 +412,9 @@ function hydrateData(data: AppData): AppData {
     salesReturns: hydrateSalesReturns(data.salesReturns),
     returnSources: data.returnSources ?? defaultReturnSources(PROTOTYPE_TODAY.toISOString()),
     returnReasons: data.returnReasons ?? defaultReturnReasons(PROTOTYPE_TODAY.toISOString()),
-    productionSessions: (data.productionSessions ?? []).map((session) => ({
+    productionSessions: hydrateProductionSessions((data.productionSessions ?? []).map((session) => ({
       ...session,
+      productionDate: canonicalCalendarDate(session.productionDate) ?? session.productionDate,
       items: session.items.map((item) => ({
         ...item,
         displayQty: item.displayQty ?? 0,
@@ -353,7 +422,7 @@ function hydrateData(data: AppData): AppData {
         carryForward: item.carryForward ?? false,
       })),
       targetChanges: session.targetChanges ?? [],
-    })),
+    }))),
     settings: {
       ...data.settings,
       legalName: data.settings.legalName ?? '',
@@ -866,15 +935,129 @@ function postPackingAssembly(existing: PackingAssembly, options: { acceptSnapsho
     const qty = posted.inventory.find((row) => row.productId === line.productId && row.warehouseId === existing.warehouseId)?.qty ?? 0
     maybeStockAlerts(line.productId, existing.warehouseId, qty)
   }
-  toast('Packing confirmed', `${packing.packingNo} · ${formatQty(existing.actualQty)} ${existing.unit}`)
+  if (!identityApiUrl()) toast('Packing confirmed', `${packing.packingNo} · ${formatQty(existing.actualQty)} ${existing.unit}`)
   return packing
 }
 
 let agentSaleInFlight = false
 let openingBalanceInFlight = false
+let purchasePostInFlight = false
+let receivingPostInFlight = false
+let salesPostInFlight = false
+let salesQueuePaused = false
+
+function beginReceivingPost() {
+  if (receivingPostInFlight) {
+    toast('Already posting', 'Wait for the current receiving update to finish.', 'warning')
+    return false
+  }
+  receivingPostInFlight = true
+  return true
+}
+
+function beginPurchasePost() {
+  if (purchasePostInFlight) {
+    toast('Already posting', 'Wait for the current purchase update to finish.', 'warning')
+    return false
+  }
+  purchasePostInFlight = true
+  return true
+}
+
+function beginSalesPost() {
+  if (salesPostInFlight) {
+    toast('Already posting', 'Wait for the current sales update to finish.', 'warning')
+    return false
+  }
+  salesPostInFlight = true
+  return true
+}
+
+function beginOpeningBalancePost() {
+  if (openingBalanceInFlight) {
+    toast('Already posting', 'Wait for the current opening balance to finish.', 'warning')
+    return false
+  }
+  openingBalanceInFlight = true
+  return true
+}
+let inventoryPostInFlight = false
+let warehousePostInFlight = false
+let bomPostInFlight = false
+
+function beginInventoryPost() {
+  if (inventoryPostInFlight) {
+    toast('Already posting', 'Wait for the current inventory update to finish.', 'warning')
+    return false
+  }
+  inventoryPostInFlight = true
+  return true
+}
+
+function beginWarehousePost() {
+  if (warehousePostInFlight) {
+    toast('Already posting', 'Wait for the current warehouse update to finish.', 'warning')
+    return false
+  }
+  warehousePostInFlight = true
+  return true
+}
+
+function beginBomPost() {
+  if (bomPostInFlight) {
+    toast('Already posting', 'Wait for the current recipe update to finish.', 'warning')
+    return false
+  }
+  bomPostInFlight = true
+  return true
+}
 let salesImportConfirmInFlight = false
 let salesReturnInFlight = false
+
+function salesReturnRemotePayload(doc: SalesReturn): Record<string, unknown> {
+  return {
+    id: doc.id,
+    clientId: doc.id,
+    returnDate: doc.returnDate,
+    sourceId: doc.sourceId,
+    originalSaleId: doc.originalSaleId,
+    originalDocumentNo: doc.originalDocumentNo,
+    customerId: doc.customerId,
+    reasonId: doc.reasonId,
+    warehouseId: doc.warehouseId,
+    notes: doc.notes,
+    photoUrl: doc.photoUrl,
+    photoName: doc.photoName,
+    evidence: doc.evidence,
+    items: doc.items.map((line) => ({
+      productId: line.productId,
+      returnedQty: line.returnedQty,
+      unit: line.unit,
+      goodQty: line.goodQty,
+      repackQty: line.repackQty,
+      repackRecoveredGrams: line.repackRecoveredGrams,
+      repackStorageBoxId: line.repackStorageBoxId,
+      wasteQty: line.wasteQty,
+      wasteReason: line.wasteReason,
+      notes: line.notes,
+    })),
+  }
+}
 let packingConfirmInFlight = false
+let manufacturingPostInFlight = false
+
+function beginManufacturingPost() {
+  if (manufacturingPostInFlight || packingConfirmInFlight) {
+    toast('Already posting', 'Wait for the current manufacturing update to finish.', 'warning')
+    return false
+  }
+  manufacturingPostInFlight = true
+  return true
+}
+
+function queueSessionWrite(action: string, payload: Record<string, unknown>, idempotencyKey?: string) {
+  if (identityApiUrl()) queueManufacturingWrite(action, payload, idempotencyKey)
+}
 
 function postConfirmedOpeningBalance(doc: OpeningBalance) {
   const actor = currentUser(state)
@@ -1192,7 +1375,7 @@ function postConfirmedSalesReturn(doc: SalesReturn) {
       }),
     ),
   })
-  toast('Return confirmed', doc.returnNo)
+  if (!identityApiUrl()) toast('Return confirmed', doc.returnNo)
   return true
 }
 
@@ -2177,6 +2360,10 @@ export const db = {
       accent: '#4F46E5',
       salesComponents: componentCheck.items,
     }
+    if (identityApiUrl()) {
+      queueProductWrite('products.create', { ...product, skuGenerated: skuResult.generated })
+      return product
+    }
     const inventory = [
       ...state.inventory,
       ...companyWarehouses(state.warehouses).map((warehouse) => ({ productId: product.id, warehouseId: warehouse.id, qty: 0 })),
@@ -2308,6 +2495,16 @@ export const db = {
       status: patch.status ?? current.status,
       salesComponents,
     }
+    if (identityApiUrl()) {
+      queueProductWrite('products.update', {
+        id,
+        ...patch,
+        name,
+        sku,
+        ...(Object.prototype.hasOwnProperty.call(patch, 'agentPrice') ? { agentPrice: patch.agentPrice ?? null } : {}),
+      })
+      return true
+    }
     setData({
       products: applyBomCosts(
         state.products.map((product) => (product.id === id ? next : product)),
@@ -2371,6 +2568,10 @@ export const db = {
         return false
       }
     }
+    if (identityApiUrl()) {
+      queueProductWrite('products.saveAgentPrices', { rows })
+      return true
+    }
     setData({
       products: applyBomCosts(
         state.products.map((product) => {
@@ -2391,6 +2592,12 @@ export const db = {
   },
 
   setProductStatus(id: string, status: ProductStatus) {
+    if (identityApiUrl()) {
+      const current = state.products.find((product) => product.id === id)
+      if (!current) return
+      queueProductWrite('products.setStatus', { id, status })
+      return
+    }
     setData({
       products: state.products.map((product) => (product.id === id ? { ...product, status } : product)),
     })
@@ -2398,21 +2605,37 @@ export const db = {
   },
 
   createCategory(name: string) {
-    const category = { id: uid('cat'), name }
+    const trimmed = name.trim()
+    if (!trimmed) return null
+    const category = { id: uid('cat'), name: trimmed }
+    if (identityApiUrl()) {
+      queueMasterWrite('categories.create', { id: category.id, name: category.name })
+      return category
+    }
     setData({ categories: [...state.categories, category] })
-    toast('Category added', name)
+    toast('Category added', trimmed)
     return category
   },
 
   renameCategory(id: string, name: string) {
+    const trimmed = name.trim()
+    if (!trimmed) return
+    if (identityApiUrl()) {
+      queueMasterWrite('categories.rename', { id, name: trimmed })
+      return
+    }
     setData({
-      categories: state.categories.map((category) => (category.id === id ? { ...category, name } : category)),
+      categories: state.categories.map((category) => (category.id === id ? { ...category, name: trimmed } : category)),
     })
     toast('Category renamed')
   },
 
   createCustomer(input: { name: string; phone: string; email: string; address?: string }) {
     const customer = { id: uid('cus'), status: 'active' as const, address: input.address ?? '', ...input }
+    if (identityApiUrl()) {
+      queuePartyWrite('customers.create', customer)
+      return customer
+    }
     setData({ customers: [customer, ...state.customers] })
     toast('Customer added', customer.name)
     return customer
@@ -2459,6 +2682,18 @@ export const db = {
         : existing.active && !active
           ? ('customer_wholesale_price_deactivated' as const)
           : ('customer_wholesale_price_updated' as const)
+      if (identityApiUrl()) {
+        queuePartyWrite('customers.saveWholesalePrice', {
+          id: next.id,
+          customerId: customer.id,
+          productId: product.id,
+          price: parsed.value,
+          active,
+          customerName: customer.name,
+          productName: product.name,
+        })
+        return next
+      }
       setData({
         customerWholesalePrices: (state.customerWholesalePrices ?? []).map((row) => (row.id === existing.id ? next : row)),
         documentAuditLogs: pushDocAudit(
@@ -2486,6 +2721,18 @@ export const db = {
       updatedAt: now,
       createdBy: actor.id,
       updatedBy: actor.id,
+    }
+    if (identityApiUrl()) {
+      queuePartyWrite('customers.saveWholesalePrice', {
+        id: created.id,
+        customerId: customer.id,
+        productId: product.id,
+        price: parsed.value,
+        active,
+        customerName: customer.name,
+        productName: product.name,
+      })
+      return created
     }
     setData({
       customerWholesalePrices: [created, ...(state.customerWholesalePrices ?? [])],
@@ -2519,6 +2766,14 @@ export const db = {
     const product = state.products.find((item) => item.id === current.productId)
     const actor = currentUser(state)
     const next = { ...current, active: false, updatedAt: nowIso(), updatedBy: actor.id }
+    if (identityApiUrl()) {
+      queuePartyWrite('customers.deactivateWholesalePrice', {
+        id,
+        customerName: customer?.name ?? 'Customer',
+        productName: product?.name ?? 'Product',
+      })
+      return true
+    }
     setData({
       customerWholesalePrices: (state.customerWholesalePrices ?? []).map((row) => (row.id === id ? next : row)),
       documentAuditLogs: pushDocAudit(
@@ -2539,6 +2794,10 @@ export const db = {
 
   createSupplier(input: { name: string; contact: string; phone: string; email: string }) {
     const supplier = { id: uid('sup'), status: 'active' as const, ...input }
+    if (identityApiUrl()) {
+      queuePartyWrite('suppliers.create', supplier)
+      return supplier
+    }
     setData({ suppliers: [supplier, ...state.suppliers] })
     toast('Supplier added', supplier.name)
     return supplier
@@ -2608,6 +2867,19 @@ export const db = {
       createdAt: stamp,
       updatedAt: stamp,
     }
+    if (identityApiUrl()) {
+      queuePartyWrite('agents.create', {
+        id: agent.id,
+        name: agent.name,
+        code: agent.code,
+        warehouseId: agent.warehouseId,
+        userId: agent.userId ?? '',
+        bankName: agent.bankName,
+        accountHolder: agent.accountHolder,
+        bankAccount: agent.bankAccount,
+      })
+      return agent
+    }
     setData({
       agents: [agent, ...agents],
       warehouses: [...state.warehouses, warehouse],
@@ -2660,6 +2932,18 @@ export const db = {
       warehouseId: current.warehouseId,
       updatedAt: nowIso(),
     }
+    if (identityApiUrl()) {
+      queuePartyWrite('agents.update', {
+        id,
+        name: next.name,
+        code: next.code,
+        userId: next.userId ?? '',
+        bankName: next.bankName,
+        accountHolder: next.accountHolder,
+        bankAccount: next.bankAccount,
+      })
+      return true
+    }
     setData({
       agents: (state.agents ?? []).map((agent) => (agent.id === id ? next : agent)),
       warehouses: state.warehouses.map((warehouse) =>
@@ -2678,6 +2962,10 @@ export const db = {
     const current = (state.agents ?? []).find((agent) => agent.id === id)
     if (!current) return false
     if (current.status === status) return true
+    if (identityApiUrl()) {
+      queuePartyWrite('agents.setStatus', { id, status, name: current.name })
+      return true
+    }
     setData({
       agents: (state.agents ?? []).map((agent) =>
         agent.id === id ? { ...agent, status, updatedAt: nowIso() } : agent,
@@ -3125,7 +3413,26 @@ export const db = {
         }),
       ),
     })
-    toast('Quotation created', quotation.quotationNo)
+    if (identityApiUrl()) {
+      queueSalesWrite('quotations.create', {
+        clientId: quotation.id,
+        customerId: quotation.customerId,
+        date: quotation.date,
+        validUntil: quotation.validUntil,
+        salesperson: quotation.salesperson,
+        reference: quotation.reference,
+        notes: quotation.notes,
+        terms: quotation.terms,
+        items: input.items,
+        discount: input.discount ?? 0,
+        tax: input.tax ?? 0,
+        shipping,
+        agentId: agentId ?? '',
+        status: quotation.status,
+      })
+    } else {
+      toast('Quotation created', quotation.quotationNo)
+    }
     return quotation
   },
 
@@ -3194,7 +3501,24 @@ export const db = {
         }),
       ),
     })
-    toast('Quotation updated', current.quotationNo)
+    if (identityApiUrl()) {
+      queueSalesWrite('quotations.update', {
+        id,
+        customerId: input.customerId,
+        validUntil: input.validUntil,
+        salesperson: input.salesperson,
+        reference: input.reference,
+        notes: input.notes,
+        terms: input.terms,
+        items: input.items,
+        discount: input.discount ?? 0,
+        tax: input.tax ?? 0,
+        shipping,
+        agentId: agentId ?? '',
+      })
+    } else {
+      toast('Quotation updated', current.quotationNo)
+    }
     return true
   },
 
@@ -3230,7 +3554,11 @@ export const db = {
         }),
       ),
     })
-    toast('Quotation updated', `${current.quotationNo} · ${status}`)
+    if (identityApiUrl()) {
+      queueSalesWrite('quotations.setStatus', { id, status })
+    } else {
+      toast('Quotation updated', `${current.quotationNo} · ${status}`)
+    }
     return true
   },
 
@@ -3296,29 +3624,35 @@ export const db = {
       toast('Quotation converted', sale.invoiceNo)
       return sale
     }
-    const sale = this.createSale({
-      customerId: quotation.customerId,
-      warehouseId: state.settings.defaultWarehouseId,
-      salesperson: quotation.salesperson,
-      items: quotation.items.map((line) => ({
-        productId: line.productId,
-        qty: line.qty,
-        price: line.price,
-        discount: line.discount,
-        description: line.description,
-      })),
-      discount: quotation.discount,
-      tax: quotation.tax,
-      shipping: quotation.shipping ?? 0,
-      paidAmount: 0,
-      notes: quotation.notes,
-      reference: quotation.reference,
-      datedInvoiceNo: true,
-      quotationId: quotation.id,
-      quotationNo: quotation.quotationNo,
-      dueDate: defaultDueDate(nowIso(), 7),
-      paymentTerms: state.settings.paymentTerms,
-    })
+    salesQueuePaused = true
+    let sale: Sale | null = null
+    try {
+      sale = this.createSale({
+        customerId: quotation.customerId,
+        warehouseId: state.settings.defaultWarehouseId,
+        salesperson: quotation.salesperson,
+        items: quotation.items.map((line) => ({
+          productId: line.productId,
+          qty: line.qty,
+          price: line.price,
+          discount: line.discount,
+          description: line.description,
+        })),
+        discount: quotation.discount,
+        tax: quotation.tax,
+        shipping: quotation.shipping ?? 0,
+        paidAmount: 0,
+        notes: quotation.notes,
+        reference: quotation.reference,
+        datedInvoiceNo: true,
+        quotationId: quotation.id,
+        quotationNo: quotation.quotationNo,
+        dueDate: defaultDueDate(nowIso(), 7),
+        paymentTerms: state.settings.paymentTerms,
+      })
+    } finally {
+      salesQueuePaused = false
+    }
     if (!sale) return null
     setData({
       quotations: state.quotations.map((item) =>
@@ -3345,7 +3679,12 @@ export const db = {
         ...(state.documentAuditLogs ?? []),
       ],
     })
-    toast('Converted to invoice', sale.invoiceNo)
+    if (identityApiUrl()) {
+      if (!beginSalesPost()) return sale
+      queueSalesWrite('quotations.convert', { id, clientSaleId: sale.id }, crypto.randomUUID())
+    } else {
+      toast('Converted to invoice', sale.invoiceNo)
+    }
     return sale
   },
 
@@ -3417,7 +3756,25 @@ export const db = {
         }),
       ),
     })
-    toast('Delivery order created', order.doNo)
+    if (identityApiUrl()) {
+      queueSalesWrite('deliveries.create', {
+        clientId: order.id,
+        customerId: order.customerId,
+        date: order.date,
+        deliveryAddress: order.deliveryAddress,
+        contactPerson: order.contactPerson,
+        contactNumber: order.contactNumber,
+        saleId: order.saleId,
+        quotationId: order.quotationId,
+        transport: order.transport,
+        preparedBy: order.preparedBy,
+        notes: order.notes,
+        items: order.items,
+        status: order.status,
+      })
+    } else {
+      toast('Delivery order created', order.doNo)
+    }
     return order
   },
 
@@ -3465,7 +3822,19 @@ export const db = {
         }),
       ),
     })
-    toast('Delivery order updated', current.doNo)
+    if (identityApiUrl()) {
+      queueSalesWrite('deliveries.update', {
+        id,
+        deliveryAddress: input.deliveryAddress,
+        contactPerson: input.contactPerson,
+        contactNumber: input.contactNumber,
+        transport: input.transport,
+        notes: input.notes,
+        items: input.items,
+      })
+    } else {
+      toast('Delivery order updated', current.doNo)
+    }
     return true
   },
 
@@ -3500,7 +3869,11 @@ export const db = {
         }),
       ),
     })
-    toast('Delivery order updated', `${current.doNo} · ${status}`)
+    if (identityApiUrl()) {
+      queueSalesWrite('deliveries.setStatus', { id, status })
+    } else {
+      toast('Delivery order updated', `${current.doNo} · ${status}`)
+    }
     return true
   },
 
@@ -3530,6 +3903,7 @@ export const db = {
         }),
       ),
     })
+    if (identityApiUrl()) queueSalesWrite('documents.recordPrint', { type, id })
     return true
   },
 
@@ -3688,7 +4062,42 @@ export const db = {
       }
     }
     emit()
-    toast('Sale completed', `${invoiceNo} · ${sale.status === 'paid' ? 'Paid' : 'Recorded'}`)
+    if (identityApiUrl() && !salesQueuePaused) {
+      if (!beginSalesPost()) return sale
+      queueSalesWrite(
+        input.pricingMode === 'wholesale' ? 'sales.createWholesale' : 'sales.create',
+        {
+          clientId: sale.id,
+          customerId: input.customerId,
+          warehouseId,
+          salesperson: sale.salesperson,
+          items: postedItems.map((item) => ({
+            productId: item.productId,
+            qty: item.qty,
+            price: item.price,
+            discount: item.discount,
+            description: item.description,
+          })),
+          discount,
+          tax,
+          shipping,
+          paymentMethod: input.paymentMethod,
+          paidAmount,
+          notes: input.notes,
+          reference: input.reference,
+          date,
+          datedInvoiceNo: Boolean(input.datedInvoiceNo),
+          quotationId: input.quotationId,
+          quotationNo: input.quotationNo,
+          dueDate: input.dueDate,
+          paymentTerms: sale.paymentTerms,
+          pricingMode: input.pricingMode,
+        },
+        crypto.randomUUID(),
+      )
+    } else if (!salesQueuePaused) {
+      toast('Sale completed', `${invoiceNo} · ${sale.status === 'paid' ? 'Paid' : 'Recorded'}`)
+    }
     return sale
   },
 
@@ -3775,7 +4184,12 @@ export const db = {
         }),
       ),
     })
-    toast('Sale voided', sale.invoiceNo, 'warning')
+    if (identityApiUrl()) {
+      if (!beginSalesPost()) return
+      queueSalesWrite('sales.void', { id }, crypto.randomUUID())
+    } else {
+      toast('Sale voided', sale.invoiceNo, 'warning')
+    }
   },
 
   createPurchase(input: PurchaseInput) {
@@ -3794,6 +4208,16 @@ export const db = {
     if (linkedReceiving?.purchaseId) {
       toast('Receiving already linked', linkedReceiving.receivingNo, 'warning')
       return null
+    }
+    if (linkedReceiving) {
+      const mismatch = receivingPurchaseMismatchMessage(linkedReceiving, {
+        warehouseId: input.warehouseId,
+        items: items.map((item) => ({ productId: item.productId, qty: item.qty, price: 0, discount: 0, total: 0, returnedQty: 0 })),
+      })
+      if (mismatch) {
+        toast('Cannot link purchase', mismatch, 'warning')
+        return null
+      }
     }
     const subtotal = round2(items.reduce((sum, item) => sum + item.total, 0))
     const discount = input.discount ?? 0
@@ -3868,10 +4292,28 @@ export const db = {
       : state.receivings ?? []
 
     setData({ purchases: [purchase, ...state.purchases], inventory, stockMovements: movements, payments, receivings })
-    toast(
-      skipStock ? 'Purchase saved — stock already received' : input.receive ? 'Purchase received' : 'Draft saved',
-      purchaseNo,
-    )
+    if (identityApiUrl()) {
+      queuePurchaseWrite('purchases.create', {
+        clientId: purchase.id,
+        supplierId: input.supplierId,
+        warehouseId: input.warehouseId,
+        invoiceNumber: input.invoiceNumber,
+        date: purchase.date,
+        items: input.items,
+        discount: input.discount ?? 0,
+        tax: input.tax ?? 0,
+        shipping: input.shipping ?? 0,
+        receive: input.receive,
+        paidAmount: input.paidAmount ?? 0,
+        notes: input.notes ?? '',
+        receivingId: input.receivingId ?? '',
+      })
+    } else {
+      toast(
+        skipStock ? 'Purchase saved — stock already received' : input.receive ? 'Purchase received' : 'Draft saved',
+        purchaseNo,
+      )
+    }
     return purchase
   },
 
@@ -3879,6 +4321,11 @@ export const db = {
     const purchase = state.purchases.find((item) => item.id === id)
     if (!purchase || purchase.status !== 'draft') {
       toast('Already received', undefined, 'info')
+      return
+    }
+    if (identityApiUrl()) {
+      if (!beginPurchasePost()) return
+      queuePurchaseWrite('purchases.receive', { id }, crypto.randomUUID())
       return
     }
     let inventory = state.inventory
@@ -3937,7 +4384,7 @@ export const db = {
       photoName = parsed.name
     }
     const actor = currentUser(state)
-    const date = input.date ?? nowIso()
+    const date = new Date().toISOString()
     const receivingNo = nextDocNo((state.receivings ?? []).map((row) => row.receivingNo), 'RCV-')
     const receiving: Receiving = {
       id: uid('rcv'),
@@ -4033,7 +4480,24 @@ export const db = {
       toast('Receiving could not be saved', 'Storage is full or unavailable. Stock was not updated.', 'danger')
       return null
     }
-    toast('Receiving completed', `${receivingNo} — stock increased.`)
+    if (identityApiUrl()) {
+      if (!beginReceivingPost()) return null
+      queueReceivingWrite('receivings.create', {
+        clientId: receiving.id,
+        warehouseId: input.warehouseId,
+        source: input.source ?? 'other',
+        supplierId: input.supplierId ?? '',
+        supplierNote: input.supplierNote ?? '',
+        notes: input.notes ?? '',
+        photoUrl: input.photoUrl ?? '',
+        photoName: input.photoName ?? '',
+        stockOrderId: input.stockOrderId ?? '',
+        items: input.items,
+        idempotencyKey: crypto.randomUUID(),
+      })
+    } else {
+      toast('Receiving completed', `${receivingNo} — stock increased.`)
+    }
     return receiving
   },
 
@@ -4060,6 +4524,11 @@ export const db = {
       toast('Link a draft purchase', 'This purchase already posted stock. Create a new purchase from the receiving instead.', 'warning')
       return false
     }
+    const mismatch = receivingPurchaseMismatchMessage(receiving, purchase)
+    if (mismatch) {
+      toast('Cannot link purchase', mismatch, 'warning')
+      return false
+    }
     const inventoryFingerprint = state.inventory.map((row) => `${row.productId}:${row.warehouseId}:${row.qty}`).join('|')
     setData({
       receivings: (state.receivings ?? []).map((row) =>
@@ -4072,7 +4541,16 @@ export const db = {
       toast('Link failed', 'Inventory must not change when linking a purchase.', 'danger')
       return false
     }
-    toast('Receiving linked', `${receiving.receivingNo} → ${purchase.purchaseNo}`)
+    if (identityApiUrl()) {
+      if (!beginReceivingPost()) return false
+      queueReceivingWrite('receivings.linkPurchase', {
+        receivingId,
+        purchaseId,
+        idempotencyKey: crypto.randomUUID(),
+      })
+    } else {
+      toast('Receiving linked', `${receiving.receivingNo} → ${purchase.purchaseNo}`)
+    }
     return true
   },
 
@@ -4115,6 +4593,15 @@ export const db = {
         }),
       ),
     })
+    if (identityApiUrl()) {
+      queueOpeningBalanceWrite('openingBalances.save', {
+        clientId: doc.id,
+        type: input.type,
+        date: doc.date,
+        notes: input.notes ?? '',
+        items: input.items,
+      })
+    }
     toast('Opening balance saved', documentNo)
     return doc
   },
@@ -4148,6 +4635,15 @@ export const db = {
     setData({
       openingBalances: (state.openingBalances ?? []).map((row) => (row.id === id ? doc : row)),
     })
+    if (identityApiUrl()) {
+      queueOpeningBalanceWrite('openingBalances.update', {
+        id,
+        type: input.type,
+        date: doc.date,
+        notes: input.notes ?? '',
+        items: input.items,
+      })
+    }
     toast('Opening balance updated', doc.documentNo)
     return doc
   },
@@ -4170,6 +4666,11 @@ export const db = {
       toast('Already confirmed', `${doc.documentNo} is locked.`, 'info')
       return false
     }
+    if (identityApiUrl()) {
+      if (!beginOpeningBalancePost()) return false
+      queueOpeningBalanceWrite('openingBalances.confirm', { id }, crypto.randomUUID())
+      return true
+    }
     openingBalanceInFlight = true
     try {
       return postConfirmedOpeningBalance(doc)
@@ -4182,6 +4683,16 @@ export const db = {
     if (openingBalanceInFlight) {
       toast('Already posting', 'Wait for the current opening balance to finish.', 'warning')
       return null
+    }
+    if (identityApiUrl()) {
+      if (!beginOpeningBalancePost()) return null
+      const saved = this.saveOpeningBalance(input)
+      if (!saved) {
+        openingBalanceInFlight = false
+        return null
+      }
+      markOpeningBalanceConfirmAfterSave(saved.id)
+      return saved
     }
     openingBalanceInFlight = true
     try {
@@ -4212,6 +4723,19 @@ export const db = {
     if (input.type === 'decrease' && !state.settings.allowNegativeStock && input.qty > current) {
       toast('Not enough stock', `Current stock is ${current}.`, 'danger')
       return false
+    }
+    if (identityApiUrl()) {
+      if (!beginInventoryPost()) return false
+      queueInventoryWrite('inventory.adjust', {
+        warehouseId: input.warehouseId,
+        productId: input.productId,
+        type: input.type,
+        qty: input.qty,
+        reason: input.reason,
+        notes: input.notes ?? '',
+        idempotencyKey: crypto.randomUUID(),
+      })
+      return true
     }
     const applied = addMovement(state.stockMovements, state.inventory, {
       date: nowIso(),
@@ -4256,6 +4780,30 @@ export const db = {
     if (!state.settings.allowNegativeStock && qty > current) {
       toast('Not enough stock', `Current stock is ${current}.`, 'danger')
       return null
+    }
+    if (identityApiUrl()) {
+      if (!beginInventoryPost()) return null
+      queueInventoryWrite('inventory.usage', {
+        productId: input.productId,
+        warehouseId: input.warehouseId,
+        qty,
+        notes: input.notes ?? '',
+        reason: input.reason ?? '',
+        date: input.date ?? '',
+        idempotencyKey: crypto.randomUUID(),
+      })
+      return {
+        id: 'pending',
+        date: input.date || nowIso(),
+        reference: '',
+        productId: input.productId,
+        warehouseId: input.warehouseId,
+        type: 'stock_usage',
+        stockIn: 0,
+        stockOut: qty,
+        balance: current,
+        user: currentUser(state).name,
+      }
     }
     const reference = nextDocNo(
       state.stockMovements.filter((row) => row.reference.startsWith('USE-')).map((row) => row.reference),
@@ -4344,7 +4892,17 @@ export const db = {
         }),
       ),
     })
-    toast('Marked as ordered', product.name)
+    if (identityApiUrl()) {
+      queueInventoryWrite('inventory.markOrdered', {
+        productId: input.productId,
+        warehouseId: input.warehouseId,
+        channel: input.channel ?? '',
+        remark: input.remark ?? '',
+        orderedQty: input.orderedQty ?? '',
+      })
+    } else {
+      toast('Marked as ordered', product.name)
+    }
     return order
   },
 
@@ -4384,7 +4942,11 @@ export const db = {
         }),
       ),
     })
-    toast('Order cancelled', cancelReason)
+    if (identityApiUrl()) {
+      queueInventoryWrite('inventory.cancelOrder', { id, reason: cancelReason ?? '' })
+    } else {
+      toast('Order cancelled', cancelReason)
+    }
     return true
   },
 
@@ -4401,6 +4963,18 @@ export const db = {
     if (!state.settings.allowNegativeStock && input.qty > current) {
       toast('Not enough stock at source', `Available: ${current}.`, 'danger')
       return false
+    }
+    if (identityApiUrl()) {
+      if (!beginInventoryPost()) return false
+      queueInventoryWrite('inventory.transfer', {
+        fromWarehouseId: input.fromWarehouseId,
+        toWarehouseId: input.toWarehouseId,
+        productId: input.productId,
+        qty: input.qty,
+        notes: input.notes ?? '',
+        idempotencyKey: crypto.randomUUID(),
+      })
+      return true
     }
     applyWarehouseTransfer(input)
     toast('Transfer complete', `${input.qty} moved.`)
@@ -4564,6 +5138,15 @@ export const db = {
   },
 
   completeStockCount(input: { warehouseId: string; counts: Array<{ productId: string; countedQty: number }> }) {
+    if (identityApiUrl()) {
+      if (!beginInventoryPost()) return false
+      queueInventoryWrite('inventory.count', {
+        warehouseId: input.warehouseId,
+        counts: input.counts,
+        idempotencyKey: crypto.randomUUID(),
+      })
+      return true
+    }
     let inventory = state.inventory
     let movements = state.stockMovements
     const reference = nextDocNo(
@@ -4603,16 +5186,19 @@ export const db = {
     }
     salesReturnInFlight = true
     try {
-      const saved = this.saveSalesReturn(input)
+      const saved = this.saveSalesReturn(input, { sync: false })
       if (!saved) return null
       const ok = postConfirmedSalesReturn(saved)
+      if (ok && identityApiUrl()) {
+        queueSalesReturnWrite('salesReturns.confirm', salesReturnRemotePayload(saved), crypto.randomUUID())
+      }
       return ok ? (state.salesReturns ?? []).find((row) => row.id === saved.id) ?? saved : null
     } finally {
       salesReturnInFlight = false
     }
   },
 
-  saveSalesReturn(input: SalesReturnInput) {
+  saveSalesReturn(input: SalesReturnInput, options?: { sync?: boolean }) {
     if (!hasPermission(state, 'sales_return.create')) {
       toast('Permission denied', 'You cannot create a sales return.', 'danger')
       return null
@@ -4690,7 +5276,8 @@ export const db = {
       toast('Photo could not be saved', 'Storage is full or unavailable. The photo was not kept.', 'danger')
       return null
     }
-    toast('Return saved', returnNo)
+    if (options?.sync !== false && identityApiUrl()) queueSalesReturnWrite('salesReturns.save', salesReturnRemotePayload(doc))
+    else if (!identityApiUrl()) toast('Return saved', returnNo)
     return doc
   },
 
@@ -4754,7 +5341,8 @@ export const db = {
       salesReturns: (state.salesReturns ?? []).map((row) => (row.id === id ? doc : row)),
     })
     releaseOrphanReturnEvidence(current, doc)
-    toast('Return updated', doc.returnNo)
+    if (identityApiUrl()) queueSalesReturnWrite('salesReturns.update', salesReturnRemotePayload(doc))
+    else toast('Return updated', doc.returnNo)
     return doc
   },
 
@@ -4812,7 +5400,12 @@ export const db = {
     }
     salesReturnInFlight = true
     try {
-      return postConfirmedSalesReturn({ ...doc, items: built.lines, warehouseId: built.warehouseId })
+      const confirmed = { ...doc, items: built.lines, warehouseId: built.warehouseId }
+      const ok = postConfirmedSalesReturn(confirmed)
+      if (ok && identityApiUrl()) {
+        queueSalesReturnWrite('salesReturns.confirm', salesReturnRemotePayload(confirmed), crypto.randomUUID())
+      }
+      return ok
     } finally {
       salesReturnInFlight = false
     }
@@ -4855,7 +5448,8 @@ export const db = {
         }),
       ),
     })
-    toast('Return cancelled', doc.returnNo)
+    if (identityApiUrl()) queueSalesReturnWrite('salesReturns.cancel', { id })
+    else toast('Return cancelled', doc.returnNo)
     return true
   },
 
@@ -4883,7 +5477,8 @@ export const db = {
       setData({
         returnSources: (state.returnSources ?? []).map((row) => (row.id === existing.id ? next : row)),
       })
-      toast('Return Source updated', next.name)
+      if (identityApiUrl()) queueSalesReturnWrite('returnSources.upsert', { id: next.id, name: next.name, active: next.active })
+      else toast('Return Source updated', next.name)
       return next
     }
     const created = {
@@ -4894,7 +5489,8 @@ export const db = {
       updatedAt: stamp,
     }
     setData({ returnSources: [...(state.returnSources ?? []), created] })
-    toast('Return Source added', created.name)
+    if (identityApiUrl()) queueSalesReturnWrite('returnSources.upsert', { id: created.id, clientId: created.id, name: created.name, active: created.active })
+    else toast('Return Source added', created.name)
     return created
   },
 
@@ -4913,7 +5509,8 @@ export const db = {
         row.id === id ? { ...row, active, updatedAt: nowIso() } : row,
       ),
     })
-    toast(active ? 'Return Source activated' : 'Return Source deactivated', existing.name)
+    if (identityApiUrl()) queueSalesReturnWrite('returnSources.setActive', { id, active })
+    else toast(active ? 'Return Source activated' : 'Return Source deactivated', existing.name)
     return true
   },
 
@@ -4941,7 +5538,8 @@ export const db = {
       setData({
         returnReasons: (state.returnReasons ?? []).map((row) => (row.id === existing.id ? next : row)),
       })
-      toast('Return Reason updated', next.name)
+      if (identityApiUrl()) queueSalesReturnWrite('returnReasons.upsert', { id: next.id, name: next.name, active: next.active })
+      else toast('Return Reason updated', next.name)
       return next
     }
     const created = {
@@ -4952,7 +5550,8 @@ export const db = {
       updatedAt: stamp,
     }
     setData({ returnReasons: [...(state.returnReasons ?? []), created] })
-    toast('Return Reason added', created.name)
+    if (identityApiUrl()) queueSalesReturnWrite('returnReasons.upsert', { id: created.id, clientId: created.id, name: created.name, active: created.active })
+    else toast('Return Reason added', created.name)
     return created
   },
 
@@ -4971,7 +5570,8 @@ export const db = {
         row.id === id ? { ...row, active, updatedAt: nowIso() } : row,
       ),
     })
-    toast(active ? 'Return Reason activated' : 'Return Reason deactivated', existing.name)
+    if (identityApiUrl()) queueSalesReturnWrite('returnReasons.setActive', { id, active })
+    else toast(active ? 'Return Reason activated' : 'Return Reason deactivated', existing.name)
     return true
   },
 
@@ -4996,6 +5596,7 @@ export const db = {
         return null
       }
     }
+    if (identityApiUrl() && !beginPurchasePost()) return null
     const returnNo = nextDocNo(state.purchaseReturns.map((item) => item.returnNo), 'PR-')
     const date = nowIso()
     let inventory = state.inventory
@@ -5043,7 +5644,15 @@ export const db = {
         ...state.purchaseReturns,
       ],
     })
-    toast('Purchase return processed', returnNo)
+    if (identityApiUrl()) {
+      queuePurchaseWrite(
+        'purchaseReturns.create',
+        { purchaseId: input.purchaseId, items: input.items, reason: input.reason },
+        crypto.randomUUID(),
+      )
+    } else {
+      toast('Purchase return processed', returnNo)
+    }
     return returnNo
   },
 
@@ -5078,6 +5687,15 @@ export const db = {
         amount,
         status: 'completed' as const,
       }
+      if (identityApiUrl()) {
+        if (!beginSalesPost()) return false
+        queueSalesWrite(
+          'sales.recordPayment',
+          { invoiceId: input.invoiceId, method: input.method, amount: input.amount },
+          crypto.randomUUID(),
+        )
+        return true
+      }
       setData({
         sales: state.sales.map((item) =>
           item.id === sale.id
@@ -5093,6 +5711,15 @@ export const db = {
     if (!purchase || purchase.balance <= 0) {
       toast('Nothing to pay', undefined, 'info')
       return false
+    }
+    if (identityApiUrl()) {
+      if (!beginPurchasePost()) return false
+      queuePurchaseWrite(
+        'purchases.recordPayment',
+        { invoiceId: input.invoiceId, method: input.method, amount: input.amount },
+        crypto.randomUUID(),
+      )
+      return true
     }
     const amount = Math.min(input.amount, purchase.balance)
     const paid = round2(purchase.paid + amount)
@@ -5133,13 +5760,30 @@ export const db = {
     }
     const expense: Expense = { id: uid('exp'), ...input }
     setData({ expenses: [expense, ...state.expenses] })
-    toast('Expense added', input.description)
+    if (identityApiUrl()) {
+      queueExpenseWrite('expenses.create', {
+        clientId: expense.id,
+        date: input.date,
+        category: input.category,
+        description: input.description,
+        amount: input.amount,
+        paymentMethod: input.paymentMethod,
+        notes: input.notes,
+      })
+    } else {
+      toast('Expense added', input.description)
+    }
     return expense
   },
 
   createBom(input: BomInput) {
     if (!input.productId || !input.items.length) {
       toast('Add components', 'A BOM needs a finished product and at least one material.', 'warning')
+      return null
+    }
+    if (identityApiUrl()) {
+      if (!beginBomPost()) return null
+      queueBomWrite('boms.create', { ...input, idempotencyKey: crypto.randomUUID() })
       return null
     }
     const product = productById(input.productId)
@@ -5170,6 +5814,11 @@ export const db = {
   updateBom(id: string, input: BomInput) {
     const existing = state.boms.find((bom) => bom.id === id)
     if (!existing) return
+    if (identityApiUrl()) {
+      if (!beginBomPost()) return
+      queueBomWrite('boms.update', { id, ...input, idempotencyKey: crypto.randomUUID() })
+      return
+    }
     const boms = state.boms.map((bom) =>
       bom.id === id
         ? {
@@ -5200,6 +5849,11 @@ export const db = {
   },
 
   setBomStatus(id: string, status: 'active' | 'inactive') {
+    if (identityApiUrl()) {
+      if (!beginBomPost()) return
+      queueBomWrite('boms.setStatus', { id, status, idempotencyKey: crypto.randomUUID() })
+      return
+    }
     const boms = state.boms.map((bom) => (bom.id === id ? { ...bom, status } : bom))
     setData({
       boms,
@@ -5213,10 +5867,26 @@ export const db = {
       toast('Permission denied', 'You cannot create packing / assembly.', 'danger')
       return null
     }
+    if (identityApiUrl() && !beginManufacturingPost()) return null
     const built = buildPackingDraft(input)
-    if (!built) return null
+    if (!built) {
+      manufacturingPostInFlight = false
+      return null
+    }
     setData({ packingAssemblies: [built, ...(state.packingAssemblies ?? [])] })
-    toast('Packing saved', built.packingNo)
+    if (identityApiUrl()) {
+      queueManufacturingWrite('packing.create', {
+        clientId: built.id,
+        productId: input.productId,
+        bomId: input.bomId,
+        warehouseId: input.warehouseId,
+        plannedQty: input.plannedQty,
+        actualQty: input.actualQty,
+        notes: input.notes ?? '',
+      })
+    } else {
+      toast('Packing saved', built.packingNo)
+    }
     return built
   },
 
@@ -5246,7 +5916,20 @@ export const db = {
     setData({
       packingAssemblies: (state.packingAssemblies ?? []).map((row) => (row.id === id ? packing : row)),
     })
-    toast('Packing updated', packing.packingNo)
+    if (identityApiUrl()) {
+      if (!beginManufacturingPost()) return packing
+      queueManufacturingWrite(options?.refreshBom ? 'packing.refresh' : 'packing.update', {
+        id,
+        productId: packing.productId,
+        bomId: packing.bomId,
+        warehouseId: packing.warehouseId,
+        plannedQty: packing.plannedQty,
+        actualQty: packing.actualQty,
+        notes: packing.notes,
+      })
+    } else {
+      toast('Packing updated', packing.packingNo)
+    }
     return packing
   },
 
@@ -5290,7 +5973,12 @@ export const db = {
         row.id === id ? { ...row, status: 'cancelled' as const } : row,
       ),
     })
-    toast('Packing cancelled', existing.packingNo, 'warning')
+    if (identityApiUrl()) {
+      if (!beginManufacturingPost()) return true
+      queueManufacturingWrite('packing.cancel', { id })
+    } else {
+      toast('Packing cancelled', existing.packingNo, 'warning')
+    }
     return true
   },
 
@@ -5319,9 +6007,16 @@ export const db = {
     packingConfirmInFlight = true
     try {
       const posted = postPackingAssembly(existing, { acceptSnapshot: options?.acceptSnapshot === true })
+      if (posted && identityApiUrl()) {
+        if (!manufacturingPostInFlight) manufacturingPostInFlight = true
+        queueManufacturingWrite('packing.confirm', {
+          id,
+          acceptSnapshot: options?.acceptSnapshot === true,
+        })
+      }
       return posted
     } finally {
-      packingConfirmInFlight = false
+      if (!identityApiUrl()) packingConfirmInFlight = false
     }
   },
 
@@ -5333,6 +6028,10 @@ export const db = {
   },
 
   createProductionOrder(input: ProductionInput) {
+    if (!hasPermission(state, 'manufacturing.create')) {
+      toast('Permission denied', 'You cannot create production.', 'danger')
+      return null
+    }
     const bom = state.boms.find((item) => item.id === input.bomId)
     const product = productById(input.productId)
     if (!bom || !product) {
@@ -5371,7 +6070,25 @@ export const db = {
       costEstimate: consumptionCost(state, consumptions),
     }
     setData({ productionOrders: [order, ...state.productionOrders] })
-    toast('Production order created', order.orderNo)
+    if (identityApiUrl()) {
+      if (!beginManufacturingPost()) return order
+      queueManufacturingWrite('productionOrders.create', {
+        clientId: order.id,
+        productId: input.productId,
+        bomId: input.bomId,
+        warehouseId: input.warehouseId,
+        plannedQty: input.plannedQty,
+        plannedStart: input.plannedStart,
+        plannedEnd: input.plannedEnd,
+        operator: input.operator,
+        notes: input.notes,
+        status: input.status ?? 'planned',
+        batchNo: order.batchNo,
+        expiryDate: order.expiryDate,
+      })
+    } else {
+      toast('Production order created', order.orderNo)
+    }
     return order
   },
 
@@ -5406,7 +6123,12 @@ export const db = {
           : item,
       ),
     })
-    toast('Production order updated')
+    if (identityApiUrl()) {
+      if (!beginManufacturingPost()) return
+      queueManufacturingWrite('productionOrders.update', { id, ...patch })
+    } else {
+      toast('Production order updated')
+    }
   },
 
   startProduction(id: string, options?: { ignoreShortage?: boolean }) {
@@ -5432,7 +6154,12 @@ export const db = {
           : item,
       ),
     })
-    toast('Production started', order.orderNo)
+    if (identityApiUrl()) {
+      if (!beginManufacturingPost()) return true
+      queueManufacturingWrite('productionOrders.start', { id, ignoreShortage: options?.ignoreShortage === true })
+    } else {
+      toast('Production started', order.orderNo)
+    }
     return true
   },
 
@@ -5445,7 +6172,8 @@ export const db = {
     setData({
       productionOrders: state.productionOrders.map((item) => (item.id === id ? { ...item, status: 'paused' as const } : item)),
     })
-    toast('Production paused', order.orderNo, 'info')
+    if (identityApiUrl()) queueManufacturingWrite('productionOrders.pause', { id })
+    else toast('Production paused', order.orderNo, 'info')
   },
 
   resumeProduction(id: string) {
@@ -5454,7 +6182,8 @@ export const db = {
     setData({
       productionOrders: state.productionOrders.map((item) => (item.id === id ? { ...item, status: 'in_progress' as const } : item)),
     })
-    toast('Production resumed', order.orderNo)
+    if (identityApiUrl()) queueManufacturingWrite('productionOrders.resume', { id })
+    else toast('Production resumed', order.orderNo)
   },
 
   cancelProduction(id: string) {
@@ -5466,7 +6195,8 @@ export const db = {
     setData({
       productionOrders: state.productionOrders.map((item) => (item.id === id ? { ...item, status: 'cancelled' as const } : item)),
     })
-    toast('Production cancelled', order.orderNo, 'warning')
+    if (identityApiUrl()) queueManufacturingWrite('productionOrders.cancel', { id })
+    else toast('Production cancelled', order.orderNo, 'warning')
   },
 
   updateConsumption(id: string, lines: Array<{ productId: string; actualQty: number; notes?: string }>) {
@@ -5483,6 +6213,7 @@ export const db = {
           : item,
       ),
     })
+    if (identityApiUrl()) queueManufacturingWrite('productionOrders.updateConsumption', { id, lines })
   },
 
   addConsumptionLine(id: string, productId: string, qty: number) {
@@ -5502,7 +6233,8 @@ export const db = {
         item.id === id ? { ...item, consumptions, consumptionConfirmed: false, costEstimate: consumptionCost(state, consumptions) } : item,
       ),
     })
-    toast('Extra material added', product.name)
+    if (identityApiUrl()) queueManufacturingWrite('productionOrders.addLine', { id, productId, qty })
+    else toast('Extra material added', product.name)
   },
 
   confirmConsumption(id: string) {
@@ -5511,7 +6243,8 @@ export const db = {
     setData({
       productionOrders: state.productionOrders.map((item) => (item.id === id ? { ...item, consumptionConfirmed: true } : item)),
     })
-    toast('Consumption confirmed', order.orderNo)
+    if (identityApiUrl()) queueManufacturingWrite('productionOrders.confirmConsumption', { id })
+    else toast('Consumption confirmed', order.orderNo)
   },
 
   recordWastage(id: string, input: { kind: WastageKind; productId?: string; qty: number; unit: string; reason: string; notes: string }) {
@@ -5525,10 +6258,15 @@ export const db = {
     setData({
       productionOrders: state.productionOrders.map((item) => (item.id === id ? { ...item, wastage: [...item.wastage, row] } : item)),
     })
-    toast('Wastage recorded')
+    if (identityApiUrl()) queueManufacturingWrite('productionOrders.recordWastage', { id, ...input })
+    else toast('Wastage recorded')
   },
 
   completeProduction(id: string, input: { actualQty: number; batchNo: string; expiryDate?: string }) {
+    if (!hasPermission(state, 'manufacturing.complete')) {
+      toast('Permission denied', 'You cannot complete production.', 'danger')
+      return false
+    }
     const order = state.productionOrders.find((item) => item.id === id)
     if (!order) return false
     if (order.posted || order.status === 'completed') {
@@ -5628,7 +6366,17 @@ export const db = {
       maybeStockAlerts(line.productId, order.warehouseId, qty)
     }
     emit()
-    toast('Production completed', `${order.orderNo} · ${batchNo}`)
+    if (identityApiUrl()) {
+      if (!beginManufacturingPost()) return true
+      queueManufacturingWrite('productionOrders.complete', {
+        id,
+        actualQty: input.actualQty,
+        batchNo,
+        expiryDate: input.expiryDate,
+      })
+    } else {
+      toast('Production completed', `${order.orderNo} · ${batchNo}`)
+    }
     return true
   },
 
@@ -5649,6 +6397,7 @@ export const db = {
       .join(', ')
     notify('production', 'Purchase request (preview)', `PRQ created for ${order.orderNo}: ${names}`, '/purchases/new')
     toast('Purchase request created', 'Preview only — not sent to Purchases yet.', 'info')
+    if (identityApiUrl()) queueManufacturingWrite('productionOrders.createPurchaseRequest', { id: orderId })
   },
 
   acceptSession(id: string) {
@@ -5671,6 +6420,7 @@ export const db = {
         item.id === id ? { ...item, status: 'accepted' as const, acceptedBy: user.name, acceptedAt: nowIso() } : item,
       ),
     })
+    queueSessionWrite('sessions.accept', { id })
     toast('Production accepted', session.reference)
   },
 
@@ -5716,6 +6466,11 @@ export const db = {
             }
           : item,
       ),
+    })
+    queueSessionWrite('sessions.start', {
+      id,
+      recipePhoto: input.recipePhoto,
+      recipePhotoName: input.recipePhotoName,
     })
     toast('Production started', 'Picking list is ready.')
     return true
@@ -5783,6 +6538,12 @@ export const db = {
           : item,
       ),
     })
+    queueSessionWrite('sessions.update', {
+      id,
+      productionDate: input.productionDate,
+      notes: input.notes ?? session.notes,
+      items: input.items,
+    })
     toast('Production plan updated', session.reference)
     return true
   },
@@ -5811,6 +6572,7 @@ export const db = {
           : item,
       ),
     })
+    queueSessionWrite('sessions.cancelPlanned', { id })
     toast('Production plan cancelled', session.reference, 'warning')
     return true
   },
@@ -5906,6 +6668,7 @@ export const db = {
     const summary = changes
       .map((change) => `${productById(change.productId)?.name ?? change.productId}: ${change.originalTarget} → ${change.newTarget}`)
       .join(', ')
+    queueSessionWrite('sessions.amend', { id, items, reason: reason.trim() })
     toast('Production plan amended', summary)
     return true
   },
@@ -5971,6 +6734,7 @@ export const db = {
           : item,
       ),
     })
+    queueSessionWrite('sessions.togglePicking', { id, lineId, picked: nextPicked })
   },
 
   addSessionMaterial(
@@ -6075,6 +6839,15 @@ export const db = {
           : item,
       ),
     })
+    queueSessionWrite('sessions.addMaterial', {
+      id,
+      productId: input.productId,
+      mode: input.mode,
+      purchaseQty: input.purchaseQty,
+      looseQty: input.looseQty,
+      containerType: input.containerType,
+      notes: input.notes,
+    })
     toast(
       source === 'loose' ? 'Loose material added' : 'Material added',
       `${product.name} · ${allocation.purchaseQty != null && allocation.purchaseUnit ? `${allocation.purchaseQty} ${allocation.purchaseUnit} · ` : ''}${allocation.baseQty} ${allocation.baseUnit}`,
@@ -6163,6 +6936,7 @@ export const db = {
           : item,
       ),
     })
+    queueSessionWrite('sessions.saveResult', { id, results })
     toast('Production result saved', session.reference)
     return true
   },
@@ -6230,6 +7004,7 @@ export const db = {
           : item,
       ),
     })
+    queueSessionWrite('sessions.saveDistribution', { id, results })
     toast('Finished goods distribution saved', session.reference)
     return true
   },
@@ -6291,6 +7066,11 @@ export const db = {
             }
           : item,
       ),
+    })
+    queueSessionWrite('sessions.saveMaterialClosing', {
+      id,
+      acknowledged: true,
+      inputs: closing.inputs ?? [],
     })
     toast('Material closing saved', session.reference)
     return true
@@ -6578,6 +7358,7 @@ export const db = {
       }
     }
     emit()
+    queueSessionWrite('sessions.complete', { id, results, closing })
     toast('Production completed', session.reference)
     return true
   },
@@ -6639,7 +7420,7 @@ export const db = {
         productionDate: today,
         items: [{ productId: origin.productId, targetQty: remaining }],
         notes: `Continued from ${originSession.reference}`,
-      })
+      }, { localOnly: true })
       if (!created) return null
       setData({
         productionSessions: state.productionSessions.map((item) =>
@@ -6665,6 +7446,11 @@ export const db = {
               }
             : item,
         ),
+      })
+      queueSessionWrite('sessions.continueCarryForward', {
+        originSessionId,
+        originItemId,
+        clientId: created.id,
       })
       toast('Continued on today\'s production', productById(origin.productId)?.name)
       return state.productionSessions.find((item) => item.id === created.id) ?? created
@@ -6699,6 +7485,7 @@ export const db = {
           : item,
       ),
     })
+    queueSessionWrite('sessions.continueCarryForward', { originSessionId, originItemId })
     toast('Continued on today\'s production', productById(origin.productId)?.name)
     return state.productionSessions.find((item) => item.id === operational.id) ?? nextSession
   },
@@ -6827,6 +7614,7 @@ export const db = {
           : row,
       ),
     })
+    queueSessionWrite('sessions.editCompleted', { id, productId, field, newValue, reason: reason.trim() })
     toast('Completed production updated', 'Audit log recorded.')
     return true
   },
@@ -6930,18 +7718,28 @@ export const db = {
           : row,
       ),
     })
+    queueSessionWrite('sessions.editCompletedClosing', {
+      id,
+      productId,
+      fullUnits: input.fullUnits,
+      looseQty: input.looseQty,
+      reason: reason.trim(),
+    })
     toast('Material closing updated', 'Inventory reconciled and audit recorded.')
     return true
   },
 
-  createDailySession(input: { productionDate: string; items: Array<{ productId: string; targetQty: number }>; notes?: string }) {
+  createDailySession(
+    input: { productionDate: string; items: Array<{ productId: string; targetQty: number }>; notes?: string },
+    options?: { localOnly?: boolean },
+  ) {
     if (!input.items.length) {
       toast('Add products to the daily plan', undefined, 'warning')
       return null
     }
     const user = currentUser(state)
     const stamp = input.productionDate.replaceAll('-', '')
-    const seq = String(state.productionSessions.filter((item) => item.productionDate === input.productionDate).length + 1).padStart(3, '0')
+    const seq = String(state.productionSessions.filter((item) => calendarDatesEqual(item.productionDate, input.productionDate)).length + 1).padStart(3, '0')
     const id = uid('ps')
     const session = {
       id,
@@ -6993,6 +7791,15 @@ export const db = {
       materialAudits: [],
     }
     setData({ productionSessions: [session, ...state.productionSessions] })
+    if (!options?.localOnly) {
+      queueSessionWrite('sessions.create', {
+        clientId: session.id,
+        productionDate: input.productionDate,
+        warehouseId: session.warehouseId,
+        items: input.items,
+        notes: input.notes ?? '',
+      })
+    }
     toast('Daily production created', session.reference)
     return session
   },
@@ -7030,6 +7837,19 @@ export const db = {
     if (qty > available) {
       toast('Not enough unplaced stock', `${available} pack(s) left to place.`, 'warning')
       return false
+    }
+    if (identityApiUrl()) {
+      if (!beginWarehousePost()) return false
+      queueWarehouseWrite('warehouse.place', {
+        slotId: input.slotId,
+        productId: input.productId,
+        qty,
+        batchRef: input.batchRef ?? '',
+        productionSessionRef: input.productionSessionRef ?? '',
+        reason: input.reason ?? '',
+        idempotencyKey: crypto.randomUUID(),
+      })
+      return true
     }
     const actor = currentUser(state)
     const occupancy = {
@@ -7101,6 +7921,18 @@ export const db = {
       toast('Keep cartons separate', 'Different production dates cannot share a slot.', 'warning')
       return false
     }
+    if (identityApiUrl()) {
+      if (!beginWarehousePost()) return false
+      queueWarehouseWrite('warehouse.move', {
+        fromSlotId: input.fromSlotId,
+        toSlotId: input.toSlotId,
+        qty,
+        action: input.action ?? 'MOVED',
+        reason: input.reason ?? '',
+        idempotencyKey: crypto.randomUUID(),
+      })
+      return true
+    }
     const actor = currentUser(state)
     const remaining = round2(source.quantityPacks - qty)
     let occupancies = state.slotOccupancies
@@ -7165,6 +7997,16 @@ export const db = {
       toast('Not enough in that position', `${source.quantityPacks} pack(s) available.`, 'warning')
       return false
     }
+    if (identityApiUrl()) {
+      if (!beginWarehousePost()) return false
+      queueWarehouseWrite('warehouse.topUp', {
+        fromSlotId: input.fromSlotId,
+        qty,
+        reason: input.reason ?? '',
+        idempotencyKey: crypto.randomUUID(),
+      })
+      return true
+    }
     const actor = currentUser(state)
     const remaining = round2(source.quantityPacks - qty)
     const occupancies =
@@ -7197,6 +8039,15 @@ export const db = {
     }
     const source = state.slotOccupancies.find((row) => row.slotId === slotId)
     if (!source) return false
+    if (identityApiUrl()) {
+      if (!beginWarehousePost()) return false
+      queueWarehouseWrite('warehouse.empty', {
+        slotId,
+        reason,
+        idempotencyKey: crypto.randomUUID(),
+      })
+      return true
+    }
     const actor = currentUser(state)
     const log = {
       id: uid('pl'),
@@ -7227,6 +8078,14 @@ export const db = {
       .sort((a, b) => a.slotNo - b.slotNo)
       .find((row) => !state.slotOccupancies.some((item) => item.slotId === row.id))
     if (empty) return empty
+    if (identityApiUrl()) {
+      if (!beginWarehousePost()) return null
+      queueWarehouseWrite('warehouse.ensurePalletSlot', {
+        locationId,
+        idempotencyKey: crypto.randomUUID(),
+      })
+      return null
+    }
     const slot = nextGenericSlot(locationId, state.storageSlots)
     setData({ storageSlots: [...state.storageSlots, slot] })
     return slot
@@ -7246,6 +8105,17 @@ export const db = {
     if (isAgentWarehouseId(state.warehouses, warehouseId)) {
       toast('Agent warehouses cannot have storage locations', undefined, 'warning')
       return null
+    }
+    if (identityApiUrl()) {
+      if (!beginWarehousePost()) return null
+      queueWarehouseWrite('warehouse.createTemporary', {
+        name,
+        type: input.type,
+        warehouseId,
+        slotCount: input.slotCount,
+        idempotencyKey: crypto.randomUUID(),
+      })
+      return { id: 'pending', name, type: input.type, warehouseId, active: true, createdAt: nowIso(), updatedAt: nowIso() }
     }
     const id = uid('loc')
     const location = {
@@ -7281,6 +8151,18 @@ export const db = {
       toast('Agent warehouses cannot have storage locations', undefined, 'warning')
       return null
     }
+    if (identityApiUrl()) {
+      if (!beginWarehousePost()) return null
+      queueWarehouseWrite('warehouse.createRack', {
+        name,
+        warehouseId,
+        levels: input.levels,
+        frontCount: input.frontCount,
+        backCount: input.backCount,
+        idempotencyKey: crypto.randomUUID(),
+      })
+      return { id: 'pending', name, type: 'RACK', warehouseId, active: true, createdAt: nowIso(), updatedAt: nowIso() }
+    }
     const id = uid('loc')
     const location = {
       id,
@@ -7307,6 +8189,15 @@ export const db = {
     }
     const next = name.trim()
     if (!next) return false
+    if (identityApiUrl()) {
+      if (!beginWarehousePost()) return false
+      queueWarehouseWrite('warehouse.rename', {
+        id,
+        name: next,
+        idempotencyKey: crypto.randomUUID(),
+      })
+      return true
+    }
     setData({
       storageLocations: state.storageLocations.map((row) => (row.id === id ? { ...row, name: next, updatedAt: nowIso() } : row)),
     })
@@ -7325,6 +8216,15 @@ export const db = {
     if (state.slotOccupancies.some((row) => slotIds.includes(row.slotId))) {
       toast('Location still has stock', 'Empty it before deactivating.', 'warning')
       return false
+    }
+    if (identityApiUrl()) {
+      if (!beginWarehousePost()) return false
+      queueWarehouseWrite('warehouse.deactivate', {
+        id,
+        name: location.name,
+        idempotencyKey: crypto.randomUUID(),
+      })
+      return true
     }
     setData({
       storageLocations: state.storageLocations.map((row) => (row.id === id ? { ...row, active: false, updatedAt: nowIso() } : row)),
@@ -7352,6 +8252,18 @@ export const db = {
     if (qty > balance.quantity) {
       toast('Quantity exceeds available balance.', `${formatQty(balance.quantity)}${balance.unit} available.`, 'warning')
       return false
+    }
+    if (identityApiUrl()) {
+      if (!beginWarehousePost()) return false
+      queueWarehouseWrite('warehouse.useBalance', {
+        balanceId: input.balanceId,
+        qty,
+        reason: input.reason,
+        notes: input.notes ?? '',
+        unit: balance.unit,
+        idempotencyKey: crypto.randomUUID(),
+      })
+      return true
     }
     const remaining = round2(balance.quantity - qty)
     const actor = currentUser(state)
@@ -7416,7 +8328,11 @@ export const db = {
         }),
       ),
     })
-    toast('Category added', category.name)
+    if (identityApiUrl()) {
+      queueTaskWrite('tasks.createCategory', { clientId: category.id, name: category.name })
+    } else {
+      toast('Category added', category.name)
+    }
     return category
   },
 
@@ -7453,7 +8369,11 @@ export const db = {
         }),
       ),
     })
-    toast('Category updated', nextName)
+    if (identityApiUrl()) {
+      queueTaskWrite('tasks.updateCategory', { id, name: nextName })
+    } else {
+      toast('Category updated', nextName)
+    }
     return true
   },
 
@@ -7481,7 +8401,11 @@ export const db = {
         }),
       ),
     })
-    toast('Category deactivated', category.name)
+    if (identityApiUrl()) {
+      queueTaskWrite('tasks.deactivateCategory', { id })
+    } else {
+      toast('Category deactivated', category.name)
+    }
     return true
   },
 
@@ -7529,7 +8453,11 @@ export const db = {
       notify('info', 'New task assigned to you.', task.title, '/tasks')
       persist(state)
     }
-    toast('Task created', task.title)
+    if (identityApiUrl()) {
+      queueTaskWrite('tasks.create', { clientId: task.id, ...staffTaskWritePayload(task) })
+    } else {
+      toast('Task created', task.title)
+    }
     return task
   },
 
@@ -7581,7 +8509,11 @@ export const db = {
       notify('info', 'New task assigned to you.', next.title, '/tasks')
       persist(state)
     }
-    toast('Task updated', next.title)
+    if (identityApiUrl()) {
+      queueTaskWrite('tasks.update', { id, ...staffTaskWritePayload(next) })
+    } else {
+      toast('Task updated', next.title)
+    }
     return true
   },
 
@@ -7607,7 +8539,11 @@ export const db = {
         }),
       ),
     })
-    toast('Task deactivated', existing.title)
+    if (identityApiUrl()) {
+      queueTaskWrite('tasks.deactivate', { id })
+    } else {
+      toast('Task deactivated', existing.title)
+    }
     return true
   },
 
@@ -7630,7 +8566,11 @@ export const db = {
         row.id === occurrenceId ? { ...row, status: 'in_progress', startedAt: nowIso() } : row,
       ),
     })
-    toast('Task started', task.title)
+    if (identityApiUrl()) {
+      queueTaskWrite('tasks.start', { id: occurrenceId })
+    } else {
+      toast('Task started', task.title)
+    }
     return true
   },
 
@@ -7674,7 +8614,11 @@ export const db = {
       toast('Photo could not be saved', 'Storage is full or unavailable. The photo was not kept.', 'danger')
       return false
     }
-    toast('Photo uploaded', parsed.name)
+    if (identityApiUrl()) {
+      queueTaskWrite('tasks.attachPhoto', { id: occurrenceId, photoUrl: parsed.url, photoName: parsed.name })
+    } else {
+      toast('Photo uploaded', parsed.name)
+    }
     return true
   },
 
@@ -7742,7 +8686,16 @@ export const db = {
       toast('Could not save completion', 'Storage is full or unavailable.', 'danger')
       return false
     }
-    toast('Task completed', task.title)
+    if (identityApiUrl()) {
+      const payload: Record<string, unknown> = { id: occurrenceId, note: input?.note }
+      if (input?.photoUrl?.startsWith('data:')) {
+        payload.photoUrl = input.photoUrl
+        payload.photoName = input.photoName
+      }
+      queueTaskWrite('tasks.complete', payload, crypto.randomUUID())
+    } else {
+      toast('Task completed', task.title)
+    }
     return true
   },
   createSalesImportAccount(platform: SalesImportPlatform, name: string) {
@@ -7762,6 +8715,9 @@ export const db = {
     if (existing) return existing
     const account: SalesImportAccount = { id: uid('sia'), platform, name: trimmed, active: true, createdAt: nowIso() }
     setData({ salesImportAccounts: [account, ...(state.salesImportAccounts ?? [])] })
+    if (identityApiUrl()) {
+      queueSalesImportWrite('salesImport.createAccount', { clientId: account.id, platform, name: trimmed })
+    }
     return account
   },
 
@@ -7792,7 +8748,11 @@ export const db = {
         }),
       ),
     })
-    toast('Import batch created', `${platform} · ${account.name}`)
+    if (identityApiUrl()) {
+      queueSalesImportWrite('salesImport.createBatch', { clientId: batch.id, platform, accountId })
+    } else {
+      toast('Import batch created', `${platform} · ${account.name}`)
+    }
     return batch
   },
 
@@ -7837,7 +8797,17 @@ export const db = {
     }
     setData({ salesImportFiles: [...(state.salesImportFiles ?? []), file] })
     replaceOpenSalesImportOrders(batchId)
-    toast(parsed.error ? 'Parse error' : 'Picking list processed', parsed.error ?? input.fileName, parsed.error ? 'danger' : 'success')
+    if (identityApiUrl()) {
+      queueSalesImportWrite('salesImport.ingestPicking', {
+        batchId,
+        clientId: file.id,
+        fileName: file.fileName,
+        fileHash,
+        items: input.items ?? [],
+      })
+    } else {
+      toast(parsed.error ? 'Parse error' : 'Picking list processed', parsed.error ?? input.fileName, parsed.error ? 'danger' : 'success')
+    }
     return { ok: true as const, fileId: file.id, error: parsed.error }
   },
 
@@ -7873,10 +8843,24 @@ export const db = {
       warnings: [] as string[],
     }
     const mismatch = Boolean(parsed.identityReliable && parsed.detectedUsername && parsed.detectedUsername.trim().toLowerCase() !== account.name.trim().toLowerCase())
+    const queueAwb = () => {
+      if (identityApiUrl()) {
+        queueSalesImportWrite('salesImport.ingestAwb', {
+          batchId,
+          clientId: fileId,
+          fileName: file.fileName,
+          fileHash,
+          items: input.items ?? [],
+        })
+      }
+    }
     setData({ salesImportFiles: [...(state.salesImportFiles ?? []), file] })
     if (parsed.error || mismatch) {
       replaceOpenSalesImportOrders(batchId)
-      toast(mismatch ? 'Account mismatch' : 'Parse error', mismatch ? `${parsed.detectedUsername} does not match ${account.name}.` : parsed.error, 'danger')
+      queueAwb()
+      if (!identityApiUrl()) {
+        toast(mismatch ? 'Account mismatch' : 'Parse error', mismatch ? `${parsed.detectedUsername} does not match ${account.name}.` : parsed.error, 'danger')
+      }
       return { ok: true as const, fileId, error: mismatch ? 'Account mismatch' : parsed.error }
     }
     const existing = state.salesImportShipments ?? []
@@ -7943,7 +8927,8 @@ export const db = {
       }))
     }
     setData({ documentAuditLogs: [...audits].reverse().reduce((logs, entry) => [entry, ...logs], state.documentAuditLogs ?? []) })
-    toast('AWB processed', `${created} shipment${created === 1 ? '' : 's'} from ${input.fileName}`)
+    queueAwb()
+    if (!identityApiUrl()) toast('AWB processed', `${created} shipment${created === 1 ? '' : 's'} from ${input.fileName}`)
     return { ok: true as const, fileId, created }
   },
 
@@ -7975,7 +8960,8 @@ export const db = {
           : item,
       ),
     })
-    toast('Account acknowledged', `${batch.platform} · ${account.name}`)
+    if (identityApiUrl()) queueSalesImportWrite('salesImport.acknowledge', { batchId })
+    else toast('Account acknowledged', `${batch.platform} · ${account.name}`)
     return true
   },
 
@@ -7992,6 +8978,7 @@ export const db = {
         item.id === batchId ? { ...item, spotCheckedKeys: [...current] } : item,
       ),
     })
+    if (identityApiUrl()) queueSalesImportWrite('salesImport.spotCheck', { batchId, key: sampleKey, checked })
     return true
   },
 
@@ -8029,7 +9016,17 @@ export const db = {
       (state.salesImportOrders ?? []).filter((order) => openOrderIds.has(order.id)).map((order) => order.batchId),
     )
     for (const id of touched) replaceOpenSalesImportOrders(id)
-    toast('Mapping saved', product.name)
+    if (identityApiUrl()) {
+      queueSalesImportWrite('salesImport.saveMapping', {
+        batchId: input.batchId,
+        clientId: existing?.id ?? nextMappings[0]?.id,
+        keyType: input.keyType,
+        key,
+        productId: product.id,
+      })
+    } else {
+      toast('Mapping saved', product.name)
+    }
     return true
   },
 
@@ -8057,7 +9054,8 @@ export const db = {
     setData({
       salesImportMappings: mappings.map((row) => (row.id === current.id ? { ...row, productId: product.id } : row)),
     })
-    toast('Mapping updated.')
+    if (identityApiUrl()) queueSalesImportWrite('salesImport.updateMapping', { id: current.id, productId: product.id })
+    else toast('Mapping updated.')
     return true
   },
 
@@ -8084,7 +9082,8 @@ export const db = {
     setData({
       salesImportMappings: mappings.map((row) => (row.id === current.id ? { ...row, active: input.active } : row)),
     })
-    toast(input.active ? 'Mapping activated.' : 'Mapping deactivated.')
+    if (identityApiUrl()) queueSalesImportWrite('salesImport.setMappingActive', { id: current.id, active: input.active })
+    else toast(input.active ? 'Mapping activated.' : 'Mapping deactivated.')
     return true
   },
 
@@ -8141,6 +9140,8 @@ export const db = {
         }
       }
       const posted: string[] = []
+      salesQueuePaused = true
+      try {
       for (const order of ready) {
         const current = (state.salesImportOrders ?? []).find((item) => item.id === order.id)
         if (!current || current.status === 'confirmed') continue
@@ -8184,6 +9185,9 @@ export const db = {
         })
         if (!linked) posted.push(sale.invoiceNo)
       }
+      } finally {
+        salesQueuePaused = false
+      }
       const filesNow = (state.salesImportFiles ?? []).filter((file) => file.batchId === batchId)
       const refreshed = (state.salesImportOrders ?? [])
         .filter((order) => order.batchId === batchId)
@@ -8208,7 +9212,11 @@ export const db = {
             )
           : state.documentAuditLogs,
       })
-      if (posted.length) toast('Sales import confirmed', `${posted.length} sale${posted.length === 1 ? '' : 's'} posted`)
+      if (identityApiUrl()) {
+        queueSalesImportWrite('salesImport.confirm', { batchId }, crypto.randomUUID())
+      } else if (posted.length) {
+        toast('Sales import confirmed', `${posted.length} sale${posted.length === 1 ? '' : 's'} posted`)
+      }
       return { ok: true as const, posted: posted.length }
     } finally {
       salesImportConfirmInFlight = false
@@ -8261,7 +9269,19 @@ export const db = {
         newValue: manufacturer.active ? 'active' : 'inactive',
       })),
     })
-    toast('Manufacturer saved', manufacturer.name)
+    if (identityApiUrl()) {
+      queueHalalWrite('halal.saveManufacturer', {
+        clientId: manufacturer.id,
+        name: manufacturer.name,
+        registrationNo: manufacturer.registrationNo,
+        address: manufacturer.address,
+        contact: manufacturer.contact,
+        notes: manufacturer.notes,
+        active: manufacturer.active,
+      })
+    } else {
+      toast('Manufacturer saved', manufacturer.name)
+    }
     return manufacturer
   },
 
@@ -8314,7 +9334,19 @@ export const db = {
         newValue: next.name,
       })),
     })
-    toast('Manufacturer updated', next.name)
+    if (identityApiUrl()) {
+      queueHalalWrite('halal.saveManufacturer', {
+        id: next.id,
+        name: next.name,
+        registrationNo: next.registrationNo,
+        address: next.address,
+        contact: next.contact,
+        notes: next.notes,
+        active: next.active,
+      })
+    } else {
+      toast('Manufacturer updated', next.name)
+    }
     return next
   },
 
@@ -8409,17 +9441,27 @@ export const db = {
     let documentFileId = matched?.documentFileId ?? (input.document ? undefined : currentCertificate?.documentFileId)
     let documentName = matched?.documentName ?? (input.document ? undefined : currentCertificate?.documentName)
     let documentMime = matched?.documentMime ?? (input.document ? undefined : currentCertificate?.documentMime)
+    let documentDataUrl = ''
     if (input.document) {
       documentFileId = uid('hdoc')
       documentName = input.document.fileName
       documentMime = input.document.mimeType === 'image/jpg' ? 'image/jpeg' : input.document.mimeType
-      await putAttachmentBlob({
-        fileId: documentFileId,
-        kind: HALAL_CERTIFICATE_KIND,
-        fileName: documentName,
-        mimeType: documentMime,
-        blob: input.document.blob,
-      })
+      if (identityApiUrl()) {
+        try {
+          documentDataUrl = await blobToDataUrl(input.document.blob)
+        } catch {
+          toast('Certificate document', 'The file could not be read.', 'danger')
+          return null
+        }
+      } else {
+        await putAttachmentBlob({
+          fileId: documentFileId,
+          kind: HALAL_CERTIFICATE_KIND,
+          fileName: documentName,
+          mimeType: documentMime,
+          blob: input.document.blob,
+        })
+      }
     }
 
     const verificationStatus = input.verificationStatus === 'verified' ? 'verified' : 'pending'
@@ -8549,7 +9591,26 @@ export const db = {
         : [compliance, ...(state.halalCompliances ?? [])],
       documentAuditLogs: audits,
     })
-    toast(existingCompliance ? 'Halal compliance updated' : 'Halal compliance saved', product!.name)
+    if (identityApiUrl()) {
+      queueHalalWrite('halal.saveCompliance', {
+        complianceId: existingCompliance?.id,
+        clientId: compliance.id,
+        certificateClientId: certificate.id,
+        productId: product!.id,
+        manufacturerId: manufacturer.id,
+        certificateNo,
+        issuingAuthority,
+        issueDate,
+        expiryDate: input.expiryDate,
+        verificationStatus,
+        notes: input.notes,
+        documentDataUrl: documentDataUrl || undefined,
+        documentName: input.document?.fileName,
+        documentMime: documentMime,
+      })
+    } else {
+      toast(existingCompliance ? 'Halal compliance updated' : 'Halal compliance saved', product!.name)
+    }
     return compliance
   },
 
@@ -8581,7 +9642,11 @@ export const db = {
         newValue: `${vehicle.vehicleType} ${vehicle.plateNumber}`,
       })),
     })
-    toast('Vehicle saved', vehicle.code)
+    if (identityApiUrl()) {
+      queueDispatchWrite('vehicles.create', { clientId: vehicle.id, code, vehicleType, plateNumber })
+    } else {
+      toast('Vehicle saved', vehicle.code)
+    }
     return vehicle
   },
 
@@ -8615,7 +9680,11 @@ export const db = {
         newValue: `${vehicle.vehicleType} ${vehicle.plateNumber}`,
       })),
     })
-    toast('Vehicle updated', vehicle.code)
+    if (identityApiUrl()) {
+      queueDispatchWrite('vehicles.update', { id, code, vehicleType, plateNumber })
+    } else {
+      toast('Vehicle updated', vehicle.code)
+    }
     return vehicle
   },
 
@@ -8638,7 +9707,11 @@ export const db = {
         newValue: active ? 'active' : 'inactive',
       })),
     })
-    toast(active ? 'Vehicle activated' : 'Vehicle deactivated', vehicle.code)
+    if (identityApiUrl()) {
+      queueDispatchWrite('vehicles.setActive', { id, active })
+    } else {
+      toast(active ? 'Vehicle activated' : 'Vehicle deactivated', vehicle.code)
+    }
     return true
   },
 
@@ -8680,6 +9753,13 @@ export const db = {
         newValue: vehicle?.code ?? '',
       })),
     })
+    if (identityApiUrl()) {
+      queueDispatchWrite('dispatch.create', {
+        clientId: dispatch.id,
+        dispatchDate,
+        ...(vehicle ? { vehicleId: vehicle.id } : {}),
+      })
+    }
     return dispatch
   },
 
@@ -8733,6 +9813,16 @@ export const db = {
         return row
       }),
     })
+    if (identityApiUrl()) {
+      queueDispatchWrite('dispatch.update', {
+        id,
+        dispatchDate,
+        vehicleId,
+        ...(input.lines
+          ? { lines: lines.map((line) => ({ shipmentId: line.shipmentId, courierKey: line.courierKey, parcelQty: line.parcelQty })) }
+          : {}),
+      })
+    }
     return true
   },
 
@@ -8786,7 +9876,11 @@ export const db = {
         newValue: confirmed.plateNumber,
       })),
     })
-    toast('Dispatch confirmed', `${confirmed.vehicleCode} · ${confirmed.dispatchDate}`)
+    if (identityApiUrl()) {
+      queueDispatchWrite('dispatch.confirm', { id }, crypto.randomUUID())
+    } else {
+      toast('Dispatch confirmed', `${confirmed.vehicleCode} · ${confirmed.dispatchDate}`)
+    }
     return true
   },
 
@@ -8812,7 +9906,11 @@ export const db = {
         newValue: 'void',
       })),
     })
-    toast('Dispatch voided', voided.vehicleCode)
+    if (identityApiUrl()) {
+      queueDispatchWrite('dispatch.void', { id }, crypto.randomUUID())
+    } else {
+      toast('Dispatch voided', voided.vehicleCode)
+    }
     return true
   },
 
@@ -8857,7 +9955,11 @@ export const db = {
         newValue: group.dispatchIds.join(','),
       })),
     })
-    toast('Inspection group confirmed', group.groupNo)
+    if (identityApiUrl()) {
+      queueDispatchWrite('dispatch.createInspectionGroup', { clientId: group.id, dispatchIds: group.dispatchIds }, crypto.randomUUID())
+    } else {
+      toast('Inspection group confirmed', group.groupNo)
+    }
     return group
   },
 
@@ -8884,7 +9986,11 @@ export const db = {
         newValue: 'released',
       })),
     })
-    toast('Inspection group released', released.groupNo)
+    if (identityApiUrl()) {
+      queueDispatchWrite('dispatch.release', { id }, crypto.randomUUID())
+    } else {
+      toast('Inspection group released', released.groupNo)
+    }
     return true
   },
 
@@ -8909,6 +10015,545 @@ startIdentityHydration({
   settings: () => state.settings,
   onError(message) {
     toast('Could not save to the server', message, 'danger')
+  },
+})
+
+startMasterHydration({
+  apply(slice) {
+    setData({ warehouses: slice.warehouses, categories: slice.categories })
+  },
+  actorId: () => currentUser(state).id,
+  onError(message) {
+    toast('Could not save to the server', message, 'danger')
+  },
+  onSaved(action, payload) {
+    if (action === 'categories.create') toast('Category added', String(payload.name ?? ''))
+    if (action === 'categories.rename') toast('Category renamed')
+  },
+})
+
+startPartyHydration({
+  apply(slice) {
+    setData(slice)
+  },
+  actorId: () => currentUser(state).id,
+  onError(message) {
+    toast('Could not save to the server', message, 'danger')
+  },
+  onSaved(action, payload) {
+    if (action === 'customers.create') toast('Customer added', String(payload.name ?? ''))
+    if (action === 'suppliers.create') toast('Supplier added', String(payload.name ?? ''))
+    if (action === 'agents.create') toast('Agent added', String(payload.name ?? ''))
+    if (action === 'agents.update') toast('Agent updated', String(payload.name ?? ''))
+    if (action === 'agents.setStatus') {
+      toast(payload.status === 'inactive' ? 'Agent deactivated' : 'Agent activated', String(payload.name ?? ''))
+    }
+    if (action === 'customers.saveWholesalePrice') {
+      const label = `${payload.customerName ?? 'Customer'} · ${payload.productName ?? 'Product'}`
+      toast(payload.active === false ? 'Custom price removed' : 'Custom price saved', label)
+    }
+    if (action === 'customers.deactivateWholesalePrice') {
+      toast('Custom price removed', `${payload.customerName ?? 'Customer'} · ${payload.productName ?? 'Product'}`)
+    }
+  },
+})
+
+startProductHydration({
+  apply(slice) {
+    const products = bomCostsReady()
+      ? slice.products.map((product) => {
+          const current = state.products.find((row) => row.id === product.id)
+          if (!current) return product
+          return { ...product, costPrice: current.costPrice, costSource: current.costSource }
+        })
+      : slice.products
+    setData({ products })
+  },
+  actorId: () => currentUser(state).id,
+  onError(message) {
+    toast('Could not save to the server', message, 'danger')
+  },
+  onSaved(action, payload, products) {
+    if (action === 'products.create') {
+      const saved = products.find((product) => product.id === payload.id)
+      const name = saved?.name || String(payload.name ?? '')
+      const sku = saved?.sku || String(payload.sku ?? '')
+      toast('Product added', payload.skuGenerated ? `${name} · SKU ${sku}` : `${name} is now in the catalogue.`)
+    }
+    if (action === 'products.update') toast('Product updated')
+    if (action === 'products.setStatus') toast(payload.status === 'inactive' ? 'Product deactivated' : 'Product activated')
+    if (action === 'products.saveAgentPrices') {
+      const count = Array.isArray(payload.rows) ? payload.rows.length : 0
+      toast('Prices saved', `${count} product(s) updated.`)
+    }
+    if (action === 'products.create') refreshInventory()
+  },
+})
+
+startInventoryHydration({
+  apply(slice) {
+    setData({
+      inventory: slice.inventory,
+      stockMovements: slice.stockMovements,
+      ...(slice.stockOrders ? { stockOrders: slice.stockOrders } : {}),
+    })
+  },
+  actorId: () => currentUser(state).id,
+  onError(message) {
+    toast('Could not save to the server', message, 'danger')
+  },
+  onSaved(action, payload, data) {
+    if (action === 'inventory.adjust') {
+      toast('Stock adjusted', `${productById(String(payload.productId ?? ''))?.name ?? 'Product'} updated.`)
+    }
+    if (action === 'inventory.transfer') toast('Transfer complete', `${payload.qty ?? ''} moved.`)
+    if (action === 'inventory.usage') {
+      const product = productById(String(payload.productId ?? ''))
+      toast('Stock usage recorded', `${product?.name ?? 'Product'} −${formatQty(Number(payload.qty ?? 0))} ${product?.unit ?? ''}`.trim())
+    }
+    if (action === 'inventory.count') {
+      const changes = Number(data.changes ?? 0)
+      toast('Stock count complete', changes ? `${changes} SKUs adjusted.` : 'No differences found.', changes ? 'success' : 'info')
+    }
+    if (action === 'inventory.markOrdered') toast('Marked as ordered', String(payload.productId ?? ''))
+    if (action === 'inventory.cancelOrder') toast('Order cancelled', String(payload.reason ?? ''))
+  },
+  onSettled() {
+    inventoryPostInFlight = false
+  },
+})
+
+startReceivingHydration({
+  apply(slice) {
+    setData({
+      receivings: slice.receivings,
+      stockOrders: slice.stockOrders,
+      ...(slice.inventory ? { inventory: slice.inventory } : {}),
+      ...(slice.stockMovements ? { stockMovements: slice.stockMovements } : {}),
+      ...(slice.purchases ? { purchases: slice.purchases } : {}),
+    })
+  },
+  actorId: () => currentUser(state).id,
+  onError(message) {
+    toast('Could not save to the server', message, 'danger')
+  },
+  onSaved(action, _payload, data) {
+    if (action === 'receivings.create') {
+      const doc = data.receiving as Receiving | undefined
+      toast('Receiving completed', doc ? `${doc.receivingNo} — stock increased.` : 'Stock increased.')
+    }
+    if (action === 'receivings.linkPurchase') {
+      const doc = data.receiving as Receiving | undefined
+      toast('Receiving linked', doc?.purchaseNo ? `${doc.receivingNo} → ${doc.purchaseNo}` : 'Purchase linked.')
+    }
+  },
+  onSettled() {
+    receivingPostInFlight = false
+  },
+})
+
+startWarehouseHydration({
+  apply(slice) {
+    setData(slice)
+  },
+  actorId: () => currentUser(state).id,
+  onError(message) {
+    toast('Could not save to the server', message, 'danger')
+  },
+  onSaved(action, payload) {
+    const qty = payload.qty ?? ''
+    if (action === 'warehouse.place') toast('Stock placed', `${qty} pack(s) placed.`)
+    if (action === 'warehouse.move') toast('Stock moved', `${qty} pack(s) moved.`)
+    if (action === 'warehouse.topUp') toast('Display topped up', `${qty} pack(s) moved to Display. Inventory total unchanged.`)
+    if (action === 'warehouse.empty') toast('Position emptied', 'Packs returned to Ready to Place.')
+    if (action === 'warehouse.createTemporary') toast('Temporary location added', String(payload.name ?? ''))
+    if (action === 'warehouse.createRack') toast('Rack added', String(payload.name ?? ''))
+    if (action === 'warehouse.rename') toast('Location renamed', String(payload.name ?? ''))
+    if (action === 'warehouse.deactivate') toast('Location deactivated', String(payload.name ?? ''))
+    if (action === 'warehouse.useBalance') toast('Balance used', `${qty}${payload.unit ?? ''} recorded. Inventory packs unchanged.`)
+  },
+  onSettled() {
+    warehousePostInFlight = false
+  },
+})
+
+startOpeningBalanceHydration({
+  apply(slice) {
+    setData({
+      openingBalances: slice.openingBalances,
+      ...(slice.inventory ? { inventory: slice.inventory } : {}),
+      ...(slice.stockMovements ? { stockMovements: slice.stockMovements } : {}),
+      ...(slice.displayStocks ? { displayStocks: slice.displayStocks } : {}),
+      ...(slice.productionBalances ? { productionBalances: slice.productionBalances } : {}),
+      ...(slice.storageSlots ? { storageSlots: slice.storageSlots } : {}),
+      ...(slice.slotOccupancies ? { slotOccupancies: slice.slotOccupancies } : {}),
+      ...(slice.placementLogs ? { placementLogs: slice.placementLogs } : {}),
+    })
+  },
+  actorId: () => currentUser(state).id,
+  onError(message) {
+    toast('Could not save to the server', message, 'danger')
+  },
+  onSaved(action, _payload, data) {
+    if (action === 'openingBalances.save') toast('Opening balance saved', String((data.openingBalance as OpeningBalance | undefined)?.documentNo ?? ''))
+    if (action === 'openingBalances.update') toast('Opening balance updated', String((data.openingBalance as OpeningBalance | undefined)?.documentNo ?? ''))
+    if (action === 'openingBalances.confirm') {
+      const doc = data.openingBalance as OpeningBalance | undefined
+      toast('Opening balance confirmed', doc?.documentNo ?? '')
+    }
+  },
+  onSettled() {
+    openingBalanceInFlight = false
+  },
+})
+
+startHalalHydration({
+  apply(slice) {
+    setData({
+      manufacturers: slice.manufacturers,
+      halalCertificates: slice.halalCertificates,
+      halalCompliances: slice.halalCompliances,
+      ...(slice.documentAuditLogs ? { documentAuditLogs: slice.documentAuditLogs } : {}),
+    })
+  },
+  actorId: () => currentUser(state).id,
+  onError(message) {
+    toast('Could not save to the server', message, 'danger')
+  },
+  onSaved(action, _payload, data) {
+    const manufacturer = data.manufacturer as Manufacturer | undefined
+    if (action === 'halal.saveManufacturer') {
+      toast(_payload.id ? 'Manufacturer updated' : 'Manufacturer saved', manufacturer?.name ?? '')
+    }
+    if (action === 'halal.saveCompliance') {
+      toast('Halal compliance saved')
+    }
+  },
+  onSettled() {},
+})
+
+startTaskHydration({
+  apply(slice) {
+    setData({
+      staffTaskCategories: slice.staffTaskCategories,
+      staffTasks: slice.staffTasks,
+      staffTaskOccurrences: slice.staffTaskOccurrences,
+      ...(slice.documentAuditLogs ? { documentAuditLogs: slice.documentAuditLogs } : {}),
+    })
+  },
+  actorId: () => currentUser(state).id,
+  onError(message) {
+    toast('Could not save to the server', message, 'danger')
+  },
+  onSaved(action, _payload, data) {
+    const category = data.category as { name?: string } | undefined
+    const task = data.task as StaffTask | undefined
+    const occurrence = data.occurrence as { taskId?: string } | undefined
+    const occurrenceTask = (data.staffTasks as StaffTask[] | undefined)?.find((row) => row.id === occurrence?.taskId)
+    if (action === 'tasks.createCategory') toast('Category added', category?.name ?? '')
+    if (action === 'tasks.updateCategory') toast('Category updated', category?.name ?? '')
+    if (action === 'tasks.deactivateCategory') toast('Category deactivated', category?.name ?? '')
+    if (action === 'tasks.create') toast('Task created', task?.title ?? '')
+    if (action === 'tasks.update') toast('Task updated', task?.title ?? '')
+    if (action === 'tasks.deactivate') toast('Task deactivated', task?.title ?? '')
+    if (action === 'tasks.start') toast('Task started', occurrenceTask?.title ?? '')
+    if (action === 'tasks.attachPhoto') toast('Photo uploaded')
+    if (action === 'tasks.complete') toast('Task completed', occurrenceTask?.title ?? '')
+  },
+  onSettled() {},
+})
+
+startExpenseHydration({
+  apply(slice) {
+    setData({ expenses: slice.expenses })
+  },
+  actorId: () => currentUser(state).id,
+  onError(message) {
+    toast('Could not save to the server', message, 'danger')
+  },
+  onSaved(action, _payload, data) {
+    const expense = data.expense as Expense | undefined
+    if (action === 'expenses.create') toast('Expense added', expense?.description ?? '')
+  },
+  onSettled() {},
+})
+
+startDispatchHydration({
+  apply(slice) {
+    setData({
+      vehicles: slice.vehicles,
+      dispatches: slice.dispatches,
+      inspectionGroups: slice.inspectionGroups,
+      ...(slice.documentAuditLogs ? { documentAuditLogs: slice.documentAuditLogs } : {}),
+      ...(slice.inventory ? { inventory: slice.inventory } : {}),
+      ...(slice.stockMovements ? { stockMovements: slice.stockMovements } : {}),
+    })
+  },
+  actorId: () => currentUser(state).id,
+  onError(message) {
+    toast('Could not save to the server', message, 'danger')
+  },
+  onSaved(action, _payload, data) {
+    const vehicle = data.vehicle as Vehicle | undefined
+    const dispatch = data.dispatch as DispatchRecord | undefined
+    const group = data.group as InspectionGroup | undefined
+    if (action === 'vehicles.create') toast('Vehicle saved', vehicle?.code ?? '')
+    if (action === 'vehicles.update') toast('Vehicle updated', vehicle?.code ?? '')
+    if (action === 'vehicles.setActive') {
+      toast(vehicle?.active === false ? 'Vehicle deactivated' : 'Vehicle activated', vehicle?.code ?? '')
+    }
+    if (action === 'dispatch.confirm') {
+      toast('Dispatch confirmed', dispatch ? `${dispatch.vehicleCode} · ${dispatch.dispatchDate}` : '')
+    }
+    if (action === 'dispatch.void') toast('Dispatch voided', dispatch?.vehicleCode ?? '')
+    if (action === 'dispatch.createInspectionGroup') toast('Inspection group confirmed', group?.groupNo ?? '')
+    if (action === 'dispatch.release') toast('Inspection group released', group?.groupNo ?? '')
+  },
+  onSettled() {},
+})
+
+startSalesImportHydration({
+  apply(slice) {
+    setData({
+      salesImportAccounts: slice.salesImportAccounts,
+      salesImportBatches: slice.salesImportBatches,
+      salesImportFiles: slice.salesImportFiles,
+      salesImportOrders: slice.salesImportOrders,
+      salesImportLines: slice.salesImportLines,
+      salesImportMappings: slice.salesImportMappings,
+      salesImportShipments: slice.salesImportShipments,
+      ...(slice.sales ? { sales: slice.sales } : {}),
+      ...(slice.documentAuditLogs ? { documentAuditLogs: slice.documentAuditLogs } : {}),
+      ...(slice.inventory ? { inventory: slice.inventory } : {}),
+      ...(slice.stockMovements ? { stockMovements: slice.stockMovements } : {}),
+    })
+  },
+  actorId: () => currentUser(state).id,
+  onError(message) {
+    toast('Could not save to the server', message, 'danger')
+  },
+  onSaved(action, _payload, data) {
+    const batch = data.batch as ImportBatch | undefined
+    const account = data.account as SalesImportAccount | undefined
+    const file = data.file as ImportFile | undefined
+    if (action === 'salesImport.createAccount') toast('Import account saved', account?.name ?? '')
+    if (action === 'salesImport.createBatch') toast('Import batch created', batch ? `${batch.platform}` : '')
+    if (action === 'salesImport.ingestPicking') {
+      const error = file?.parseError
+      toast(error ? 'Parse error' : 'Picking list processed', error ?? file?.fileName ?? '', error ? 'danger' : 'success')
+    }
+    if (action === 'salesImport.ingestAwb') {
+      toast(file?.parseError ? 'Parse error' : 'AWB processed', file?.parseError ?? file?.fileName ?? '', file?.parseError ? 'danger' : 'success')
+    }
+    if (action === 'salesImport.acknowledge') toast('Account acknowledged', batch ? `${batch.platform}` : '')
+    if (action === 'salesImport.saveMapping') toast('Mapping saved')
+    if (action === 'salesImport.updateMapping') toast('Mapping updated.')
+    if (action === 'salesImport.setMappingActive') {
+      const mapping = data.mapping as SalesImportMapping | undefined
+      toast(mapping?.active === false ? 'Mapping deactivated.' : 'Mapping activated.')
+    }
+    if (action === 'salesImport.confirm') {
+      const posted = Number(data.posted || 0)
+      if (posted) toast('Sales import confirmed', `${posted} sale${posted === 1 ? '' : 's'} posted`)
+    }
+  },
+  onSettled() {},
+})
+
+startSalesReturnHydration({
+  apply(slice) {
+    setData({
+      salesReturns: hydrateSalesReturns(slice.salesReturns),
+      returnSources: slice.returnSources,
+      returnReasons: slice.returnReasons,
+      ...(slice.sales ? { sales: slice.sales } : {}),
+      ...(slice.documentAuditLogs ? { documentAuditLogs: slice.documentAuditLogs } : {}),
+      ...(slice.inventory ? { inventory: slice.inventory } : {}),
+      ...(slice.stockMovements ? { stockMovements: slice.stockMovements } : {}),
+      ...(slice.productionBalances ? { productionBalances: slice.productionBalances } : {}),
+    })
+  },
+  actorId: () => currentUser(state).id,
+  onError(message) {
+    toast('Could not save to the server', message, 'danger')
+  },
+  onSaved(action, _payload, data) {
+    if (action === 'salesReturns.save') toast('Return saved', String((data.salesReturn as SalesReturn | undefined)?.returnNo ?? ''))
+    if (action === 'salesReturns.update') toast('Return updated', String((data.salesReturn as SalesReturn | undefined)?.returnNo ?? ''))
+    if (action === 'salesReturns.confirm') toast('Return confirmed', String((data.salesReturn as SalesReturn | undefined)?.returnNo ?? ''))
+    if (action === 'salesReturns.cancel') toast('Return cancelled', String((data.salesReturn as SalesReturn | undefined)?.returnNo ?? ''))
+    if (action === 'returnSources.upsert') toast('Return Source saved', String((data.returnSource as { name?: string } | undefined)?.name ?? ''))
+    if (action === 'returnSources.setActive') {
+      const source = data.returnSource as { name?: string; active?: boolean } | undefined
+      toast(source?.active ? 'Return Source activated' : 'Return Source deactivated', source?.name ?? '')
+    }
+    if (action === 'returnReasons.upsert') toast('Return Reason saved', String((data.returnReason as { name?: string } | undefined)?.name ?? ''))
+    if (action === 'returnReasons.setActive') {
+      const reason = data.returnReason as { name?: string; active?: boolean } | undefined
+      toast(reason?.active ? 'Return Reason activated' : 'Return Reason deactivated', reason?.name ?? '')
+    }
+  },
+  onSettled() {
+    salesReturnInFlight = false
+  },
+})
+
+startSalesHydration({
+  apply(slice) {
+    setData({
+      sales: slice.sales,
+      quotations: slice.quotations,
+      deliveryOrders: slice.deliveryOrders,
+      documentAuditLogs: slice.documentAuditLogs,
+      payments: slice.payments,
+      ...(slice.inventory ? { inventory: slice.inventory } : {}),
+      ...(slice.stockMovements ? { stockMovements: slice.stockMovements } : {}),
+    })
+  },
+  actorId: () => currentUser(state).id,
+  onError(message) {
+    toast('Could not save to the server', message, 'danger')
+  },
+  onSaved(action, _payload, data) {
+    if (action === 'sales.create' || action === 'sales.createWholesale') {
+      const doc = data.sale as Sale | undefined
+      toast('Sale completed', doc ? `${doc.invoiceNo} · ${doc.status === 'paid' ? 'Paid' : 'Recorded'}` : '')
+    }
+    if (action === 'sales.void') {
+      toast('Sale voided', String((data.sale as Sale | undefined)?.invoiceNo ?? ''), 'warning')
+    }
+    if (action === 'sales.recordPayment') {
+      const payment = data.payment as Payment | undefined
+      const doc = data.sale as Sale | undefined
+      toast('Payment recorded', payment && doc ? `${payment.paymentNo} · ${doc.invoiceNo}` : '')
+    }
+    if (action === 'quotations.create') toast('Quotation created', String((data.quotation as Quotation | undefined)?.quotationNo ?? ''))
+    if (action === 'quotations.update') toast('Quotation updated', String((data.quotation as Quotation | undefined)?.quotationNo ?? ''))
+    if (action === 'quotations.setStatus') {
+      const quotation = data.quotation as Quotation | undefined
+      toast('Quotation updated', quotation ? `${quotation.quotationNo} · ${quotation.status}` : '')
+    }
+    if (action === 'quotations.convert') toast('Converted to invoice', String((data.sale as Sale | undefined)?.invoiceNo ?? ''))
+    if (action === 'deliveries.create') toast('Delivery order created', String((data.deliveryOrder as DeliveryOrder | undefined)?.doNo ?? ''))
+    if (action === 'deliveries.update') toast('Delivery order updated', String((data.deliveryOrder as DeliveryOrder | undefined)?.doNo ?? ''))
+    if (action === 'deliveries.setStatus') {
+      const order = data.deliveryOrder as DeliveryOrder | undefined
+      toast('Delivery order updated', order ? `${order.doNo} · ${order.status}` : '')
+    }
+  },
+  onSettled() {
+    salesPostInFlight = false
+  },
+})
+
+startPurchaseHydration({
+  apply(slice) {
+    setData({
+      purchases: slice.purchases,
+      purchaseReturns: slice.purchaseReturns,
+      payments: slice.payments,
+      ...(slice.inventory ? { inventory: slice.inventory } : {}),
+      ...(slice.stockMovements ? { stockMovements: slice.stockMovements } : {}),
+    })
+  },
+  actorId: () => currentUser(state).id,
+  onError(message) {
+    toast('Could not save to the server', message, 'danger')
+  },
+  onSaved(action, _payload, data) {
+    if (action === 'purchases.create') {
+      const doc = data.purchase as Purchase | undefined
+      toast(
+        doc?.receivingId ? 'Purchase saved — stock already received' : _payload.receive ? 'Purchase received' : 'Draft saved',
+        doc?.purchaseNo ?? '',
+      )
+    }
+    if (action === 'purchases.receive') {
+      const doc = data.purchase as Purchase | undefined
+      toast(doc?.receivingId ? 'Purchase marked received — stock already in' : 'Purchase received', doc?.purchaseNo ?? '')
+    }
+    if (action === 'purchases.recordPayment') {
+      toast('Supplier payment recorded', String((data.payment as Payment | undefined)?.paymentNo ?? ''))
+    }
+    if (action === 'purchaseReturns.create') {
+      toast('Purchase return processed', String((data.purchaseReturn as PurchaseReturn | undefined)?.returnNo ?? ''))
+    }
+  },
+  onSettled() {
+    purchasePostInFlight = false
+  },
+})
+
+startManufacturingHydration({
+  apply(slice) {
+    setData({
+      packingAssemblies: slice.packingAssemblies,
+      productionOrders: slice.productionOrders,
+      batches: slice.batches,
+      ...(slice.inventory ? { inventory: slice.inventory } : {}),
+      ...(slice.stockMovements ? { stockMovements: slice.stockMovements } : {}),
+      ...(slice.productionSessions ? { productionSessions: slice.productionSessions } : {}),
+      ...(slice.displayStocks ? { displayStocks: slice.displayStocks } : {}),
+      ...(slice.productionBalances ? { productionBalances: slice.productionBalances } : {}),
+    })
+  },
+  actorId: () => currentUser(state).id,
+  onError(message) {
+    toast('Could not save to the server', message, 'danger')
+  },
+  onSaved(action, _payload, data) {
+    if (action === 'packing.create') toast('Packing saved', String((data.packing as PackingAssembly | undefined)?.packingNo ?? ''))
+    if (action === 'packing.update' || action === 'packing.refresh') {
+      toast('Packing updated', String((data.packing as PackingAssembly | undefined)?.packingNo ?? ''))
+    }
+    if (action === 'packing.cancel') toast('Packing cancelled', String((data.packing as PackingAssembly | undefined)?.packingNo ?? ''), 'warning')
+    if (action === 'packing.confirm') {
+      const packing = data.packing as PackingAssembly | undefined
+      toast('Packing confirmed', packing ? `${packing.packingNo} · ${formatQty(packing.actualQty)} ${packing.unit}` : '')
+    }
+    if (action === 'productionOrders.create') toast('Production order created', String((data.productionOrder as ProductionOrder | undefined)?.orderNo ?? ''))
+    if (action === 'productionOrders.update') toast('Production order updated')
+    if (action === 'productionOrders.start') toast('Production started', String((data.productionOrder as ProductionOrder | undefined)?.orderNo ?? ''))
+    if (action === 'productionOrders.pause') toast('Production paused', String((data.productionOrder as ProductionOrder | undefined)?.orderNo ?? ''), 'info')
+    if (action === 'productionOrders.resume') toast('Production resumed', String((data.productionOrder as ProductionOrder | undefined)?.orderNo ?? ''))
+    if (action === 'productionOrders.cancel') toast('Production cancelled', String((data.productionOrder as ProductionOrder | undefined)?.orderNo ?? ''), 'warning')
+    if (action === 'productionOrders.complete') {
+      const order = data.productionOrder as ProductionOrder | undefined
+      toast('Production completed', order ? `${order.orderNo} · ${order.batchNo}` : '')
+    }
+  },
+  onSettled() {
+    manufacturingPostInFlight = false
+    packingConfirmInFlight = false
+  },
+})
+
+startBomHydration({
+  apply(slice) {
+    markBomCostsReady()
+    const costs = new Map(slice.productCosts.map((row) => [row.id, row]))
+    setData({
+      boms: hydrateBoms(slice.boms),
+      products: state.products.map((product) => {
+        const cost = costs.get(product.id)
+        if (!cost) return product
+        const costSource = cost.costSource === 'bom' ? 'bom' as const : 'manual' as const
+        if (product.costPrice === cost.costPrice && product.costSource === costSource) return product
+        return { ...product, costPrice: cost.costPrice, costSource }
+      }),
+    })
+  },
+  actorId: () => currentUser(state).id,
+  onError(message) {
+    toast('Could not save to the server', message, 'danger')
+  },
+  onSaved(action, payload) {
+    if (action === 'boms.create') toast('BOM created', String(payload.name || ''))
+    if (action === 'boms.update') toast('BOM updated')
+    if (action === 'boms.setStatus') toast(payload.status === 'inactive' ? 'BOM deactivated' : 'BOM activated')
+  },
+  onSettled() {
+    bomPostInFlight = false
   },
 })
 

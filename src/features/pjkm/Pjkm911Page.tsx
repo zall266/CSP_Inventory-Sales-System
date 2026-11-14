@@ -3,8 +3,10 @@ import { useNavigate, useSearchParams } from 'react-router-dom'
 import { Button } from '@/components/ui'
 import { PermissionDenied } from '@/features/documents/A4Sheet'
 import { PJKM_911, PJKM_911_DETAILS, buildPjkm911, pjkm911DetailValue, pjkm911Widths, type Pjkm911Page as Page } from '@/features/pjkm/pjkm911'
+import { currentUser } from '@/features/manufacturing/sessionPlan'
 import { hasPermission } from '@/features/settings/permissions'
 import { useStore } from '@/store/hooks'
+import { useReportingQuery } from '@/store/reportingSync'
 import { PROTOTYPE_TODAY, systemDateKey } from '@/utils/format'
 import './pjkm911.css'
 
@@ -13,10 +15,11 @@ export function Pjkm911PreviewPage() {
   const navigate = useNavigate()
   const [params] = useSearchParams()
   const month = params.get('month') || systemDateKey(PROTOTYPE_TODAY).slice(0, 7)
-  const report = useMemo(
+  const local = useMemo(
     () => buildPjkm911({ month, dispatches: state.dispatches ?? [], groups: state.inspectionGroups ?? [] }),
     [month, state.dispatches, state.inspectionGroups],
   )
+  const report = useReportingQuery<typeof local>('pjkm.911', { actorUserId: currentUser(state).id, month }) ?? local
   if (!hasPermission(state, 'receiving.view')) return <PermissionDenied title="PJKM Records" subtitle="You do not have permission to view receiving." />
   const filename = `MGT-09_REKOD-9.1.1_PEMERIKSAAN-KENDERAAN_${month}.pdf`
   return (

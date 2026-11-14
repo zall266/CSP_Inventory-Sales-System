@@ -1,5 +1,14 @@
 import { clsx, type ClassValue } from 'clsx'
 import { twMerge } from 'tailwind-merge'
+import { malaysiaDateKey } from './calendarDate'
+
+export {
+  calendarDatesEqual,
+  canonicalCalendarDate,
+  formatCalendarDate,
+  liveSystemDateKey,
+  malaysiaDateKey,
+} from './calendarDate'
 
 export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs))
@@ -8,7 +17,7 @@ export function cn(...inputs: ClassValue[]) {
 export const PROTOTYPE_TODAY = new Date('2026-09-10T12:00:00+08:00')
 
 export function systemDateKey(date: Date = PROTOTYPE_TODAY) {
-  return new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Kuala_Lumpur' }).format(date)
+  return malaysiaDateKey(date)
 }
 
 export function round2(n: number) {

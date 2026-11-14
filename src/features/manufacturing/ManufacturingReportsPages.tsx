@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react'
 import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 import { Button, Card, FilterRow, KpiCard, PageHeader, Select, Tabs } from '@/components/ui'
 import { filteredProductionOrders, useLookups, useStore } from '@/store/hooks'
+import { reportingRangePayload, useReportingQuery } from '@/store/reportingSync'
 import { downloadCsv, formatDate, formatMoney, formatQty, printPage } from '@/utils/format'
 import { orderWastageQty, wastageKindLabel } from './helpers'
 
@@ -50,6 +51,10 @@ function ProductionReport({ tab, onTab }: { tab: string; onTab: (id: string) => 
   const { productName, warehouseName } = useLookups()
   const [status, setStatus] = useState('all')
   const orders = filteredProductionOrders(state).filter((o) => status === 'all' || o.status === status)
+  const overlay = useReportingQuery<{ orderCount: number; plannedQty: number; actualQty: number }>(
+    'reports.manufacturing',
+    reportingRangePayload(state),
+  )
   const chart = useMemo(
     () => orders.map((o) => ({ name: o.orderNo, planned: o.plannedQty, actual: o.actualQty })),
     [orders],
@@ -72,9 +77,9 @@ function ProductionReport({ tab, onTab }: { tab: string; onTab: (id: string) => 
         <div /><div /><div />
       </FilterRow>
       <div className="mb-5 grid gap-4 sm:grid-cols-3">
-        <KpiCard label="Orders" value={String(orders.length)} />
-        <KpiCard label="Planned qty" value={formatQty(orders.reduce((s, o) => s + o.plannedQty, 0))} />
-        <KpiCard label="Actual qty" value={formatQty(orders.reduce((s, o) => s + o.actualQty, 0))} />
+        <KpiCard label="Orders" value={String(status === 'all' ? overlay?.orderCount ?? orders.length : orders.length)} />
+        <KpiCard label="Planned qty" value={formatQty(status === 'all' ? overlay?.plannedQty ?? orders.reduce((s, o) => s + o.plannedQty, 0) : orders.reduce((s, o) => s + o.plannedQty, 0))} />
+        <KpiCard label="Actual qty" value={formatQty(status === 'all' ? overlay?.actualQty ?? orders.reduce((s, o) => s + o.actualQty, 0) : orders.reduce((s, o) => s + o.actualQty, 0))} />
       </div>
       <Card className="mb-4 p-5">
         <div className="h-56">

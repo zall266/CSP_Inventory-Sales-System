@@ -10,6 +10,23 @@ on:
   push:
     branches:
       - cursor/module-1-identity-settings-d9ac
+      - cursor/module-2-warehouses-categories-d9ac
+      - cursor/module-3-products-d9ac
+      - cursor/module-4-parties-agents-d9ac
+      - cursor/module-5-inventory-ledger-d9ac
+      - cursor/module-6-warehouse-map-d9ac
+      - cursor/module-7-bom-recipes-d9ac
+      - cursor/module-8-opening-balance-d9ac
+      - cursor/module-9-purchases-returns-d9ac
+      - cursor/module-10-receiving-to-order-d9ac
+      - cursor/module-12-daily-sessions-d9ac
+      - cursor/step12-session-date-fix-d9ac
+      - cursor/module-13-sales-documents-d9ac
+      - cursor/module-14-sales-returns-d9ac
+      - cursor/module-15-sales-import-d9ac
+      - cursor/module-16-dispatch-d9ac
+      - cursor/module-17-halal-tasks-expenses-d9ac
+      - cursor/module-18-reads-d9ac
 
 permissions:
   contents: read

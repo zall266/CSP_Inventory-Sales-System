@@ -3,6 +3,7 @@ import { Button, ConfirmDialog, Field, Input, Modal, Select, Textarea } from '@/
 import { hasPermission } from '@/features/settings/permissions'
 import { useApi, useLookups } from '@/store/hooks'
 import type { AppState, ProductionSession } from '@/types'
+import { canonicalCalendarDate } from '@/utils/format'
 import { remainingTargetQty } from './sessionPlan'
 
 export const PACK_PRODUCTS = ['p-pack-mt', 'p-pack-cl', 'p-pack-st', 'p-pack-mlt', 'p-pack-ch']
@@ -73,14 +74,14 @@ export function EditPlannedModal({
   onClose: () => void
 }) {
   const api = useApi()
-  const [date, setDate] = useState(session.productionDate)
+  const [date, setDate] = useState(() => canonicalCalendarDate(session.productionDate) ?? session.productionDate)
   const [notes, setNotes] = useState(session.notes)
   const [lines, setLines] = useState<PlanLineDraft[]>(sessionLines(session))
   const [saving, setSaving] = useState(false)
 
   useEffect(() => {
     if (!open) return
-    setDate(session.productionDate)
+    setDate(canonicalCalendarDate(session.productionDate) ?? session.productionDate)
     setNotes(session.notes)
     setLines(sessionLines(session))
     setSaving(false)

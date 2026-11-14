@@ -10,6 +10,7 @@ import {
   RECEIVING_CONDITIONS,
   emptyReceivingLine,
   isAllowedReceivingPhotoFile,
+  isCompatibleReceivingPurchase,
   receivableRawMaterials,
   receivingQtyHint,
   receivingSourceLabel,
@@ -377,6 +378,10 @@ export function ReceivingDetailPage() {
   const canView = hasPermission(state, 'receiving.view')
   const canLink = hasPermission(state, 'receiving.link_purchase')
   const draftPurchases = state.purchases.filter((purchase) => purchase.status === 'draft' && !purchase.receivingId)
+  const compatibleDrafts = row
+    ? draftPurchases.filter((purchase) => isCompatibleReceivingPurchase(row, purchase))
+    : []
+  const incompatibleDraftCount = row ? draftPurchases.length - compatibleDrafts.length : 0
 
   if (!canView) return <PermissionDenied title="Receiving" />
   if (!row) {
@@ -483,24 +488,33 @@ export function ReceivingDetailPage() {
               </Link>
             </div>
           ) : (
-            <div className="mt-4 flex flex-wrap gap-2">
-              <Select className="min-w-56" value={purchaseId} onChange={(event) => setPurchaseId(event.target.value)}>
-                <option value="">Select a draft purchase</option>
-                {draftPurchases.map((purchase) => (
-                  <option key={purchase.id} value={purchase.id}>
-                    {purchase.purchaseNo}
-                  </option>
-                ))}
-              </Select>
-              <Button
-                variant="secondary"
-                disabled={!purchaseId}
-                onClick={() => api.linkReceivingToPurchase(row.id, purchaseId)}
-              >
-                Link selected purchase
-              </Button>
-              <Button onClick={() => navigate(`/purchases/new?receivingId=${row.id}`)}>Create purchase from this receiving</Button>
-            </div>
+            <>
+              <div className="mt-4 flex flex-wrap gap-2">
+                <Select className="min-w-56" value={purchaseId} onChange={(event) => setPurchaseId(event.target.value)}>
+                  <option value="">Select a draft purchase</option>
+                  {compatibleDrafts.map((purchase) => (
+                    <option key={purchase.id} value={purchase.id}>
+                      {purchase.purchaseNo}
+                      {` · ${supplierName(purchase.supplierId)}`}
+                      {` · ${purchase.items.map((line) => `${productName(line.productId)} × ${formatQty(line.qty)}`).join(', ')}`}
+                    </option>
+                  ))}
+                </Select>
+                <Button
+                  variant="secondary"
+                  disabled={!purchaseId}
+                  onClick={() => api.linkReceivingToPurchase(row.id, purchaseId)}
+                >
+                  Link selected purchase
+                </Button>
+                <Button onClick={() => navigate(`/purchases/new?receivingId=${row.id}`)}>Create purchase from this receiving</Button>
+              </div>
+              {incompatibleDraftCount > 0 ? (
+                <p className="mt-2 text-xs text-slate-500">
+                  {incompatibleDraftCount} draft purchase{incompatibleDraftCount === 1 ? '' : 's'} hidden — product or warehouse does not match this receiving.
+                </p>
+              ) : null}
+            </>
           )}
         </Card>
       ) : null}
