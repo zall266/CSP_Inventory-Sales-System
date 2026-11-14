@@ -19,7 +19,8 @@ function defaultBackend() {
     receivings: createReceivingService({ sheetRepository: sheets, driveStorage: drive }),
     manufacturing: createManufacturingService({ sheetRepository: sheets, driveStorage: drive }),
     sales: createSalesService({ sheetRepository: sheets }),
-    salesReturns: createSalesReturnService({ sheetRepository: sheets })
+    salesReturns: createSalesReturnService({ sheetRepository: sheets }),
+    salesImport: createSalesImportService({ sheetRepository: sheets })
   };
 }
 

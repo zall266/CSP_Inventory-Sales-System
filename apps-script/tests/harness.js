@@ -35,6 +35,10 @@ const files = [
   'repositories/manufacturingRepository.js',
   'repositories/salesRepository.js',
   'repositories/salesReturnRepository.js',
+  'repositories/salesImportRepository.js',
+  'utils/parsePickingList.js',
+  'utils/parseAwb.js',
+  'utils/salesImportMath.js',
   'services/auditService.js',
   'services/idempotencyService.js',
   'services/counterService.js',
@@ -53,6 +57,7 @@ const files = [
   'services/manufacturingService.js',
   'services/salesService.js',
   'services/salesReturnService.js',
+  'services/salesImportService.js',
   'app/router.js',
   'app/main.js',
 ]
@@ -71,8 +76,17 @@ export function loadBackend(globals = {}) {
     crypto,
     Buffer,
     Uint8Array,
+    Map,
+    Set,
+    Infinity,
+    Boolean,
+    RegExp,
+    Error,
+    parseInt,
+    isNaN,
     ...globals,
   }
+  context.globalThis = context
   vm.createContext(context)
   for (const file of files) {
     vm.runInContext(fs.readFileSync(path.join(root, file), 'utf8'), context, { filename: file })

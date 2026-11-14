@@ -1,6 +1,6 @@
 # CSP Backend Execution Report
 
-Steps 9, 10, and 11 are **PASS / LOCKED** by owner authorization dated 9 Nov 2026. Step 12 Daily Sessions is **OWNER UAT REQUIRED**. Do not mark Step 12 PASS or LOCKED. Step 13 Sales documents is **IN PROGRESS** (backend merged; owner UAT not started). Step 14 Sales returns is **IN PROGRESS** (backend implemented; owner UAT not started). Steps 15–18 remain NOT STARTED.
+Steps 9, 10, and 11 are **PASS / LOCKED** by owner authorization dated 9 Nov 2026. Step 12 Daily Sessions is **OWNER UAT REQUIRED**. Do not mark Step 12 PASS or LOCKED. Step 13 Sales documents is **IN PROGRESS** (backend merged; owner UAT not started). Step 14 Sales returns is **IN PROGRESS** (backend merged; owner UAT not started). Step 15 Sales import is **IN PROGRESS** (backend implemented; owner UAT not started). Steps 16–18 remain NOT STARTED.
 
 Statuses used here: PASS / PASS / LOCKED / OWNER UAT REQUIRED / BLOCKED / IN PROGRESS. Untouched later modules stay NOT STARTED.
 
@@ -63,6 +63,23 @@ This block is implementation evidence, not owner UAT. No confirmed sales return 
 Locked Apps Script: `1mkRzptY0mzHnzOFB8TA6AGIZyv6q2gJq-QdKPBWtV91oq5okHWVpY4Jj`.
 DEV spreadsheet: `1TPmkASdzlGssGyAisklf4QkLcxWYbHHhUSxntgLha94`.
 `/exec`: `AKfycbyMDLwOJ2iqD_nuLFcVMQYrS81WDkkaBhutTGBCrbUClM1Aap1MJiO6CnzzcYuTAoMbDw`.
+
+## Step 15 — Sales import — IN PROGRESS
+
+Backend matches the existing account → batch → picking PDF → optional AWB → map → confirm frontend. Locked Steps 9–11 were not redesigned. Step 12 business rules were not changed. `PROD-20261109-001` was not touched. Confirm posts through the existing `sales.create` path onto `wh-main`. PDF bytes stay in the browser; the backend re-parses submitted text items.
+
+| Item | Status |
+| --- | --- |
+| Account / batch | `salesImport.createAccount` / `createBatch`. Platforms `shopee` and `tiktok` only. |
+| Ingest | `ingestPicking` / `ingestAwb` re-parse text items. Same `fileHash` in a batch is rejected. |
+| Mapping | SKU or normalized text, active flag. Exact SKU auto-maps. |
+| Confirm | Same sale post as Step 13. Component SKUs OUT. Duplicate `{PLATFORM}:{account}:{externalOrderId}` does not double-post. |
+| Gates | Missing AWB does not block. Spot-check keys are stored and are not a confirm gate. |
+| Idempotency | Confirm requires a key. Same key replays. A later key on a fully confirmed batch posts 0 extra sales. |
+| Automated tests | **129 pass, 0 fail** on this branch (`npm run test:backend`), including 7 new sales-import tests. TypeScript and production build succeeded. |
+| Owner UAT | **Not started.** Automated tests are not owner UAT. Do not fabricate UAT. |
+
+Integration branch target: `cursor/dev-frontend-github-pages-d9ac`. Step 12 business rules were not changed. Steps 9–11 remain PASS / LOCKED.
 
 ## Deployed runtime (verified this closeout)
 
