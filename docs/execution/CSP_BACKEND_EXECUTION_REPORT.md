@@ -1,6 +1,6 @@
 # CSP Backend Execution Report
 
-Steps 9, 10, and 11 are **PASS / LOCKED** by owner authorization dated 9 Nov 2026. Step 12 Daily Sessions is **OWNER UAT REQUIRED**. Do not mark Step 12 PASS or LOCKED. Step 13 Sales documents is **IN PROGRESS** (backend merged; owner UAT not started). Step 14 Sales returns is **IN PROGRESS** (backend merged; owner UAT not started). Step 15 Sales import is **IN PROGRESS** (backend merged and live-verified; owner UAT not started). Step 16 Dispatch is **IN PROGRESS** (backend merged and live-verified; owner UAT not started). Step 17 Halal, tasks, expenses is **IN PROGRESS** (backend merged and live-verified; owner UAT not started). Step 18 Reads is **IN PROGRESS**.
+Steps 9, 10, and 11 are **PASS / LOCKED** by owner authorization dated 9 Nov 2026. Step 12 Daily Sessions is **OWNER UAT REQUIRED**. Do not mark Step 12 PASS or LOCKED. Step 13 Sales documents is **IN PROGRESS** (backend merged; owner UAT not started). Step 14 Sales returns is **IN PROGRESS** (backend merged; owner UAT not started). Step 15 Sales import is **IN PROGRESS** (backend merged and live-verified; owner UAT not started). Step 16 Dispatch is **IN PROGRESS** (backend merged and live-verified; owner UAT not started). Step 17 Halal, tasks, expenses is **IN PROGRESS** (backend merged and live-verified; owner UAT not started). Step 18 Reads is **IN PROGRESS** (backend live-verified; owner UAT not started). Independent development through Step 18 is complete. Owner UAT for Steps 12–18 remains owner-only and is not fabricated.
 
 Statuses used here: PASS / PASS / LOCKED / OWNER UAT REQUIRED / BLOCKED / IN PROGRESS. Untouched later modules stay NOT STARTED.
 
@@ -178,9 +178,29 @@ Backend matches the existing dashboard, report, PJKM, and BMR page math. Locked 
 | PJKM | `pjkm.511` / `911` / `1011`. Month `YYYY-MM`. `receiving.view`. 9.1.1 unique AWB tracking count, not parcel sum. |
 | BMR | `bmr.list` / `bmr.get`. Completed and posted sessions only. `manufacturing.history.view`. Grams per pack = `bulkYieldGrams / outputQty`. |
 | Automated tests | **147 pass, 0 fail** on this branch (`npm run test:backend`), including 6 new reporting tests. TypeScript and production build succeeded. |
-| Owner UAT | **Not started.** Automated tests are not owner UAT. Do not fabricate UAT. |
+| Owner UAT | **Not started.** Automated tests and live API read-backs are not owner UAT. Do not fabricate UAT. |
 
-Integration branch target: `cursor/dev-frontend-github-pages-d9ac`. Step 12 business rules were not changed. Steps 9–11 remain PASS / LOCKED.
+### Live DEV verify — 14 Nov 2026, 2:56–3:00 PM MYT
+
+This block is implementation evidence, not owner UAT. No sale, purchase, dispatch, manufacturer, task, or expense was created. `PROD-20261109-001` was not touched. Step 12 business rules were not changed.
+
+| Check | Evidence |
+| --- | --- |
+| Apps Script version | **v28**, `versionDescription=git:b2f3ad32d98b8ae14b8e52c8a3565e3ba5c75908`. Deploy DEV run [43568319308](https://github.com/zall266/CSP_Inventory-Sales-System/actions/runs/43568319308). Same `/exec`. |
+| Health | `GET /exec` at 2:56 PM MYT: DEV, healthy, spreadsheet and Drive accessible, foundation ready. |
+| `dashboard.get` | `ok: true` with `today=2026-09-10` preset `30d`. Sales 0 / COGS 0. Purchases 8 totaling 86. Inventory value 477.22. Receivables 0, payables 99. Low stock 2, out of stock 218. |
+| Reports | `reports.sales` 0 invoices. `reports.purchases` 8 documents. `reports.inventory` 234 rows, value 477.22. `reports.profit` zeros. `reports.manufacturing` 0 orders. |
+| PJKM | `pjkm.511` for 2026-09: 1 receiving line, 1 attention. `pjkm.911` 0 daily summaries. `pjkm.1011` 0 rows. |
+| BMR | `bmr.list` 0 records. `bmr.get` missing session → `NOT_FOUND` "Print BMR is available only for a completed and posted production session." |
+| Cashier deny | `u-siti` `dashboard.get` → `FORBIDDEN` "You cannot view the dashboard." `reports.sales` → "You cannot view reports." `pjkm.511` → "You do not have permission to view receiving." `bmr.list` → "You do not have permission to view completed production." |
+| Warehouse | `u-kumar` dashboard and PJKM list ok (live warehouse matrix includes those view keys). |
+| Regression | Inventory 234 rows, 53 stock movements. Sales 0, 2 payments. Returns 0, 10 sources, 7 reasons. Import 3 accounts, 0 batches. Dispatch empty. Halal 0/0/0. Tasks 5 categories, 0 tasks. Expenses 0. |
+
+Locked Apps Script: `1mkRzptY0mzHnzOFB8TA6AGIZyv6q2gJq-QdKPBWtV91oq5okHWVpY4Jj`.
+DEV spreadsheet: `1TPmkASdzlGssGyAisklf4QkLcxWYbHHhUSxntgLha94`.
+`/exec`: `AKfycbyMDLwOJ2iqD_nuLFcVMQYrS81WDkkaBhutTGBCrbUClM1Aap1MJiO6CnzzcYuTAoMbDw`.
+
+Integration branch target: `cursor/dev-frontend-github-pages-d9ac`. Step 12 business rules were not changed. Steps 9–11 remain PASS / LOCKED. Independent development through Step 18 is complete. Owner UAT for Steps 12–18 is recorded separately and was not started.
 
 ## Deployed runtime (verified this closeout)
 
