@@ -27,7 +27,21 @@ import {
 } from '@/store/hooks'
 import { currentUser } from '@/features/manufacturing/sessionPlan'
 import { isCompanyWarehouseId } from '@/features/agent/agentModel'
+import { reportingRangePayload, useReportingQuery } from '@/store/reportingSync'
 import { formatDate, formatMoney, formatQty, greeting, round2, startOfDay } from '@/utils/format'
+
+type DashboardOverlay = {
+  totalSales: number
+  cogs: number
+  grossProfit: number
+  totalPurchases: number
+  inventoryValue: number
+  receivables: number
+  payables: number
+  lowStockCount: number
+  outOfStockCount: number
+  salesCount: number
+}
 
 export function DashboardPage() {
   const state = useStore()
@@ -38,13 +52,14 @@ export function DashboardPage() {
   const purchases = filteredPurchases(state)
   const warehouse = state.ui.warehouseFilter
 
-  const totalSales = round2(sales.reduce((sum, s) => sum + s.total, 0))
-  const cogs = round2(sales.reduce((sum, s) => sum + saleCogs(state, s), 0))
-  const grossProfit = round2(totalSales - cogs)
-  const totalPurchases = round2(purchases.reduce((sum, p) => sum + p.total, 0))
-  const invValue = inventoryValue(state, warehouse)
-  const receivables = outstandingReceivables(state)
-  const payables = outstandingPayables(state)
+  const overlay = useReportingQuery<DashboardOverlay>('dashboard.get', reportingRangePayload(state))
+  const totalSales = overlay?.totalSales ?? round2(sales.reduce((sum, s) => sum + s.total, 0))
+  const cogs = overlay?.cogs ?? round2(sales.reduce((sum, s) => sum + saleCogs(state, s), 0))
+  const grossProfit = overlay?.grossProfit ?? round2(totalSales - cogs)
+  const totalPurchases = overlay?.totalPurchases ?? round2(purchases.reduce((sum, p) => sum + p.total, 0))
+  const invValue = overlay?.inventoryValue ?? inventoryValue(state, warehouse)
+  const receivables = overlay?.receivables ?? outstandingReceivables(state)
+  const payables = overlay?.payables ?? outstandingPayables(state)
 
   const stockRows = state.inventory.filter((row) =>
     warehouse === 'all'
@@ -197,7 +212,7 @@ export function DashboardPage() {
       )}
 
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-        <KpiCard label="Total sales" value={formatMoney(totalSales, { compact: true })} hint={`${sales.length} invoices`} />
+        <KpiCard label="Total sales" value={formatMoney(totalSales, { compact: true })} hint={`${overlay?.salesCount ?? sales.length} invoices`} />
         <KpiCard label="Gross profit" value={formatMoney(grossProfit, { compact: true })} tone="success" hint="Sales minus COGS" />
         <KpiCard label="Inventory value" value={formatMoney(invValue, { compact: true })} hint={warehouse === 'all' ? 'All warehouses' : warehouseName(warehouse)} />
         <KpiCard label="Receivables" value={formatMoney(receivables, { compact: true })} tone={receivables > 0 ? 'warning' : 'default'} />
@@ -205,8 +220,8 @@ export function DashboardPage() {
       <div className="mt-4 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
         <KpiCard label="Total purchases" value={formatMoney(totalPurchases, { compact: true })} />
         <KpiCard label="Payables" value={formatMoney(payables, { compact: true })} />
-        <KpiCard label="Low stock" value={`${low.length} items`} tone="warning" />
-        <KpiCard label="Out of stock" value={`${out.length} items`} tone="danger" />
+        <KpiCard label="Low stock" value={`${overlay?.lowStockCount ?? low.length} items`} tone="warning" />
+        <KpiCard label="Out of stock" value={`${overlay?.outOfStockCount ?? out.length} items`} tone="danger" />
       </div>
 
       <div className="mt-6 grid gap-4 xl:grid-cols-3">

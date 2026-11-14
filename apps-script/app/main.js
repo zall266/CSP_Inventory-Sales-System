@@ -22,7 +22,8 @@ function defaultBackend() {
     salesReturns: createSalesReturnService({ sheetRepository: sheets }),
     salesImport: createSalesImportService({ sheetRepository: sheets }),
     dispatch: createDispatchService({ sheetRepository: sheets }),
-    ops: createOpsService({ sheetRepository: sheets, driveStorage: drive })
+    ops: createOpsService({ sheetRepository: sheets, driveStorage: drive }),
+    reporting: createReportingService({ sheetRepository: sheets })
   };
 }
 
