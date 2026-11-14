@@ -178,6 +178,7 @@ Backend matches the existing dashboard, report, PJKM, and BMR page math. Locked 
 | PJKM | `pjkm.511` / `911` / `1011`. Month `YYYY-MM`. `receiving.view`. 9.1.1 unique AWB tracking count, not parcel sum. |
 | BMR | `bmr.list` / `bmr.get`. Completed and posted sessions only. `manufacturing.history.view`. Grams per pack = `bulkYieldGrams / outputQty`. |
 | Automated tests | **147 pass, 0 fail** on this branch (`npm run test:backend`), including 6 new reporting tests. TypeScript and production build succeeded. |
+| Merge | PR #111 merged to `cursor/dev-frontend-github-pages-d9ac` as `66cfe02` (14 Nov 2026, 3:01 PM MYT). |
 | Owner UAT | **Not started.** Automated tests and live API read-backs are not owner UAT. Do not fabricate UAT. |
 
 ### Live DEV verify — 14 Nov 2026, 2:56–3:00 PM MYT
@@ -195,6 +196,7 @@ This block is implementation evidence, not owner UAT. No sale, purchase, dispatc
 | Cashier deny | `u-siti` `dashboard.get` → `FORBIDDEN` "You cannot view the dashboard." `reports.sales` → "You cannot view reports." `pjkm.511` → "You do not have permission to view receiving." `bmr.list` → "You do not have permission to view completed production." |
 | Warehouse | `u-kumar` dashboard and PJKM list ok (live warehouse matrix includes those view keys). |
 | Regression | Inventory 234 rows, 53 stock movements. Sales 0, 2 payments. Returns 0, 10 sources, 7 reasons. Import 3 accounts, 0 batches. Dispatch empty. Halal 0/0/0. Tasks 5 categories, 0 tasks. Expenses 0. |
+| Public frontend | Pages deploy [43569087423](https://github.com/zall266/CSP_Inventory-Sales-System/actions/runs/43569087423) for merge `66cfe02`. Live `index.html` (Last-Modified 14 Nov 2026, 3:02 PM MYT) loads `assets/index-BIZo9uFM.js`, which contains `dashboard.get`, `reports.sales`, `reports.purchases`, `reports.inventory`, `reports.profit`, `reports.manufacturing`, `pjkm.511`, `pjkm.911`, `pjkm.1011`, `bmr.list`, and `bmr.get`. |
 
 Locked Apps Script: `1mkRzptY0mzHnzOFB8TA6AGIZyv6q2gJq-QdKPBWtV91oq5okHWVpY4Jj`.
 DEV spreadsheet: `1TPmkASdzlGssGyAisklf4QkLcxWYbHHhUSxntgLha94`.
