@@ -102,6 +102,22 @@ function snapshotDispatchLines(lines, shipments) {
   });
 }
 
+function dispatchAwbTotals(lines) {
+  var seen = {};
+  var counts = {};
+  var parcelQty = 0;
+  var totalAwb = 0;
+  (lines || []).forEach(function (line) {
+    parcelQty += Number(line.parcelQty) || 0;
+    var tracking = String(line.trackingNumber || '').trim();
+    if (!tracking || seen[tracking]) return;
+    seen[tracking] = true;
+    totalAwb += 1;
+    counts[line.courierKey] = (counts[line.courierKey] || 0) + 1;
+  });
+  return { counts: counts, totalAwb: totalAwb, parcelQty: parcelQty };
+}
+
 function dispatchCourierKeys(dispatch) {
   var present = {};
   ((dispatch && dispatch.lines) || []).forEach(function (line) {

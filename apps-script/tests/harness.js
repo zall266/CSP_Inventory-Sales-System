@@ -44,6 +44,9 @@ const files = [
   'utils/dispatchMath.js',
   'utils/halalMath.js',
   'utils/taskMath.js',
+  'utils/reportMath.js',
+  'utils/pjkmMath.js',
+  'utils/bmrMath.js',
   'services/auditService.js',
   'services/idempotencyService.js',
   'services/counterService.js',
@@ -65,6 +68,7 @@ const files = [
   'services/salesImportService.js',
   'services/dispatchService.js',
   'services/opsService.js',
+  'services/reportingService.js',
   'app/router.js',
   'app/main.js',
 ]
@@ -90,7 +94,9 @@ export function loadBackend(globals = {}) {
     RegExp,
     Error,
     parseInt,
+    parseFloat,
     isNaN,
+    isFinite,
     ...globals,
   }
   context.globalThis = context

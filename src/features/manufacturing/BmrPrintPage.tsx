@@ -1,6 +1,9 @@
 import { useParams } from 'react-router-dom'
 import { Button } from '@/components/ui'
+import { currentUser } from '@/features/manufacturing/sessionPlan'
 import { useStore } from '@/store/hooks'
+import { useReportingQuery } from '@/store/reportingSync'
+import { systemDateKey } from '@/utils/format'
 import {
   BMR_COMPANY,
   BMR_DOCUMENT,
@@ -20,7 +23,7 @@ export function BmrPrintPage() {
   const { sessionId } = useParams()
   const state = useStore()
   const session = state.productionSessions.find((item) => item.id === sessionId)
-  const record = buildBmr(session, {
+  const local = buildBmr(session, {
     products: state.products,
     boms: state.boms,
     categories: state.categories,
@@ -28,6 +31,12 @@ export function BmrPrintPage() {
     halalCertificates: state.halalCertificates,
     halalCompliances: state.halalCompliances,
   })
+  const overlay = useReportingQuery<{ bmr: BmrDocument }>('bmr.get', {
+    actorUserId: currentUser(state).id,
+    id: sessionId || '',
+    today: systemDateKey(),
+  })
+  const record = overlay?.bmr ?? local
   const filename = record ? `BMR_${record.batchNo}_${record.productionDate}.pdf` : 'BMR.pdf'
 
   return (
