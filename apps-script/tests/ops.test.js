@@ -272,3 +272,14 @@ test('frontend ops calls stay on the existing db methods', () => {
   assert.equal(source.includes("hasPermission(state, 'expenses.manage')"), true)
   assert.equal(source.includes('You cannot manage expenses.'), true)
 })
+
+test('frontend dashboard and reports require view permissions', () => {
+  const dashboard = fs.readFileSync(path.join(root, 'src/features/dashboard/DashboardPage.tsx'), 'utf8')
+  const sidebar = fs.readFileSync(path.join(root, 'src/components/layout/Sidebar.tsx'), 'utf8')
+  const reports = fs.readFileSync(path.join(root, 'src/features/reports/ReportsPages.tsx'), 'utf8')
+  assert.equal(dashboard.includes("hasPermission(state, 'dashboard.view')"), true)
+  assert.equal(sidebar.includes("dashboard.view"), true)
+  assert.equal(sidebar.includes("reports.view"), true)
+  assert.equal(reports.includes("hasPermission(state, 'reports.view')"), true)
+  assert.equal(dashboard.includes('isReportingDenied'), true)
+})

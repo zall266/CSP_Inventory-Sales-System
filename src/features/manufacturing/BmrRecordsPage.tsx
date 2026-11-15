@@ -6,6 +6,7 @@ import { filterBmrRecords, listBmrRecords, type BmrRecordListItem, type BmrRecor
 import { currentUser } from '@/features/manufacturing/sessionPlan'
 import { hasPermission } from '@/features/settings/permissions'
 import { useStore } from '@/store/hooks'
+import { isReportingDenied, pickReportingOverlay } from '@/store/reportingOverlay'
 import { useReportingQuery } from '@/store/reportingSync'
 import { systemDateKey } from '@/utils/format'
 
@@ -29,7 +30,8 @@ export function BmrRecordsPage() {
     const listed = listBmrRecords(state.productionSessions, state.products, state.warehouses)
     return filterBmrRecords(listed, { query, range, from, to, warehouseId, today })
   }, [state.productionSessions, state.products, state.warehouses, query, range, from, to, warehouseId, today])
-  const overlay = useReportingQuery<{ records: BmrRecordListItem[] }>('bmr.list', {
+  const canView = hasPermission(state, 'manufacturing.history.view')
+  const queryState = useReportingQuery<{ records: BmrRecordListItem[] }>('bmr.list', {
     actorUserId: currentUser(state).id,
     query,
     range,
@@ -37,10 +39,10 @@ export function BmrRecordsPage() {
     to,
     warehouseId,
     today,
-  })
-  const rows = overlay?.records ?? localRows
+  }, { enabled: canView })
+  const rows = pickReportingOverlay(queryState, { records: localRows }, { records: [] }).records
 
-  if (!hasPermission(state, 'manufacturing.history.view')) {
+  if (isReportingDenied(queryState, canView)) {
     return <PermissionDenied title="BMR Records" subtitle="You do not have permission to view completed production." />
   }
 

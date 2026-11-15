@@ -1,7 +1,11 @@
 import { useMemo, useState } from 'react'
 import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 import { Button, Card, FilterRow, KpiCard, PageHeader, Select, Tabs } from '@/components/ui'
+import { PermissionDenied } from '@/features/documents/A4Sheet'
+import { hasPermission } from '@/features/settings/permissions'
+import { identityApiUrl } from '@/api/identityApi'
 import { filteredProductionOrders, useLookups, useStore } from '@/store/hooks'
+import { isReportingDenied, pickReportingNumber } from '@/store/reportingOverlay'
 import { reportingRangePayload, useReportingQuery } from '@/store/reportingSync'
 import { downloadCsv, formatDate, formatMoney, formatQty, printPage } from '@/utils/format'
 import { orderWastageQty, wastageKindLabel } from './helpers'
@@ -16,7 +20,11 @@ function ReportToolbar({ onExport }: { onExport: () => void }) {
 }
 
 export function ManufacturingReportPage() {
+  const state = useStore()
   const [tab, setTab] = useState('production')
+  if (identityApiUrl() && !hasPermission(state, 'reports.view')) {
+    return <PermissionDenied title="Manufacturing Reports" subtitle="You do not have permission to view reports." />
+  }
   return (
     <div>
       {tab === 'production' && <ProductionReport tab={tab} onTab={setTab} />}
@@ -51,14 +59,20 @@ function ProductionReport({ tab, onTab }: { tab: string; onTab: (id: string) => 
   const { productName, warehouseName } = useLookups()
   const [status, setStatus] = useState('all')
   const orders = filteredProductionOrders(state).filter((o) => status === 'all' || o.status === status)
-  const overlay = useReportingQuery<{ orderCount: number; plannedQty: number; actualQty: number }>(
+  const canView = hasPermission(state, 'reports.view')
+  const query = useReportingQuery<{ orderCount: number; plannedQty: number; actualQty: number }>(
     'reports.manufacturing',
     reportingRangePayload(state),
+    { enabled: canView },
   )
+  const overlay = query.data
   const chart = useMemo(
     () => orders.map((o) => ({ name: o.orderNo, planned: o.plannedQty, actual: o.actualQty })),
     [orders],
   )
+  if (isReportingDenied(query, canView)) {
+    return <PermissionDenied title="Manufacturing Reports" subtitle="You do not have permission to view reports." />
+  }
   return (
     <div>
       <PageHeader
@@ -77,9 +91,9 @@ function ProductionReport({ tab, onTab }: { tab: string; onTab: (id: string) => 
         <div /><div /><div />
       </FilterRow>
       <div className="mb-5 grid gap-4 sm:grid-cols-3">
-        <KpiCard label="Orders" value={String(status === 'all' ? overlay?.orderCount ?? orders.length : orders.length)} />
-        <KpiCard label="Planned qty" value={formatQty(status === 'all' ? overlay?.plannedQty ?? orders.reduce((s, o) => s + o.plannedQty, 0) : orders.reduce((s, o) => s + o.plannedQty, 0))} />
-        <KpiCard label="Actual qty" value={formatQty(status === 'all' ? overlay?.actualQty ?? orders.reduce((s, o) => s + o.actualQty, 0) : orders.reduce((s, o) => s + o.actualQty, 0))} />
+        <KpiCard label="Orders" value={String(status === 'all' ? pickReportingNumber(query, overlay?.orderCount, orders.length) : orders.length)} />
+        <KpiCard label="Planned qty" value={formatQty(status === 'all' ? pickReportingNumber(query, overlay?.plannedQty, orders.reduce((s, o) => s + o.plannedQty, 0)) : orders.reduce((s, o) => s + o.plannedQty, 0))} />
+        <KpiCard label="Actual qty" value={formatQty(status === 'all' ? pickReportingNumber(query, overlay?.actualQty, orders.reduce((s, o) => s + o.actualQty, 0)) : orders.reduce((s, o) => s + o.actualQty, 0))} />
       </div>
       <Card className="mb-4 p-5">
         <div className="h-56">

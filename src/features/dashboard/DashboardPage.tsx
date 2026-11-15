@@ -27,6 +27,9 @@ import {
 } from '@/store/hooks'
 import { currentUser } from '@/features/manufacturing/sessionPlan'
 import { isCompanyWarehouseId } from '@/features/agent/agentModel'
+import { PermissionDenied } from '@/features/documents/A4Sheet'
+import { hasPermission } from '@/features/settings/permissions'
+import { isReportingDenied, pickReportingNumber } from '@/store/reportingOverlay'
 import { reportingRangePayload, useReportingQuery } from '@/store/reportingSync'
 import { formatDate, formatMoney, formatQty, greeting, round2, startOfDay } from '@/utils/format'
 
@@ -52,14 +55,16 @@ export function DashboardPage() {
   const purchases = filteredPurchases(state)
   const warehouse = state.ui.warehouseFilter
 
-  const overlay = useReportingQuery<DashboardOverlay>('dashboard.get', reportingRangePayload(state))
-  const totalSales = overlay?.totalSales ?? round2(sales.reduce((sum, s) => sum + s.total, 0))
-  const cogs = overlay?.cogs ?? round2(sales.reduce((sum, s) => sum + saleCogs(state, s), 0))
-  const grossProfit = overlay?.grossProfit ?? round2(totalSales - cogs)
-  const totalPurchases = overlay?.totalPurchases ?? round2(purchases.reduce((sum, p) => sum + p.total, 0))
-  const invValue = overlay?.inventoryValue ?? inventoryValue(state, warehouse)
-  const receivables = overlay?.receivables ?? outstandingReceivables(state)
-  const payables = overlay?.payables ?? outstandingPayables(state)
+  const canView = hasPermission(state, 'dashboard.view')
+  const query = useReportingQuery<DashboardOverlay>('dashboard.get', reportingRangePayload(state), { enabled: canView })
+  const overlay = query.data
+  const totalSales = pickReportingNumber(query, overlay?.totalSales, round2(sales.reduce((sum, s) => sum + s.total, 0)))
+  const cogs = pickReportingNumber(query, overlay?.cogs, round2(sales.reduce((sum, s) => sum + saleCogs(state, s), 0)))
+  const grossProfit = pickReportingNumber(query, overlay?.grossProfit, round2(totalSales - cogs))
+  const totalPurchases = pickReportingNumber(query, overlay?.totalPurchases, round2(purchases.reduce((sum, p) => sum + p.total, 0)))
+  const invValue = pickReportingNumber(query, overlay?.inventoryValue, inventoryValue(state, warehouse))
+  const receivables = pickReportingNumber(query, overlay?.receivables, outstandingReceivables(state))
+  const payables = pickReportingNumber(query, overlay?.payables, outstandingPayables(state))
 
   const stockRows = state.inventory.filter((row) =>
     warehouse === 'all'
@@ -117,6 +122,10 @@ export function DashboardPage() {
       .map(([id, total]) => ({ product: product(id), total }))
       .filter((row) => row.product)
   }, [sales, product])
+
+  if (isReportingDenied(query, canView)) {
+    return <PermissionDenied title="Dashboard" subtitle="You do not have permission to view the dashboard." />
+  }
 
   const recent = [
     ...state.sales.slice(0, 6).map((s) => ({

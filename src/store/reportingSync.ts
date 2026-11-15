@@ -3,6 +3,7 @@ import { identityApiUrl, postIdentityAction } from '@/api/identityApi'
 import { currentUser } from '@/features/manufacturing/sessionPlan'
 import type { AppState } from '@/types'
 import { PROTOTYPE_TODAY, systemDateKey } from '@/utils/format'
+import type { ReportingQueryState } from '@/store/reportingOverlay'
 
 export function reportingRangePayload(state: AppState) {
   return {
@@ -15,12 +16,20 @@ export function reportingRangePayload(state: AppState) {
   }
 }
 
-export function useReportingQuery<T>(action: string, payload: Record<string, unknown>) {
+export function useReportingQuery<T>(
+  action: string,
+  payload: Record<string, unknown>,
+  options?: { enabled?: boolean },
+): ReportingQueryState<T> {
+  const configured = Boolean(identityApiUrl())
+  const enabled = options?.enabled ?? true
   const serialized = JSON.stringify(payload)
   const [data, setData] = useState<T | null>(null)
+  const [denied, setDenied] = useState(false)
   useEffect(() => {
-    if (!identityApiUrl()) {
+    if (!configured || !enabled) {
       setData(null)
+      setDenied(false)
       return
     }
     let cancelled = false
@@ -28,15 +37,24 @@ export function useReportingQuery<T>(action: string, payload: Record<string, unk
     void (async () => {
       try {
         const result = await postIdentityAction(action, body)
-        if (cancelled || !result.ok || !result.data) return
-        setData(result.data as T)
+        if (cancelled) return
+        if (!result.ok) {
+          setDenied(result.error?.code === 'FORBIDDEN')
+          setData(null)
+          return
+        }
+        setDenied(false)
+        setData((result.data as T) ?? null)
       } catch {
-        // Keep the local page math when the read API is unavailable.
+        if (!cancelled) {
+          setDenied(false)
+          setData(null)
+        }
       }
     })()
     return () => {
       cancelled = true
     }
-  }, [action, serialized])
-  return data
+  }, [action, serialized, configured, enabled])
+  return { data, denied, configured }
 }
