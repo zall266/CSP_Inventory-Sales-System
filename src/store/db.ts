@@ -5754,6 +5754,10 @@ export const db = {
     paymentMethod: PaymentMethod
     notes: string
   }) {
+    if (!hasPermission(state, 'expenses.manage')) {
+      toast('Permission denied', 'You cannot manage expenses.', 'danger')
+      return null
+    }
     if (!input.description || input.amount <= 0) {
       toast('Enter description and amount', undefined, 'warning')
       return null

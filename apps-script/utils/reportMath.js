@@ -26,29 +26,38 @@ function reportStartOfDay(date) {
   return new Date(key + 'T00:00:00+08:00');
 }
 
+function reportAddCalendarDays(dateKey, days) {
+  var parts = String(dateKey).split('-').map(Number);
+  var utc = Date.UTC(parts[0], parts[1] - 1, parts[2] + days);
+  var shifted = new Date(utc);
+  var month = String(shifted.getUTCMonth() + 1);
+  var day = String(shifted.getUTCDate());
+  if (month.length < 2) month = '0' + month;
+  if (day.length < 2) day = '0' + day;
+  return shifted.getUTCFullYear() + '-' + month + '-' + day;
+}
+
 function reportAddDays(date, days) {
-  var next = new Date(date.getTime());
-  next.setDate(next.getDate() + days);
-  return next;
+  return new Date(reportAddCalendarDays(reportDateKey(date), days) + 'T00:00:00+08:00');
 }
 
 function reportDateRange(payload) {
   var todayRaw = payload && payload.today ? String(payload.today).trim() : '';
-  var today = /^\d{4}-\d{2}-\d{2}$/.test(todayRaw) ? new Date(todayRaw + 'T12:00:00+08:00') : new Date();
-  var end = reportStartOfDay(today);
-  end.setHours(23, 59, 59, 999);
+  var todayKey = /^\d{4}-\d{2}-\d{2}$/.test(todayRaw) ? todayRaw : reportDateKey(new Date());
   var preset = payload && payload.preset ? String(payload.preset).trim() : '30d';
-  if (preset === '7d') return { from: reportAddDays(reportStartOfDay(today), -6), to: end };
-  if (preset === '90d') return { from: reportAddDays(reportStartOfDay(today), -89), to: end };
   if (preset === 'custom') {
     var customFrom = payload && payload.customFrom ? String(payload.customFrom).trim() : '';
     var customTo = payload && payload.customTo ? String(payload.customTo).trim() : '';
     return {
-      from: new Date((customFrom || reportDateKey(today)) + 'T00:00:00+08:00'),
-      to: new Date((customTo || reportDateKey(today)) + 'T23:59:59+08:00')
+      from: new Date((customFrom || todayKey) + 'T00:00:00+08:00'),
+      to: new Date((customTo || todayKey) + 'T23:59:59.999+08:00')
     };
   }
-  return { from: reportAddDays(reportStartOfDay(today), -29), to: end };
+  var back = preset === '7d' ? 6 : preset === '90d' ? 89 : 29;
+  return {
+    from: new Date(reportAddCalendarDays(todayKey, -back) + 'T00:00:00+08:00'),
+    to: new Date(todayKey + 'T23:59:59.999+08:00')
+  };
 }
 
 function reportInRange(iso, from, to) {

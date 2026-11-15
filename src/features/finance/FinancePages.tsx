@@ -2,6 +2,8 @@ import { useMemo, useState } from 'react'
 import { Plus } from 'lucide-react'
 import { Button, Card, FilterRow, KpiCard, PageHeader, Select, StatusBadge, Tabs } from '@/components/ui'
 import { paymentLabel } from '@/components/ProductMark'
+import { PermissionDenied } from '@/features/documents/A4Sheet'
+import { hasPermission } from '@/features/settings/permissions'
 import { useApi, useLookups, useStore } from '@/store/hooks'
 import { formatDate, formatMoney, round2, addDays, PROTOTYPE_TODAY, startOfDay } from '@/utils/format'
 
@@ -166,13 +168,18 @@ export function ExpensesPage() {
   const state = useStore()
   const api = useApi()
   const [category, setCategory] = useState('all')
+  const canView = hasPermission(state, 'finance.view') || hasPermission(state, 'expenses.manage')
+  const canManage = hasPermission(state, 'expenses.manage')
   const rows = useMemo(
     () => state.expenses.filter((e) => category === 'all' || e.category === category),
     [state.expenses, category],
   )
+  if (!canView) {
+    return <PermissionDenied title="Expenses" subtitle="You do not have permission to view expenses." />
+  }
   return (
     <div>
-      <PageHeader title="Expenses" subtitle="Operating costs outside inventory purchases." actions={<Button onClick={() => api.openModal('expense')}><Plus size={16} /> Add expense</Button>} />
+      <PageHeader title="Expenses" subtitle="Operating costs outside inventory purchases." actions={canManage ? <Button onClick={() => api.openModal('expense')}><Plus size={16} /> Add expense</Button> : undefined} />
       <FilterRow>
         <Select value={category} onChange={(e) => setCategory(e.target.value)}>
           <option value="all">All categories</option>

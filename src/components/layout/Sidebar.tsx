@@ -201,6 +201,7 @@ function navItemVisible(state: ReturnType<typeof useStore>, item: NavItem) {
   if (item.to === '/sales/import') return hasPermission(state, 'sales.view') || hasPermission(state, 'sales.create')
   if (item.to === '/sales/dispatch') return hasPermission(state, 'sales.delivery.view') || hasPermission(state, 'sales.delivery.create') || hasPermission(state, 'sales.delivery.edit')
   if (item.to === '/settings/vehicles') return hasPermission(state, 'settings.edit')
+  if (item.to === '/expenses') return hasPermission(state, 'finance.view') || hasPermission(state, 'expenses.manage')
   return true
 }
 

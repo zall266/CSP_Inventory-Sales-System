@@ -187,6 +187,18 @@ test('read APIs do not change inventory balances or movements', () => {
   assert.equal(after.data.stockMovements.length, before.data.stockMovements.length)
 })
 
+test('reportDateRange includes Malaysia end of day independent of host timezone', () => {
+  const backend = app()
+  const range = backend.context.reportDateRange({ today: '2026-11-14', preset: '30d' })
+  const afternoonUtc = new Date('2026-11-14T13:25:03.266Z').getTime()
+  assert.equal(afternoonUtc >= range.from.getTime(), true)
+  assert.equal(afternoonUtc <= range.to.getTime(), true)
+  const nextMalaysiaMidnight = new Date('2026-11-14T16:00:00.000Z').getTime()
+  assert.equal(nextMalaysiaMidnight > range.to.getTime(), true)
+  const fromKey = backend.context.reportDateKey(range.from)
+  assert.equal(fromKey, '2026-10-16')
+})
+
 test('staff can read dashboard and reports', () => {
   const backend = ready()
   const dashboard = call(backend, 'dashboard.get', { actorUserId: 'u-mei', today: TODAY, preset: '30d' })

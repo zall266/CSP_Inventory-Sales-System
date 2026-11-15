@@ -269,4 +269,6 @@ test('frontend ops calls stay on the existing db methods', () => {
   assert.equal(source.includes("queueExpenseWrite('expenses.create'"), true)
   assert.equal(source.includes('createManufacturer'), true)
   assert.equal(source.includes('createExpense'), true)
+  assert.equal(source.includes("hasPermission(state, 'expenses.manage')"), true)
+  assert.equal(source.includes('You cannot manage expenses.'), true)
 })
