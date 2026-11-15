@@ -1,4 +1,5 @@
 import { identityApiUrl, postIdentityAction } from '@/api/identityApi'
+import { enqueueHydrate, hydrateRead, reportLoadError } from '@/store/hydrateQueue'
 import type { InventoryRow, Purchase, Receiving, StockMovement, StockOrder } from '@/types'
 
 export type ReceivingSlice = {
@@ -13,6 +14,7 @@ type SyncOptions = {
   apply: (slice: ReceivingSlice) => void
   actorId: () => string
   onError: (message: string) => void
+  onLoadError?: (message: string) => void
   onSaved: (action: string, payload: Record<string, unknown>, data: Record<string, unknown>) => void
   onSettled: () => void
 }
@@ -45,18 +47,18 @@ export function startReceivingHydration(next: SyncOptions) {
   if (!identityApiUrl()) return
   options = next
   const seen = epoch
-  void (async () => {
+  void enqueueHydrate(async () => {
     try {
-      const loaded = await postIdentityAction('receivings.list', { actorUserId: options?.actorId() })
+      const loaded = await hydrateRead(postIdentityAction, 'receivings.list', { actorUserId: options?.actorId() })
       if (epoch !== seen) return
       if (!loaded.ok) {
-        next.onError(loaded.error?.message || 'Could not load receiving from the server.')
+        reportLoadError(next, loaded.error?.message || 'Could not load receiving from the server.')
         return
       }
       const slice = sliceFrom(loaded.data as Partial<ReceivingSlice> | null)
       if (slice) options?.apply(slice)
     } catch (error) {
-      next.onError(error instanceof Error ? error.message : 'Could not load receiving from the server.')
+      reportLoadError(next, error instanceof Error ? error.message : 'Could not load receiving from the server.')
     } finally {
       if (epoch === seen) {
         ready = true
@@ -64,7 +66,7 @@ export function startReceivingHydration(next: SyncOptions) {
         queued.forEach((item) => queueReceivingWrite(item.action, item.payload, item.idempotencyKey))
       }
     }
-  })()
+  })
 }
 
 export function queueReceivingWrite(action: string, payload: Record<string, unknown>, idempotencyKey?: string) {

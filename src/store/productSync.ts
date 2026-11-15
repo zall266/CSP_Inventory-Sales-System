@@ -1,5 +1,6 @@
 import { identityApiUrl, postIdentityAction } from '@/api/identityApi'
 import { createSeedData } from '@/data/seed'
+import { canBootstrapFromRead, enqueueHydrate, hydrateRead, reportLoadError } from '@/store/hydrateQueue'
 import type { Product } from '@/types'
 
 type ProductSlice = {
@@ -10,6 +11,7 @@ type SyncOptions = {
   apply: (slice: ProductSlice) => void
   actorId: () => string
   onError: (message: string) => void
+  onLoadError?: (message: string) => void
   onSaved: (action: string, payload: Record<string, unknown>, products: Product[]) => void
 }
 
@@ -29,17 +31,19 @@ function sliceFrom(data: { products?: Product[] } | null): ProductSlice | null {
 }
 
 async function ensureMasters() {
-  const loaded = await postIdentityAction('masters.get', {})
+  const loaded = await hydrateRead(postIdentityAction, 'masters.get', {})
   const data = loaded.data as { warehouses?: unknown[]; categories?: unknown[] } | null
-  if (loaded.ok && data?.warehouses?.length && data?.categories?.length) return
+  if (canBootstrapFromRead(loaded) && data?.warehouses?.length && data?.categories?.length) return
+  if (!canBootstrapFromRead(loaded)) {
+    throw new Error(loaded.error?.message || 'Could not load warehouses and categories from the server.')
+  }
   const seed = createSeedData()
   const boot = await postIdentityAction('masters.bootstrap', {
     warehouses: seed.warehouses,
     categories: seed.categories,
   })
   if (boot.ok) return
-  if (boot.error?.code === 'CONFLICT') return
-  const again = await postIdentityAction('masters.get', {})
+  const again = await hydrateRead(postIdentityAction, 'masters.get', {})
   const next = again.data as { warehouses?: unknown[]; categories?: unknown[] } | null
   if (!again.ok || !next?.warehouses?.length || !next?.categories?.length) {
     throw new Error(boot.error?.message || 'Could not load warehouses and categories from the server.')
@@ -50,12 +54,16 @@ export function startProductHydration(next: SyncOptions) {
   if (!identityApiUrl()) return
   options = next
   const seen = epoch
-  void (async () => {
+  void enqueueHydrate(async () => {
     try {
       await ensureMasters()
       if (epoch !== seen) return
-      const loaded = await postIdentityAction('products.list', {})
-      if (epoch !== seen || !loaded.ok) return
+      const loaded = await hydrateRead(postIdentityAction, 'products.list', {})
+      if (epoch !== seen) return
+      if (!canBootstrapFromRead(loaded)) {
+        reportLoadError(next, loaded.error?.message || 'Could not load products from the server.')
+        return
+      }
       const data = loaded.data as { products?: Product[] } | null
       if (!data?.products?.length) {
         const seed = createSeedData()
@@ -69,17 +77,17 @@ export function startProductHydration(next: SyncOptions) {
           options?.apply(slice)
           return
         }
-        const again = await postIdentityAction('products.list', {})
+        const again = await hydrateRead(postIdentityAction, 'products.list', {})
         if (epoch !== seen) return
         const existing = sliceFrom(again.ok ? (again.data as { products?: Product[] } | null) : null)
         if (existing) options?.apply(existing)
-        else if (!boot.ok) next.onError(boot.error?.message || 'Could not load products from the server.')
+        else if (!boot.ok) reportLoadError(next, boot.error?.message || 'Could not load products from the server.')
       } else {
         const slice = sliceFrom(data)
         if (slice) options?.apply(slice)
       }
     } catch (error) {
-      next.onError(error instanceof Error ? error.message : 'Could not load products from the server.')
+      reportLoadError(next, error instanceof Error ? error.message : 'Could not load products from the server.')
     } finally {
       if (epoch === seen) {
         ready = true
@@ -87,7 +95,7 @@ export function startProductHydration(next: SyncOptions) {
         queued.forEach((item) => queueProductWrite(item.action, item.payload))
       }
     }
-  })()
+  })
 }
 
 export function queueProductWrite(action: string, payload: Record<string, unknown>) {
