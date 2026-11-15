@@ -1,12 +1,12 @@
 import { useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { Button, Card, FilterRow, Input, PageHeader, Select } from '@/components/ui'
-import { PermissionDenied } from '@/features/documents/A4Sheet'
 import { filterBmrRecords, listBmrRecords, type BmrRecordListItem, type BmrRecordRange } from '@/features/manufacturing/bmrModel'
 import { currentUser } from '@/features/manufacturing/sessionPlan'
 import { hasPermission } from '@/features/settings/permissions'
 import { useStore } from '@/store/hooks'
-import { isReportingDenied, pickReportingOverlay } from '@/store/reportingOverlay'
+import { ReportingFallback } from '@/store/ReportingFallback'
+import { isReportingFallback, pickReportingOverlay, reportingSurface } from '@/store/reportingOverlay'
 import { useReportingQuery } from '@/store/reportingSync'
 import { systemDateKey } from '@/utils/format'
 
@@ -42,8 +42,15 @@ export function BmrRecordsPage() {
   }, { enabled: canView })
   const rows = pickReportingOverlay(queryState, { records: localRows }, { records: [] }).records
 
-  if (isReportingDenied(queryState, canView)) {
-    return <PermissionDenied title="BMR Records" subtitle="You do not have permission to view completed production." />
+  const surface = reportingSurface(queryState, canView)
+  if (isReportingFallback(surface)) {
+    return (
+      <ReportingFallback
+        surface={surface}
+        title="BMR Records"
+        deniedSubtitle="You do not have permission to view completed production."
+      />
+    )
   }
 
   return (

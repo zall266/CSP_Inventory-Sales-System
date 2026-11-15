@@ -1,14 +1,14 @@
 import { useMemo, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { Button, Card, PageHeader, Select } from '@/components/ui'
-import { PermissionDenied } from '@/features/documents/A4Sheet'
 import { PJKM_511, buildPjkm511, type PjkmPage, type PjkmRow } from '@/features/pjkm/pjkm511'
 import { PJKM_1011, buildPjkm1011, pjkm1011QtyText, type Pjkm1011Page } from '@/features/pjkm/pjkm1011'
 import { buildPjkm911 } from '@/features/pjkm/pjkm911'
 import { currentUser } from '@/features/manufacturing/sessionPlan'
 import { hasPermission } from '@/features/settings/permissions'
 import { useStore } from '@/store/hooks'
-import { isReportingDenied, pickReportingOverlay } from '@/store/reportingOverlay'
+import { ReportingFallback } from '@/store/ReportingFallback'
+import { combineReportingSurfaces, isReportingFallback, pickReportingOverlay, reportingSurface } from '@/store/reportingOverlay'
 import { useReportingQuery } from '@/store/reportingSync'
 import { PROTOTYPE_TODAY, systemDateKey } from '@/utils/format'
 import './pjkm.css'
@@ -69,8 +69,13 @@ export function PjkmRecordsPage() {
   const receiving = pickReportingOverlay(receivingQuery, localReceiving, emptyReceiving)
   const distributor = pickReportingOverlay(distributorQuery, localDistributor, emptyDistributor)
   const inspections = pickReportingOverlay(inspectionsQuery, localInspections, emptyInspections)
-  if (isReportingDenied(receivingQuery, canView) || isReportingDenied(distributorQuery, canView) || isReportingDenied(inspectionsQuery, canView)) {
-    return <PermissionDenied title="PJKM Records" subtitle="You do not have permission to view receiving." />
+  const surface = combineReportingSurfaces([
+    reportingSurface(receivingQuery, canView),
+    reportingSurface(distributorQuery, canView),
+    reportingSurface(inspectionsQuery, canView),
+  ])
+  if (isReportingFallback(surface)) {
+    return <ReportingFallback surface={surface} title="PJKM Records" deniedSubtitle="You do not have permission to view receiving." />
   }
   const previewPath = record === '10.1.1' ? `/pjkm/10.1.1?month=${month}` : record === '9.1.1' ? `/pjkm/9.1.1?month=${month}` : `/pjkm/5.1.1?month=${month}`
   return (
@@ -140,7 +145,10 @@ export function Pjkm511PreviewPage() {
   const canView = hasPermission(state, 'receiving.view')
   const query = useReportingQuery<typeof local>('pjkm.511', { actorUserId: currentUser(state).id, month }, { enabled: canView })
   const report = pickReportingOverlay(query, local, empty)
-  if (isReportingDenied(query, canView)) return <PermissionDenied title="PJKM Records" subtitle="You do not have permission to view receiving." />
+  const surface = reportingSurface(query, canView)
+  if (isReportingFallback(surface)) {
+    return <ReportingFallback surface={surface} title="PJKM Records" deniedSubtitle="You do not have permission to view receiving." />
+  }
   const filename = `MGT-05_REKOD-5.1.1_PENERIMAAN-BAHAN-MENTAH_${month}.pdf`
   return (
     <div className="pjkm-root min-h-screen bg-slate-200">
@@ -189,7 +197,10 @@ export function Pjkm1011PreviewPage() {
   const canView = hasPermission(state, 'receiving.view')
   const query = useReportingQuery<typeof local>('pjkm.1011', { actorUserId: currentUser(state).id, month }, { enabled: canView })
   const report = pickReportingOverlay(query, local, empty)
-  if (isReportingDenied(query, canView)) return <PermissionDenied title="PJKM Records" subtitle="You do not have permission to view receiving." />
+  const surface = reportingSurface(query, canView)
+  if (isReportingFallback(surface)) {
+    return <ReportingFallback surface={surface} title="PJKM Records" deniedSubtitle="You do not have permission to view receiving." />
+  }
   const filename = `MGT-10_REKOD-10.1.1_PENGEDAR-PENJUAL_${month}.pdf`
   return (
     <div className="pjkm1011-root min-h-screen bg-slate-200">

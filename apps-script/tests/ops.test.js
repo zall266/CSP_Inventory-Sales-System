@@ -281,5 +281,5 @@ test('frontend dashboard and reports require view permissions', () => {
   assert.equal(sidebar.includes("dashboard.view"), true)
   assert.equal(sidebar.includes("reports.view"), true)
   assert.equal(reports.includes("hasPermission(state, 'reports.view')"), true)
-  assert.equal(dashboard.includes('isReportingDenied'), true)
+  assert.equal(dashboard.includes('reportingSurface'), true)
 })

@@ -27,9 +27,9 @@ import {
 } from '@/store/hooks'
 import { currentUser } from '@/features/manufacturing/sessionPlan'
 import { isCompanyWarehouseId } from '@/features/agent/agentModel'
-import { PermissionDenied } from '@/features/documents/A4Sheet'
 import { hasPermission } from '@/features/settings/permissions'
-import { isReportingDenied, pickReportingNumber } from '@/store/reportingOverlay'
+import { ReportingFallback } from '@/store/ReportingFallback'
+import { isReportingFallback, pickReportingNumber, reportingSurface } from '@/store/reportingOverlay'
 import { reportingRangePayload, useReportingQuery } from '@/store/reportingSync'
 import { formatDate, formatMoney, formatQty, greeting, round2, startOfDay } from '@/utils/format'
 
@@ -123,9 +123,19 @@ export function DashboardPage() {
       .filter((row) => row.product)
   }, [sales, product])
 
-  if (isReportingDenied(query, canView)) {
-    return <PermissionDenied title="Dashboard" subtitle="You do not have permission to view the dashboard." />
-  }
+  const surface = reportingSurface(query, canView)
+  const fallback = (
+    <ReportingFallback
+      surface={surface}
+      title="Dashboard"
+      deniedSubtitle="You do not have permission to view the dashboard."
+    />
+  )
+  if (isReportingFallback(surface)) return fallback
+  const useLocal = surface === 'demo'
+  const invoiceCount = useLocal ? (overlay?.salesCount ?? sales.length) : (overlay?.salesCount ?? 0)
+  const lowCount = useLocal ? (overlay?.lowStockCount ?? low.length) : (overlay?.lowStockCount ?? 0)
+  const outCount = useLocal ? (overlay?.outOfStockCount ?? out.length) : (overlay?.outOfStockCount ?? 0)
 
   const recent = [
     ...state.sales.slice(0, 6).map((s) => ({
@@ -221,7 +231,7 @@ export function DashboardPage() {
       )}
 
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-        <KpiCard label="Total sales" value={formatMoney(totalSales, { compact: true })} hint={`${overlay?.salesCount ?? sales.length} invoices`} />
+        <KpiCard label="Total sales" value={formatMoney(totalSales, { compact: true })} hint={`${invoiceCount} invoices`} />
         <KpiCard label="Gross profit" value={formatMoney(grossProfit, { compact: true })} tone="success" hint="Sales minus COGS" />
         <KpiCard label="Inventory value" value={formatMoney(invValue, { compact: true })} hint={warehouse === 'all' ? 'All warehouses' : warehouseName(warehouse)} />
         <KpiCard label="Receivables" value={formatMoney(receivables, { compact: true })} tone={receivables > 0 ? 'warning' : 'default'} />
@@ -229,8 +239,8 @@ export function DashboardPage() {
       <div className="mt-4 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
         <KpiCard label="Total purchases" value={formatMoney(totalPurchases, { compact: true })} />
         <KpiCard label="Payables" value={formatMoney(payables, { compact: true })} />
-        <KpiCard label="Low stock" value={`${overlay?.lowStockCount ?? low.length} items`} tone="warning" />
-        <KpiCard label="Out of stock" value={`${overlay?.outOfStockCount ?? out.length} items`} tone="danger" />
+        <KpiCard label="Low stock" value={`${lowCount} items`} tone="warning" />
+        <KpiCard label="Out of stock" value={`${outCount} items`} tone="danger" />
       </div>
 
       <div className="mt-6 grid gap-4 xl:grid-cols-3">
@@ -241,7 +251,7 @@ export function DashboardPage() {
           </div>
           <div className="h-64">
             <ResponsiveContainer width="100%" height="100%">
-              <AreaChart data={chartData}>
+              <AreaChart data={useLocal ? chartData : []}>
                 <defs>
                   <linearGradient id="salesFill" x1="0" y1="0" x2="0" y2="1">
                     <stop offset="0%" stopColor="#4F46E5" stopOpacity={0.25} />
@@ -260,7 +270,7 @@ export function DashboardPage() {
         <Card className="p-5">
           <div className="mb-4 text-sm font-semibold text-slate-900">Top selling products</div>
           <div className="space-y-3">
-            {topProducts.map((row) =>
+            {(useLocal ? topProducts : []).map((row) =>
               row.product ? (
                 <button
                   key={row.product.id}
@@ -286,7 +296,7 @@ export function DashboardPage() {
           <div className="mb-4 text-sm font-semibold text-slate-900">Sales vs purchases</div>
           <div className="h-56">
             <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={chartData.filter((_, i) => i % Math.max(1, Math.ceil(chartData.length / 10)) === 0 || i === chartData.length - 1)}>
+              <BarChart data={(useLocal ? chartData : []).filter((_, i, rows) => i % Math.max(1, Math.ceil(rows.length / 10)) === 0 || i === rows.length - 1)}>
                 <CartesianGrid stroke="#EEF2F7" vertical={false} />
                 <XAxis dataKey="label" tick={{ fontSize: 11, fill: '#94A3B8' }} axisLine={false} tickLine={false} />
                 <YAxis tick={{ fontSize: 11, fill: '#94A3B8' }} axisLine={false} tickLine={false} />
@@ -300,7 +310,7 @@ export function DashboardPage() {
         <Card className="p-5">
           <div className="mb-4 text-sm font-semibold text-slate-900">Stock alerts</div>
           <div className="space-y-3">
-            {alerts.slice(0, 6).map((row) => {
+            {(useLocal ? alerts : []).slice(0, 6).map((row) => {
               const p = product(row.productId)
               if (!p) return null
               const status = row.qty <= 0 ? 'out_of_stock' : 'low_stock'
@@ -347,7 +357,7 @@ export function DashboardPage() {
               </tr>
             </thead>
             <tbody>
-              {recent.map((row) => (
+              {(useLocal ? recent : []).map((row) => (
                 <tr key={row.id} onClick={row.onClick}>
                   <td>{row.type}</td>
                   <td className="font-medium">{row.ref}</td>

@@ -2,9 +2,9 @@ import { useParams } from 'react-router-dom'
 import { Button } from '@/components/ui'
 import { currentUser } from '@/features/manufacturing/sessionPlan'
 import { useStore } from '@/store/hooks'
-import { PermissionDenied } from '@/features/documents/A4Sheet'
 import { hasPermission } from '@/features/settings/permissions'
-import { isReportingDenied } from '@/store/reportingOverlay'
+import { ReportingFallback } from '@/store/ReportingFallback'
+import { isReportingFallback, reportingSurface } from '@/store/reportingOverlay'
 import { useReportingQuery } from '@/store/reportingSync'
 import { systemDateKey } from '@/utils/format'
 import {
@@ -40,10 +40,17 @@ export function BmrPrintPage() {
     id: sessionId || '',
     today: systemDateKey(),
   }, { enabled: canView })
-  const record = query.configured ? query.data?.bmr ?? null : local
-  if (isReportingDenied(query, canView)) {
-    return <PermissionDenied title="BMR" subtitle="You do not have permission to view completed production." />
+  const surface = reportingSurface(query, canView)
+  if (isReportingFallback(surface)) {
+    return (
+      <ReportingFallback
+        surface={surface}
+        title="BMR"
+        deniedSubtitle="You do not have permission to view completed production."
+      />
+    )
   }
+  const record = surface === 'demo' ? local : query.data?.bmr ?? null
   const filename = record ? `BMR_${record.batchNo}_${record.productionDate}.pdf` : 'BMR.pdf'
 
   return (
