@@ -1,4 +1,5 @@
 import { identityApiUrl, postIdentityAction } from '@/api/identityApi'
+import { enqueueHydrate, hydrateRead, reportLoadError } from '@/store/hydrateQueue'
 import type {
   DocumentAuditLog,
   ImportBatch,
@@ -31,6 +32,7 @@ type SyncOptions = {
   apply: (slice: SalesImportSlice) => void
   actorId: () => string
   onError: (message: string) => void
+  onLoadError?: (message: string) => void
   onSaved: (action: string, payload: Record<string, unknown>, data: Record<string, unknown>) => void
   onSettled: () => void
 }
@@ -73,18 +75,18 @@ export function startSalesImportHydration(next: SyncOptions) {
   if (!identityApiUrl()) return
   options = next
   const seen = epoch
-  void (async () => {
+  void enqueueHydrate(async () => {
     try {
-      const loaded = await postIdentityAction('salesImport.list', { actorUserId: options?.actorId() })
+      const loaded = await hydrateRead(postIdentityAction, 'salesImport.list', { actorUserId: options?.actorId() })
       if (epoch !== seen) return
       if (!loaded.ok) {
-        next.onError(loaded.error?.message || 'Could not load sales import from the server.')
+        reportLoadError(next, loaded.error?.message || 'Could not load sales import from the server.')
         return
       }
       const slice = sliceFrom(loaded.data as Partial<SalesImportSlice> | null)
       if (slice) options?.apply(slice)
     } catch (error) {
-      next.onError(error instanceof Error ? error.message : 'Could not load sales import from the server.')
+      reportLoadError(next, error instanceof Error ? error.message : 'Could not load sales import from the server.')
     } finally {
       if (epoch === seen) {
         ready = true
@@ -92,7 +94,7 @@ export function startSalesImportHydration(next: SyncOptions) {
         queued.forEach((item) => queueSalesImportWrite(item.action, item.payload, item.idempotencyKey))
       }
     }
-  })()
+  })
 }
 
 export function queueSalesImportWrite(action: string, payload: Record<string, unknown>, idempotencyKey?: string) {

@@ -10020,6 +10020,9 @@ startIdentityHydration({
   onError(message) {
     toast('Could not save to the server', message, 'danger')
   },
+  onLoadError(message) {
+    toast('Could not load from the server', message, 'danger')
+  },
 })
 
 startMasterHydration({
@@ -10029,6 +10032,9 @@ startMasterHydration({
   actorId: () => currentUser(state).id,
   onError(message) {
     toast('Could not save to the server', message, 'danger')
+  },
+  onLoadError(message) {
+    toast('Could not load from the server', message, 'danger')
   },
   onSaved(action, payload) {
     if (action === 'categories.create') toast('Category added', String(payload.name ?? ''))
@@ -10043,6 +10049,9 @@ startPartyHydration({
   actorId: () => currentUser(state).id,
   onError(message) {
     toast('Could not save to the server', message, 'danger')
+  },
+  onLoadError(message) {
+    toast('Could not load from the server', message, 'danger')
   },
   onSaved(action, payload) {
     if (action === 'customers.create') toast('Customer added', String(payload.name ?? ''))
@@ -10077,6 +10086,9 @@ startProductHydration({
   onError(message) {
     toast('Could not save to the server', message, 'danger')
   },
+  onLoadError(message) {
+    toast('Could not load from the server', message, 'danger')
+  },
   onSaved(action, payload, products) {
     if (action === 'products.create') {
       const saved = products.find((product) => product.id === payload.id)
@@ -10105,6 +10117,9 @@ startInventoryHydration({
   actorId: () => currentUser(state).id,
   onError(message) {
     toast('Could not save to the server', message, 'danger')
+  },
+  onLoadError(message) {
+    toast('Could not load from the server', message, 'danger')
   },
   onSaved(action, payload, data) {
     if (action === 'inventory.adjust') {
@@ -10141,6 +10156,9 @@ startReceivingHydration({
   onError(message) {
     toast('Could not save to the server', message, 'danger')
   },
+  onLoadError(message) {
+    toast('Could not load from the server', message, 'danger')
+  },
   onSaved(action, _payload, data) {
     if (action === 'receivings.create') {
       const doc = data.receiving as Receiving | undefined
@@ -10163,6 +10181,9 @@ startWarehouseHydration({
   actorId: () => currentUser(state).id,
   onError(message) {
     toast('Could not save to the server', message, 'danger')
+  },
+  onLoadError(message) {
+    toast('Could not load from the server', message, 'danger')
   },
   onSaved(action, payload) {
     const qty = payload.qty ?? ''
@@ -10198,6 +10219,9 @@ startOpeningBalanceHydration({
   onError(message) {
     toast('Could not save to the server', message, 'danger')
   },
+  onLoadError(message) {
+    toast('Could not load from the server', message, 'danger')
+  },
   onSaved(action, _payload, data) {
     if (action === 'openingBalances.save') toast('Opening balance saved', String((data.openingBalance as OpeningBalance | undefined)?.documentNo ?? ''))
     if (action === 'openingBalances.update') toast('Opening balance updated', String((data.openingBalance as OpeningBalance | undefined)?.documentNo ?? ''))
@@ -10224,6 +10248,9 @@ startHalalHydration({
   onError(message) {
     toast('Could not save to the server', message, 'danger')
   },
+  onLoadError(message) {
+    toast('Could not load from the server', message, 'danger')
+  },
   onSaved(action, _payload, data) {
     const manufacturer = data.manufacturer as Manufacturer | undefined
     if (action === 'halal.saveManufacturer') {
@@ -10248,6 +10275,9 @@ startTaskHydration({
   actorId: () => currentUser(state).id,
   onError(message) {
     toast('Could not save to the server', message, 'danger')
+  },
+  onLoadError(message) {
+    toast('Could not load from the server', message, 'danger')
   },
   onSaved(action, _payload, data) {
     const category = data.category as { name?: string } | undefined
@@ -10275,6 +10305,9 @@ startExpenseHydration({
   onError(message) {
     toast('Could not save to the server', message, 'danger')
   },
+  onLoadError(message) {
+    toast('Could not load from the server', message, 'danger')
+  },
   onSaved(action, _payload, data) {
     const expense = data.expense as Expense | undefined
     if (action === 'expenses.create') toast('Expense added', expense?.description ?? '')
@@ -10296,6 +10329,9 @@ startDispatchHydration({
   actorId: () => currentUser(state).id,
   onError(message) {
     toast('Could not save to the server', message, 'danger')
+  },
+  onLoadError(message) {
+    toast('Could not load from the server', message, 'danger')
   },
   onSaved(action, _payload, data) {
     const vehicle = data.vehicle as Vehicle | undefined
@@ -10335,6 +10371,9 @@ startSalesImportHydration({
   actorId: () => currentUser(state).id,
   onError(message) {
     toast('Could not save to the server', message, 'danger')
+  },
+  onLoadError(message) {
+    toast('Could not load from the server', message, 'danger')
   },
   onSaved(action, _payload, data) {
     const batch = data.batch as ImportBatch | undefined
@@ -10381,6 +10420,9 @@ startSalesReturnHydration({
   onError(message) {
     toast('Could not save to the server', message, 'danger')
   },
+  onLoadError(message) {
+    toast('Could not load from the server', message, 'danger')
+  },
   onSaved(action, _payload, data) {
     if (action === 'salesReturns.save') toast('Return saved', String((data.salesReturn as SalesReturn | undefined)?.returnNo ?? ''))
     if (action === 'salesReturns.update') toast('Return updated', String((data.salesReturn as SalesReturn | undefined)?.returnNo ?? ''))
@@ -10417,6 +10459,9 @@ startSalesHydration({
   actorId: () => currentUser(state).id,
   onError(message) {
     toast('Could not save to the server', message, 'danger')
+  },
+  onLoadError(message) {
+    toast('Could not load from the server', message, 'danger')
   },
   onSaved(action, _payload, data) {
     if (action === 'sales.create' || action === 'sales.createWholesale') {
@@ -10464,6 +10509,9 @@ startPurchaseHydration({
   onError(message) {
     toast('Could not save to the server', message, 'danger')
   },
+  onLoadError(message) {
+    toast('Could not load from the server', message, 'danger')
+  },
   onSaved(action, _payload, data) {
     if (action === 'purchases.create') {
       const doc = data.purchase as Purchase | undefined
@@ -10504,6 +10552,9 @@ startManufacturingHydration({
   actorId: () => currentUser(state).id,
   onError(message) {
     toast('Could not save to the server', message, 'danger')
+  },
+  onLoadError(message) {
+    toast('Could not load from the server', message, 'danger')
   },
   onSaved(action, _payload, data) {
     if (action === 'packing.create') toast('Packing saved', String((data.packing as PackingAssembly | undefined)?.packingNo ?? ''))
@@ -10550,6 +10601,9 @@ startBomHydration({
   actorId: () => currentUser(state).id,
   onError(message) {
     toast('Could not save to the server', message, 'danger')
+  },
+  onLoadError(message) {
+    toast('Could not load from the server', message, 'danger')
   },
   onSaved(action, payload) {
     if (action === 'boms.create') toast('BOM created', String(payload.name || ''))

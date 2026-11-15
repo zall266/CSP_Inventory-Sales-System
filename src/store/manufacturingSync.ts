@@ -1,4 +1,5 @@
 import { identityApiUrl, postIdentityAction } from '@/api/identityApi'
+import { enqueueHydrate, hydrateRead, reportLoadError } from '@/store/hydrateQueue'
 import type {
   Batch,
   DisplayStock,
@@ -27,6 +28,7 @@ type SyncOptions = {
   apply: (slice: ManufacturingSlice) => void
   actorId: () => string
   onError: (message: string) => void
+  onLoadError?: (message: string) => void
   onSaved: (action: string, payload: Record<string, unknown>, data: Record<string, unknown>) => void
   onSettled: () => void
 }
@@ -101,22 +103,22 @@ function pump() {
 export function startManufacturingHydration(next: SyncOptions) {
   if (!identityApiUrl()) return
   options = next
-  void (async () => {
+  void enqueueHydrate(async () => {
     try {
-      const loaded = await postIdentityAction('packing.list', { actorUserId: options?.actorId() })
+      const loaded = await hydrateRead(postIdentityAction, 'packing.list', { actorUserId: options?.actorId() })
       if (!loaded.ok) {
-        next.onError(loaded.error?.message || 'Could not load manufacturing from the server.')
+        reportLoadError(next, loaded.error?.message || 'Could not load manufacturing from the server.')
         return
       }
       const slice = sliceFrom(loaded.data as Partial<ManufacturingSlice> | null)
       if (slice) options?.apply(slice)
     } catch (error) {
-      next.onError(error instanceof Error ? error.message : 'Could not load manufacturing from the server.')
+      reportLoadError(next, error instanceof Error ? error.message : 'Could not load manufacturing from the server.')
     } finally {
       ready = true
       pump()
     }
-  })()
+  })
 }
 
 export function queueManufacturingWrite(action: string, payload: Record<string, unknown>, idempotencyKey?: string) {

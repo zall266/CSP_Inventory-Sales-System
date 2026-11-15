@@ -1,4 +1,5 @@
 import { identityApiUrl, postIdentityAction } from '@/api/identityApi'
+import { enqueueHydrate, hydrateRead, reportLoadError } from '@/store/hydrateQueue'
 import type {
   DocumentAuditLog,
   Expense,
@@ -32,6 +33,7 @@ type SyncOptions<T> = {
   apply: (slice: T) => void
   actorId: () => string
   onError: (message: string) => void
+  onLoadError?: (message: string) => void
   onSaved: (action: string, payload: Record<string, unknown>, data: Record<string, unknown>) => void
   onSettled: () => void
 }
@@ -62,19 +64,19 @@ function createSync<T>(config: {
     if (!identityApiUrl()) return
     options = next
     const seen = epoch
-    void (async () => {
+    void enqueueHydrate(async () => {
       try {
-        const loaded = await postIdentityAction(config.listAction, { actorUserId: options?.actorId() })
+        const loaded = await hydrateRead(postIdentityAction, config.listAction, { actorUserId: options?.actorId() })
         if (epoch !== seen) return
         if (!loaded.ok) {
           if (loaded.error?.code === 'FORBIDDEN') return
-          next.onError(loaded.error?.message || config.loadError)
+          reportLoadError(next, loaded.error?.message || config.loadError)
           return
         }
         const slice = config.sliceFrom(loaded.data as Partial<T> | null)
         if (slice) options?.apply(slice)
       } catch (error) {
-        next.onError(error instanceof Error ? error.message : config.loadError)
+        reportLoadError(next, error instanceof Error ? error.message : config.loadError)
       } finally {
         if (epoch === seen) {
           ready = true
@@ -82,7 +84,7 @@ function createSync<T>(config: {
           queued.forEach((item) => queueWrite(item.action, item.payload, item.idempotencyKey))
         }
       }
-    })()
+    })
   }
 
   function queueWrite(action: string, payload: Record<string, unknown>, idempotencyKey?: string) {

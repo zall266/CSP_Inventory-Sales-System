@@ -1,5 +1,6 @@
 import { identityApiUrl, postIdentityAction } from '@/api/identityApi'
 import { createSeedData } from '@/data/seed'
+import { canBootstrapFromRead, enqueueHydrate, hydrateRead, reportLoadError } from '@/store/hydrateQueue'
 import type { Agent, Customer, CustomerWholesalePrice, Supplier, Warehouse } from '@/types'
 
 type PartySlice = {
@@ -14,6 +15,7 @@ type SyncOptions = {
   apply: (slice: PartySlice) => void
   actorId: () => string
   onError: (message: string) => void
+  onLoadError?: (message: string) => void
   onSaved: (action: string, payload: Record<string, unknown>) => void
 }
 
@@ -42,10 +44,14 @@ export function startPartyHydration(next: SyncOptions) {
   if (!identityApiUrl()) return
   options = next
   const seen = epoch
-  void (async () => {
+  void enqueueHydrate(async () => {
     try {
-      const loaded = await postIdentityAction('parties.get', { actorUserId: options?.actorId() })
-      if (epoch !== seen || !loaded.ok) return
+      const loaded = await hydrateRead(postIdentityAction, 'parties.get', { actorUserId: options?.actorId() })
+      if (epoch !== seen) return
+      if (!canBootstrapFromRead(loaded)) {
+        reportLoadError(next, loaded.error?.message || 'Could not load customers and suppliers from the server.')
+        return
+      }
       const data = loaded.data as PartySlice | null
       const needsCustomers = !data?.customers?.length
       const needsSuppliers = !data?.suppliers?.length
@@ -65,19 +71,19 @@ export function startPartyHydration(next: SyncOptions) {
           options?.apply(slice)
           return
         }
-        const again = await postIdentityAction('parties.get', { actorUserId: options?.actorId() })
+        const again = await hydrateRead(postIdentityAction, 'parties.get', { actorUserId: options?.actorId() })
         if (epoch !== seen) return
         const existing = sliceFrom(again.ok ? (again.data as PartySlice | null) : null)
         if (existing) options?.apply(existing)
-        else if (!boot.ok && boot.error?.code !== 'CONFLICT') {
-          next.onError(boot.error?.message || 'Could not load customers and suppliers from the server.')
+        else if (!boot.ok && !canBootstrapFromRead(boot)) {
+          reportLoadError(next, boot.error?.message || 'Could not load customers and suppliers from the server.')
         }
       } else {
         const slice = sliceFrom(data)
         if (slice) options?.apply(slice)
       }
     } catch (error) {
-      next.onError(error instanceof Error ? error.message : 'Could not load customers and suppliers from the server.')
+      reportLoadError(next, error instanceof Error ? error.message : 'Could not load customers and suppliers from the server.')
     } finally {
       if (epoch === seen) {
         ready = true
@@ -85,7 +91,7 @@ export function startPartyHydration(next: SyncOptions) {
         queued.forEach((item) => queuePartyWrite(item.action, item.payload))
       }
     }
-  })()
+  })
 }
 
 export function queuePartyWrite(action: string, payload: Record<string, unknown>) {

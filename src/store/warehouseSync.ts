@@ -1,4 +1,5 @@
 import { identityApiUrl, postIdentityAction } from '@/api/identityApi'
+import { canBootstrapFromRead, enqueueHydrate, hydrateRead, reportLoadError } from '@/store/hydrateQueue'
 import type {
   BalanceUsageLog,
   DisplayStock,
@@ -23,6 +24,7 @@ type SyncOptions = {
   apply: (slice: WarehouseSlice) => void
   actorId: () => string
   onError: (message: string) => void
+  onLoadError?: (message: string) => void
   onSaved: (action: string, payload: Record<string, unknown>, data: Record<string, unknown>) => void
   onSettled: () => void
 }
@@ -55,31 +57,31 @@ function sliceFrom(data: Partial<WarehouseSlice> | null): WarehouseSlice | null 
 }
 
 async function loadMap(actorUserId: string) {
-  const loaded = await postIdentityAction('warehouse.get', { actorUserId })
-  if (!loaded.ok || !loaded.data) return loaded
+  const loaded = await hydrateRead(postIdentityAction, 'warehouse.get', { actorUserId })
+  if (!canBootstrapFromRead(loaded) || !loaded.data) return loaded
   const first = sliceFrom(loaded.data as Partial<WarehouseSlice>)
   if (first && first.storageLocations.length > 0) return loaded
   const boot = await postIdentityAction('warehouse.bootstrap', { actorUserId })
-  if (!boot.ok && boot.error?.code !== 'CONFLICT') return boot
-  return postIdentityAction('warehouse.get', { actorUserId })
+  if (!boot.ok) return loaded
+  return hydrateRead(postIdentityAction, 'warehouse.get', { actorUserId })
 }
 
 export function startWarehouseHydration(next: SyncOptions) {
   if (!identityApiUrl()) return
   options = next
   const seen = epoch
-  void (async () => {
+  void enqueueHydrate(async () => {
     try {
       const loaded = await loadMap(options?.actorId() || '')
       if (epoch !== seen) return
       if (!loaded.ok) {
-        next.onError(loaded.error?.message || 'Could not load the warehouse map from the server.')
+        reportLoadError(next, loaded.error?.message || 'Could not load the warehouse map from the server.')
         return
       }
       const slice = sliceFrom(loaded.data as Partial<WarehouseSlice> | null)
       if (slice) options?.apply(slice)
     } catch (error) {
-      next.onError(error instanceof Error ? error.message : 'Could not load the warehouse map from the server.')
+      reportLoadError(next, error instanceof Error ? error.message : 'Could not load the warehouse map from the server.')
     } finally {
       if (epoch === seen) {
         ready = true
@@ -87,7 +89,7 @@ export function startWarehouseHydration(next: SyncOptions) {
         queued.forEach((item) => queueWarehouseWrite(item.action, item.payload))
       }
     }
-  })()
+  })
 }
 
 export function refreshWarehouse() {

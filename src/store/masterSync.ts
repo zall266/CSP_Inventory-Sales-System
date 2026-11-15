@@ -1,5 +1,6 @@
 import { identityApiUrl, postIdentityAction } from '@/api/identityApi'
 import { createSeedData } from '@/data/seed'
+import { canBootstrapFromRead, enqueueHydrate, hydrateRead, reportLoadError } from '@/store/hydrateQueue'
 import type { Category, Warehouse } from '@/types'
 
 type MasterSlice = {
@@ -11,6 +12,7 @@ type SyncOptions = {
   apply: (slice: MasterSlice) => void
   actorId: () => string
   onError: (message: string) => void
+  onLoadError?: (message: string) => void
   onSaved: (action: string, payload: Record<string, unknown>) => void
 }
 
@@ -33,10 +35,14 @@ export function startMasterHydration(next: SyncOptions) {
   if (!identityApiUrl()) return
   options = next
   const seen = epoch
-  void (async () => {
+  void enqueueHydrate(async () => {
     try {
-      const loaded = await postIdentityAction('masters.get', {})
-      if (epoch !== seen || !loaded.ok) return
+      const loaded = await hydrateRead(postIdentityAction, 'masters.get', {})
+      if (epoch !== seen) return
+      if (!canBootstrapFromRead(loaded)) {
+        reportLoadError(next, loaded.error?.message || 'Could not load warehouses and categories from the server.')
+        return
+      }
       const data = loaded.data as { warehouses?: Warehouse[]; categories?: Category[] } | null
       const needsWarehouses = !data?.warehouses?.length
       const needsCategories = !data?.categories?.length
@@ -54,7 +60,7 @@ export function startMasterHydration(next: SyncOptions) {
         if (slice) options?.apply(slice)
       }
     } catch {
-      next.onError('Could not load warehouses and categories from the server.')
+      reportLoadError(next, 'Could not load warehouses and categories from the server.')
     } finally {
       if (epoch === seen) {
         ready = true
@@ -62,7 +68,7 @@ export function startMasterHydration(next: SyncOptions) {
         queued.forEach((item) => queueMasterWrite(item.action, item.payload))
       }
     }
-  })()
+  })
 }
 
 export function queueMasterWrite(action: string, payload: Record<string, unknown>) {
