@@ -15,8 +15,9 @@ test('local overlay is used only when the backend is unset', () => {
   assert.deepEqual(pickReportingOverlay({ data: null, configured: true }, local, { totalSales: 0 }), { totalSales: 0 })
 })
 
-test('FORBIDDEN or missing view permission is denied only when the backend is configured', () => {
-  assert.equal(isReportingDenied({ configured: false, denied: false }, false), false)
+test('missing view permission is always denied; FORBIDDEN is denied when the backend is configured', () => {
+  assert.equal(isReportingDenied({ configured: false, denied: false }, false), true)
+  assert.equal(isReportingDenied({ configured: false, denied: false }, true), false)
   assert.equal(isReportingDenied({ configured: true, denied: false }, true), false)
   assert.equal(isReportingDenied({ configured: true, denied: false }, false), true)
   assert.equal(isReportingDenied({ configured: true, denied: true }, true), true)
@@ -41,4 +42,12 @@ test('dashboard and reports pages gate dashboard.view and reports.view', () => {
   assert.equal(sidebar.includes("dashboard.view"), true)
   assert.equal(sidebar.includes("reports.view"), true)
   assert.equal(pjkm.includes('isReportingDenied'), true)
+})
+
+test('cashier defaults still omit dashboard.view and reports.view', () => {
+  const source = fs.readFileSync(path.join(root, 'src/features/settings/permissions.ts'), 'utf8')
+  const match = source.match(/if \(role === 'cashier'\) \{[\s\S]*?return withKeys\(\[([\s\S]*?)\]\)/)
+  assert.ok(match)
+  assert.equal(match[1].includes('dashboard.view'), false)
+  assert.equal(match[1].includes('reports.view'), false)
 })

@@ -3,7 +3,6 @@ import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxi
 import { Button, Card, FilterRow, KpiCard, PageHeader, Select, Tabs } from '@/components/ui'
 import { PermissionDenied } from '@/features/documents/A4Sheet'
 import { hasPermission } from '@/features/settings/permissions'
-import { identityApiUrl } from '@/api/identityApi'
 import { filteredProductionOrders, useLookups, useStore } from '@/store/hooks'
 import { isReportingDenied, pickReportingNumber } from '@/store/reportingOverlay'
 import { reportingRangePayload, useReportingQuery } from '@/store/reportingSync'
@@ -22,7 +21,7 @@ function ReportToolbar({ onExport }: { onExport: () => void }) {
 export function ManufacturingReportPage() {
   const state = useStore()
   const [tab, setTab] = useState('production')
-  if (identityApiUrl() && !hasPermission(state, 'reports.view')) {
+  if (!hasPermission(state, 'reports.view')) {
     return <PermissionDenied title="Manufacturing Reports" subtitle="You do not have permission to view reports." />
   }
   return (

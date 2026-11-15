@@ -5,7 +5,7 @@ export type ReportingQueryState<T> = {
 }
 
 export function isReportingDenied(query: Pick<ReportingQueryState<unknown>, 'configured' | 'denied'>, permitted: boolean) {
-  return query.configured && (!permitted || query.denied)
+  return !permitted || (query.configured && query.denied)
 }
 
 export function pickReportingOverlay<T>(query: Pick<ReportingQueryState<T>, 'data' | 'configured'>, local: T, empty: T): T {
