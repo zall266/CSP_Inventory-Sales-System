@@ -3,6 +3,8 @@
 **Status of Steps 12–18: OWNER UAT REQUIRED.**  
 Automated evidence is not owner acceptance. This run did **not** execute controlled writes, did **not** deploy Apps Script, did **not** change `PROTOTYPE_TODAY`, and did **not** accept, start, edit, cancel, duplicate, or complete `PROD-20261109-001`. Steps 9–11 remain **PASS / LOCKED**.
 
+Follow-up (15 Nov 2026, 3:29 PM MYT): root-cause plan for live UI vs backend/Sheets is `docs/execution/LIVE_UI_CONSISTENCY_REMEDIATION_PLAN_V1.md`. No behavioural fix was implemented pending owner approval.
+
 Executed: **15 Nov 2026, 2:21–2:43 PM MYT** (Asia/Kuala_Lumpur).  
 Branch: `cursor/owner-uat-automation-d9ac` (from integration `cursor/dev-frontend-github-pages-d9ac` @ `a756a9b`).
 
