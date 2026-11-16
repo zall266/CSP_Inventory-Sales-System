@@ -11,7 +11,8 @@ import {
   PanelLeftOpen,
 } from 'lucide-react'
 import { useApi, useStore } from '@/store/hooks'
-import { formatDate, initials, PROTOTYPE_TODAY } from '@/utils/format'
+import { formatDate, initials } from '@/utils/format'
+import { headerDateLabels } from '@/utils/headerDates'
 import { Dropdown, MenuItem } from '@/components/ui'
 import { currentUser } from '@/features/manufacturing/sessionPlan'
 import { displayRoleName, hasPermission } from '@/features/settings/permissions'
@@ -24,6 +25,7 @@ export function Header() {
   const [query, setQuery] = useState('')
   const [searchOpen, setSearchOpen] = useState(false)
   const searchRef = useRef<HTMLInputElement>(null)
+  const dateLabels = headerDateLabels()
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
@@ -285,7 +287,11 @@ export function Header() {
 
       <div className="hidden items-center gap-2 rounded-xl border border-slate-200 px-3 py-2 text-sm text-slate-600 lg:flex">
         <CalendarDays size={15} className="text-slate-400" />
-        {formatDate(PROTOTYPE_TODAY.toISOString())}
+        <span>Report date · {dateLabels.reportDate}</span>
+      </div>
+      <div className="hidden items-center gap-2 rounded-xl border border-slate-200 px-3 py-2 text-sm text-slate-600 lg:flex">
+        <CalendarDays size={15} className="text-slate-400" />
+        <span>Today · {dateLabels.today}</span>
       </div>
 
       <span className="hidden rounded-full bg-amber-50 px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wide text-amber-700 ring-1 ring-amber-100 sm:inline">
