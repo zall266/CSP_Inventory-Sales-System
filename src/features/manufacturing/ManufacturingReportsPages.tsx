@@ -1,8 +1,12 @@
 import { useMemo, useState } from 'react'
 import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 import { Button, Card, FilterRow, KpiCard, PageHeader, Select, Tabs } from '@/components/ui'
+import { hasPermission } from '@/features/settings/permissions'
 import { filteredProductionOrders, useLookups, useStore } from '@/store/hooks'
+import { ReportingFallback } from '@/store/ReportingFallback'
+import { isReportingFallback, pickReportingNumber, reportingSurface } from '@/store/reportingOverlay'
 import { reportingRangePayload, useReportingQuery } from '@/store/reportingSync'
+import type { ProductionOrder } from '@/types'
 import { downloadCsv, formatDate, formatMoney, formatQty, printPage } from '@/utils/format'
 import { orderWastageQty, wastageKindLabel } from './helpers'
 
@@ -16,14 +20,37 @@ function ReportToolbar({ onExport }: { onExport: () => void }) {
 }
 
 export function ManufacturingReportPage() {
+  const state = useStore()
   const [tab, setTab] = useState('production')
+  const canView = hasPermission(state, 'reports.view')
+  const query = useReportingQuery<{
+    orders?: ProductionOrder[]
+    orderCount: number
+    plannedQty: number
+    actualQty: number
+  }>('reports.manufacturing', reportingRangePayload(state), { enabled: canView })
+  const surface = reportingSurface(query, canView)
+  if (isReportingFallback(surface)) {
+    return (
+      <ReportingFallback
+        surface={surface}
+        title="Manufacturing Reports"
+        deniedSubtitle="You do not have permission to view reports."
+      />
+    )
+  }
+  const orders = (surface === 'demo' ? filteredProductionOrders(state) : query.data?.orders ?? []).map((order) => ({
+    ...order,
+    consumptions: order.consumptions ?? [],
+    wastage: order.wastage ?? [],
+  }))
   return (
     <div>
-      {tab === 'production' && <ProductionReport tab={tab} onTab={setTab} />}
-      {tab === 'consumption' && <ConsumptionReport tab={tab} onTab={setTab} />}
-      {tab === 'wastage' && <WastageReport tab={tab} onTab={setTab} />}
-      {tab === 'finished' && <FinishedGoodsReport tab={tab} onTab={setTab} />}
-      {tab === 'cost' && <CostSummaryReport tab={tab} onTab={setTab} />}
+      {tab === 'production' && <ProductionReport tab={tab} onTab={setTab} orders={orders} query={query} />}
+      {tab === 'consumption' && <ConsumptionReport tab={tab} onTab={setTab} orders={orders} />}
+      {tab === 'wastage' && <WastageReport tab={tab} onTab={setTab} orders={orders} />}
+      {tab === 'finished' && <FinishedGoodsReport tab={tab} onTab={setTab} orders={orders} />}
+      {tab === 'cost' && <CostSummaryReport tab={tab} onTab={setTab} orders={orders} />}
     </div>
   )
 }
@@ -46,25 +73,31 @@ function ReportTabs({ tab, onTab }: { tab: string; onTab: (id: string) => void }
   )
 }
 
-function ProductionReport({ tab, onTab }: { tab: string; onTab: (id: string) => void }) {
-  const state = useStore()
+function ProductionReport({
+  tab,
+  onTab,
+  orders,
+  query,
+}: {
+  tab: string
+  onTab: (id: string) => void
+  orders: ProductionOrder[]
+  query: ReturnType<typeof useReportingQuery<{ orderCount: number; plannedQty: number; actualQty: number }>>
+}) {
   const { productName, warehouseName } = useLookups()
   const [status, setStatus] = useState('all')
-  const orders = filteredProductionOrders(state).filter((o) => status === 'all' || o.status === status)
-  const overlay = useReportingQuery<{ orderCount: number; plannedQty: number; actualQty: number }>(
-    'reports.manufacturing',
-    reportingRangePayload(state),
-  )
+  const visible = orders.filter((o) => status === 'all' || o.status === status)
+  const overlay = query.data
   const chart = useMemo(
-    () => orders.map((o) => ({ name: o.orderNo, planned: o.plannedQty, actual: o.actualQty })),
-    [orders],
+    () => visible.map((o) => ({ name: o.orderNo, planned: o.plannedQty, actual: o.actualQty })),
+    [visible],
   )
   return (
     <div>
       <PageHeader
         title="Manufacturing Reports"
         subtitle="Production, consumption, wastage and finished goods for the selected range."
-        actions={<ReportToolbar onExport={() => downloadCsv('production-report.csv', [['Order', 'Date', 'Product', 'Planned', 'Actual', 'Status'], ...orders.map((o) => [o.orderNo, formatDate(o.date), productName(o.productId), o.plannedQty, o.actualQty, o.status])])} />}
+        actions={<ReportToolbar onExport={() => downloadCsv('production-report.csv', [['Order', 'Date', 'Product', 'Planned', 'Actual', 'Status'], ...visible.map((o) => [o.orderNo, formatDate(o.date), productName(o.productId), o.plannedQty, o.actualQty, o.status])])} />}
       />
       <ReportTabs tab={tab} onTab={onTab} />
       <FilterRow>
@@ -77,9 +110,9 @@ function ProductionReport({ tab, onTab }: { tab: string; onTab: (id: string) => 
         <div /><div /><div />
       </FilterRow>
       <div className="mb-5 grid gap-4 sm:grid-cols-3">
-        <KpiCard label="Orders" value={String(status === 'all' ? overlay?.orderCount ?? orders.length : orders.length)} />
-        <KpiCard label="Planned qty" value={formatQty(status === 'all' ? overlay?.plannedQty ?? orders.reduce((s, o) => s + o.plannedQty, 0) : orders.reduce((s, o) => s + o.plannedQty, 0))} />
-        <KpiCard label="Actual qty" value={formatQty(status === 'all' ? overlay?.actualQty ?? orders.reduce((s, o) => s + o.actualQty, 0) : orders.reduce((s, o) => s + o.actualQty, 0))} />
+        <KpiCard label="Orders" value={String(status === 'all' ? pickReportingNumber(query, overlay?.orderCount, orders.length) : visible.length)} />
+        <KpiCard label="Planned qty" value={formatQty(status === 'all' ? pickReportingNumber(query, overlay?.plannedQty, orders.reduce((s, o) => s + o.plannedQty, 0)) : visible.reduce((s, o) => s + o.plannedQty, 0))} />
+        <KpiCard label="Actual qty" value={formatQty(status === 'all' ? pickReportingNumber(query, overlay?.actualQty, orders.reduce((s, o) => s + o.actualQty, 0)) : visible.reduce((s, o) => s + o.actualQty, 0))} />
       </div>
       <Card className="mb-4 p-5">
         <div className="h-56">
@@ -111,7 +144,7 @@ function ProductionReport({ tab, onTab }: { tab: string; onTab: (id: string) => 
               </tr>
             </thead>
             <tbody>
-              {orders.map((o) => (
+              {visible.map((o) => (
                 <tr key={o.id} className="cursor-default">
                   <td>{o.orderNo}</td>
                   <td>{formatDate(o.date)}</td>
@@ -131,10 +164,8 @@ function ProductionReport({ tab, onTab }: { tab: string; onTab: (id: string) => 
   )
 }
 
-function ConsumptionReport({ tab, onTab }: { tab: string; onTab: (id: string) => void }) {
-  const state = useStore()
+function ConsumptionReport({ tab, onTab, orders }: { tab: string; onTab: (id: string) => void; orders: ProductionOrder[] }) {
   const { productName } = useLookups()
-  const orders = filteredProductionOrders(state)
   const lines = orders.flatMap((o) => o.consumptions.map((c) => ({ order: o, c })))
   return (
     <div>
@@ -174,10 +205,8 @@ function ConsumptionReport({ tab, onTab }: { tab: string; onTab: (id: string) =>
   )
 }
 
-function WastageReport({ tab, onTab }: { tab: string; onTab: (id: string) => void }) {
-  const state = useStore()
+function WastageReport({ tab, onTab, orders }: { tab: string; onTab: (id: string) => void; orders: ProductionOrder[] }) {
   const { productName } = useLookups()
-  const orders = filteredProductionOrders(state)
   const rows = orders.flatMap((o) => o.wastage.map((w) => ({ order: o, w })))
   const total = rows.reduce((s, r) => s + r.w.qty, 0)
   return (
@@ -224,22 +253,21 @@ function WastageReport({ tab, onTab }: { tab: string; onTab: (id: string) => voi
   )
 }
 
-function FinishedGoodsReport({ tab, onTab }: { tab: string; onTab: (id: string) => void }) {
-  const state = useStore()
+function FinishedGoodsReport({ tab, onTab, orders }: { tab: string; onTab: (id: string) => void; orders: ProductionOrder[] }) {
   const { productName, warehouseName } = useLookups()
-  const orders = filteredProductionOrders(state).filter((o) => o.status === 'completed')
+  const completed = orders.filter((o) => o.status === 'completed')
   return (
     <div>
       <PageHeader
         title="Manufacturing Reports"
         subtitle="Finished goods received from production."
-        actions={<ReportToolbar onExport={() => downloadCsv('finished-goods.csv', [['Order', 'Product', 'Batch', 'Actual', 'Warehouse'], ...orders.map((o) => [o.orderNo, productName(o.productId), o.batchNo, o.actualQty, warehouseName(o.warehouseId)])])} />}
+        actions={<ReportToolbar onExport={() => downloadCsv('finished-goods.csv', [['Order', 'Product', 'Batch', 'Actual', 'Warehouse'], ...completed.map((o) => [o.orderNo, productName(o.productId), o.batchNo, o.actualQty, warehouseName(o.warehouseId)])])} />}
       />
       <ReportTabs tab={tab} onTab={onTab} />
       <div className="mb-5 grid gap-4 sm:grid-cols-3">
-        <KpiCard label="Completed runs" value={String(orders.length)} />
-        <KpiCard label="Finished qty" value={formatQty(orders.reduce((s, o) => s + o.actualQty, 0))} />
-        <KpiCard label="Batches" value={String(new Set(orders.map((o) => o.batchNo)).size)} />
+        <KpiCard label="Completed runs" value={String(completed.length)} />
+        <KpiCard label="Finished qty" value={formatQty(completed.reduce((s, o) => s + o.actualQty, 0))} />
+        <KpiCard label="Batches" value={String(new Set(completed.map((o) => o.batchNo)).size)} />
       </div>
       <Card>
         <div className="sf-table-wrap">
@@ -256,7 +284,7 @@ function FinishedGoodsReport({ tab, onTab }: { tab: string; onTab: (id: string) 
               </tr>
             </thead>
             <tbody>
-              {orders.map((o) => (
+              {completed.map((o) => (
                 <tr key={o.id} className="cursor-default">
                   <td>{o.orderNo}</td>
                   <td>{productName(o.productId)}</td>
@@ -275,18 +303,18 @@ function FinishedGoodsReport({ tab, onTab }: { tab: string; onTab: (id: string) 
   )
 }
 
-function CostSummaryReport({ tab, onTab }: { tab: string; onTab: (id: string) => void }) {
+function CostSummaryReport({ tab, onTab, orders }: { tab: string; onTab: (id: string) => void; orders: ProductionOrder[] }) {
   const state = useStore()
   const { productName, warehouseName } = useLookups()
-  const orders = filteredProductionOrders(state).filter((o) => o.status === 'completed')
+  const completed = orders.filter((o) => o.status === 'completed')
   const byProduct = useMemo(() => {
     const map = new Map<string, { qty: number; cost: number }>()
-    for (const o of orders) {
+    for (const o of completed) {
       const cur = map.get(o.productId) ?? { qty: 0, cost: 0 }
       map.set(o.productId, { qty: cur.qty + o.actualQty, cost: cur.cost + o.costEstimate })
     }
     return [...map.entries()].map(([id, v]) => ({ id, ...v, unit: v.qty ? v.cost / v.qty : 0 }))
-  }, [orders])
+  }, [completed])
   return (
     <div>
       <PageHeader
@@ -296,9 +324,9 @@ function CostSummaryReport({ tab, onTab }: { tab: string; onTab: (id: string) =>
       />
       <ReportTabs tab={tab} onTab={onTab} />
       <div className="mb-5 grid gap-4 sm:grid-cols-3">
-        <KpiCard label="Total production cost" value={formatMoney(orders.reduce((s, o) => s + o.costEstimate, 0), { compact: true })} />
-        <KpiCard label="Finished qty" value={formatQty(orders.reduce((s, o) => s + o.actualQty, 0))} />
-        <KpiCard label="Avg cost / unit" value={formatMoney(orders.reduce((s, o) => s + o.actualQty, 0) ? orders.reduce((s, o) => s + o.costEstimate, 0) / orders.reduce((s, o) => s + o.actualQty, 0) : 0)} />
+        <KpiCard label="Total production cost" value={formatMoney(completed.reduce((s, o) => s + o.costEstimate, 0), { compact: true })} />
+        <KpiCard label="Finished qty" value={formatQty(completed.reduce((s, o) => s + o.actualQty, 0))} />
+        <KpiCard label="Avg cost / unit" value={formatMoney(completed.reduce((s, o) => s + o.actualQty, 0) ? completed.reduce((s, o) => s + o.costEstimate, 0) / completed.reduce((s, o) => s + o.actualQty, 0) : 0)} />
       </div>
       <Card>
         <div className="sf-table-wrap">

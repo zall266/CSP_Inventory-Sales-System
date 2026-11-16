@@ -184,6 +184,8 @@ function pathActive(pathname: string, to: string) {
 }
 
 function navItemVisible(state: ReturnType<typeof useStore>, item: NavItem) {
+  if (item.to === '/') return hasPermission(state, 'dashboard.view')
+  if (item.to.startsWith('/reports/')) return hasPermission(state, 'reports.view')
   if (item.to === '/settings/users') return canAccessUsersAndRoles(state, actorUser(state))
   if (item.to === '/inventory/warehouse-map') return hasPermission(state, 'warehouse_map.view')
   if (item.to === '/inventory/opening-balance') return hasPermission(state, 'opening_balance.view')

@@ -1,11 +1,12 @@
 import { Fragment, useMemo } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { Button } from '@/components/ui'
-import { PermissionDenied } from '@/features/documents/A4Sheet'
+import { ReportingFallback } from '@/store/ReportingFallback'
 import { PJKM_911, PJKM_911_DETAILS, buildPjkm911, pjkm911DetailValue, pjkm911Widths, type Pjkm911Page as Page } from '@/features/pjkm/pjkm911'
 import { currentUser } from '@/features/manufacturing/sessionPlan'
 import { hasPermission } from '@/features/settings/permissions'
 import { useStore } from '@/store/hooks'
+import { isReportingFallback, pickReportingOverlay, reportingSurface } from '@/store/reportingOverlay'
 import { useReportingQuery } from '@/store/reportingSync'
 import { PROTOTYPE_TODAY, systemDateKey } from '@/utils/format'
 import './pjkm911.css'
@@ -19,8 +20,14 @@ export function Pjkm911PreviewPage() {
     () => buildPjkm911({ month, dispatches: state.dispatches ?? [], groups: state.inspectionGroups ?? [] }),
     [month, state.dispatches, state.inspectionGroups],
   )
-  const report = useReportingQuery<typeof local>('pjkm.911', { actorUserId: currentUser(state).id, month }) ?? local
-  if (!hasPermission(state, 'receiving.view')) return <PermissionDenied title="PJKM Records" subtitle="You do not have permission to view receiving." />
+  const empty = useMemo(() => buildPjkm911({ month, dispatches: [], groups: [] }), [month])
+  const canView = hasPermission(state, 'receiving.view')
+  const query = useReportingQuery<typeof local>('pjkm.911', { actorUserId: currentUser(state).id, month }, { enabled: canView })
+  const report = pickReportingOverlay(query, local, empty)
+  const surface = reportingSurface(query, canView)
+  if (isReportingFallback(surface)) {
+    return <ReportingFallback surface={surface} title="PJKM Records" deniedSubtitle="You do not have permission to view receiving." />
+  }
   const filename = `MGT-09_REKOD-9.1.1_PEMERIKSAAN-KENDERAAN_${month}.pdf`
   return (
     <div className="pjkm911-root min-h-screen bg-slate-200">

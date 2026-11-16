@@ -3,6 +3,7 @@ import { identityApiUrl, postIdentityAction } from '@/api/identityApi'
 import { currentUser } from '@/features/manufacturing/sessionPlan'
 import type { AppState } from '@/types'
 import { PROTOTYPE_TODAY, systemDateKey } from '@/utils/format'
+import type { ReportingQueryState, ReportingStatus } from '@/store/reportingOverlay'
 
 export function reportingRangePayload(state: AppState) {
   return {
@@ -15,28 +16,54 @@ export function reportingRangePayload(state: AppState) {
   }
 }
 
-export function useReportingQuery<T>(action: string, payload: Record<string, unknown>) {
+export function useReportingQuery<T>(
+  action: string,
+  payload: Record<string, unknown>,
+  options?: { enabled?: boolean },
+): ReportingQueryState<T> {
+  const configured = Boolean(identityApiUrl())
+  const enabled = options?.enabled ?? true
   const serialized = JSON.stringify(payload)
   const [data, setData] = useState<T | null>(null)
+  const [denied, setDenied] = useState(false)
+  const [status, setStatus] = useState<ReportingStatus>(configured && enabled ? 'loading' : 'idle')
   useEffect(() => {
-    if (!identityApiUrl()) {
+    if (!configured || !enabled) {
       setData(null)
+      setDenied(false)
+      setStatus('idle')
       return
     }
     let cancelled = false
+    setStatus('loading')
+    setData(null)
+    setDenied(false)
     const body = JSON.parse(serialized) as Record<string, unknown>
     void (async () => {
       try {
         const result = await postIdentityAction(action, body)
-        if (cancelled || !result.ok || !result.data) return
-        setData(result.data as T)
+        if (cancelled) return
+        if (!result.ok) {
+          const forbidden = result.error?.code === 'FORBIDDEN'
+          setDenied(forbidden)
+          setData(null)
+          setStatus(forbidden ? 'denied' : 'error')
+          return
+        }
+        setDenied(false)
+        setData((result.data as T) ?? null)
+        setStatus('ok')
       } catch {
-        // Keep the local page math when the read API is unavailable.
+        if (!cancelled) {
+          setDenied(false)
+          setData(null)
+          setStatus('error')
+        }
       }
     })()
     return () => {
       cancelled = true
     }
-  }, [action, serialized])
-  return data
+  }, [action, serialized, configured, enabled])
+  return { data, denied, configured, status }
 }

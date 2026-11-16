@@ -2,7 +2,10 @@ import { useMemo, useState } from 'react'
 import { Bar, BarChart, CartesianGrid, Cell, Pie, PieChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 import { Button, Card, FilterRow, KpiCard, PageHeader, Select } from '@/components/ui'
 import { isCompanyWarehouseId } from '@/features/agent/agentModel'
+import { hasPermission } from '@/features/settings/permissions'
 import { filteredExpenses, filteredPurchases, filteredSales, inventoryValue, saleCogs, useLookups, useStore } from '@/store/hooks'
+import { ReportingFallback } from '@/store/ReportingFallback'
+import { isReportingFallback, pickReportingNumber, pickReportingOverlay, reportingSurface } from '@/store/reportingOverlay'
 import { reportingRangePayload, useReportingQuery } from '@/store/reportingSync'
 import { downloadCsv, formatDate, formatMoney, formatQty, printPage, round2 } from '@/utils/format'
 
@@ -22,22 +25,37 @@ export function SalesReportPage() {
   const { customerName, product } = useLookups()
   const [categoryId, setCategoryId] = useState('all')
   const sales = filteredSales(state)
-  const overlay = useReportingQuery<{ invoices: number; revenue: number; averageTicket: number }>('reports.sales', reportingRangePayload(state))
-  const invoices = overlay?.invoices ?? sales.length
-  const revenue = overlay?.revenue ?? sales.reduce((s, x) => s + x.total, 0)
-  const averageTicket = overlay?.averageTicket ?? (sales.length ? sales.reduce((s, x) => s + x.total, 0) / sales.length : 0)
-  const rows = sales.flatMap((s) => s.items.map((item) => ({ sale: s, item }))).filter(({ item }) => {
+  const canView = hasPermission(state, 'reports.view')
+  const query = useReportingQuery<{
+    invoices: number
+    revenue: number
+    averageTicket: number
+    sales?: Array<{ id: string; invoiceNo: string; date: string; customerId: string; customerName?: string; total: number }>
+  }>('reports.sales', reportingRangePayload(state), { enabled: canView })
+  const overlay = query.data
+  const surface = reportingSurface(query, canView)
+  const fallback = <ReportingFallback surface={surface} title="Sales Reports" deniedSubtitle="You do not have permission to view reports." />
+  const useLocal = surface === 'demo'
+  const reportSales = useLocal ? sales : overlay?.sales ?? []
+  const invoices = pickReportingNumber(query, overlay?.invoices, sales.length)
+  const revenue = pickReportingNumber(query, overlay?.revenue, sales.reduce((s, x) => s + x.total, 0))
+  const averageTicket = pickReportingNumber(query, overlay?.averageTicket, sales.length ? sales.reduce((s, x) => s + x.total, 0) / sales.length : 0)
+  const rows = (useLocal ? sales : []).flatMap((s) => s.items.map((item) => ({ sale: s, item }))).filter(({ item }) => {
     if (categoryId === 'all') return true
     return product(item.productId)?.categoryId === categoryId
   })
   const chart = useMemo(() => {
+    if (!useLocal) {
+      return reportSales.slice(0, 12).map((sale) => ({ name: sale.invoiceNo, total: sale.total }))
+    }
     const map = new Map<string, number>()
     for (const { sale } of rows) map.set(sale.invoiceNo, sale.total)
     return [...map.entries()].slice(0, 12).map(([name, total]) => ({ name, total }))
-  }, [rows])
+  }, [rows, reportSales, useLocal])
+  if (isReportingFallback(surface)) return fallback
   return (
     <div>
-      <PageHeader title="Sales Reports" subtitle="Invoice performance for the selected range." actions={<ReportToolbar onExport={() => downloadCsv('sales-report.csv', [['Invoice','Date','Customer','Total'], ...sales.map((s) => [s.invoiceNo, formatDate(s.date), customerName(s.customerId), s.total])])} />} />
+      <PageHeader title="Sales Reports" subtitle="Invoice performance for the selected range." actions={<ReportToolbar onExport={() => downloadCsv('sales-report.csv', [['Invoice','Date','Customer','Total'], ...reportSales.map((s) => [s.invoiceNo, formatDate(s.date), customerName(s.customerId), s.total])])} />} />
       <FilterRow>
         <Select value={categoryId} onChange={(e) => setCategoryId(e.target.value)}>
           <option value="all">All categories</option>
@@ -68,7 +86,7 @@ export function SalesReportPage() {
           <table>
             <thead><tr><th>Invoice</th><th>Date</th><th>Customer</th><th>Total</th></tr></thead>
             <tbody>
-              {sales.map((s) => (
+              {reportSales.map((s) => (
                 <tr key={s.id} className="cursor-default">
                   <td>{s.invoiceNo}</td>
                   <td>{formatDate(s.date)}</td>
@@ -88,13 +106,24 @@ export function PurchaseReportPage() {
   const state = useStore()
   const { supplierName } = useLookups()
   const purchases = filteredPurchases(state)
-  const overlay = useReportingQuery<{ documents: number; spend: number; unpaid: number }>('reports.purchases', reportingRangePayload(state))
-  const documents = overlay?.documents ?? purchases.length
-  const spend = overlay?.spend ?? purchases.reduce((s, p) => s + p.total, 0)
-  const unpaid = overlay?.unpaid ?? purchases.reduce((s, p) => s + p.balance, 0)
+  const canView = hasPermission(state, 'reports.view')
+  const query = useReportingQuery<{
+    documents: number
+    spend: number
+    unpaid: number
+    purchases?: Array<{ id: string; purchaseNo: string; date: string; supplierId: string; supplierName?: string; total: number; balance: number }>
+  }>('reports.purchases', reportingRangePayload(state), { enabled: canView })
+  const overlay = query.data
+  const surface = reportingSurface(query, canView)
+  const fallback = <ReportingFallback surface={surface} title="Purchase Reports" deniedSubtitle="You do not have permission to view reports." />
+  const reportPurchases = surface === 'demo' ? purchases : overlay?.purchases ?? []
+  const documents = pickReportingNumber(query, overlay?.documents, purchases.length)
+  const spend = pickReportingNumber(query, overlay?.spend, purchases.reduce((s, p) => s + p.total, 0))
+  const unpaid = pickReportingNumber(query, overlay?.unpaid, purchases.reduce((s, p) => s + p.balance, 0))
+  if (isReportingFallback(surface)) return fallback
   return (
     <div>
-      <PageHeader title="Purchase Reports" subtitle="Supplier spend for the selected range." actions={<ReportToolbar onExport={() => downloadCsv('purchase-report.csv', [['Purchase','Date','Supplier','Total'], ...purchases.map((p) => [p.purchaseNo, formatDate(p.date), supplierName(p.supplierId), p.total])])} />} />
+      <PageHeader title="Purchase Reports" subtitle="Supplier spend for the selected range." actions={<ReportToolbar onExport={() => downloadCsv('purchase-report.csv', [['Purchase','Date','Supplier','Total'], ...reportPurchases.map((p) => [p.purchaseNo, formatDate(p.date), 'supplierName' in p && p.supplierName ? p.supplierName : supplierName(p.supplierId), p.total])])} />} />
       <div className="mb-5 grid gap-4 sm:grid-cols-3">
         <KpiCard label="Documents" value={String(documents)} />
         <KpiCard label="Spend" value={formatMoney(spend, { compact: true })} />
@@ -105,11 +134,11 @@ export function PurchaseReportPage() {
           <table>
             <thead><tr><th>Purchase</th><th>Date</th><th>Supplier</th><th>Total</th><th>Balance</th></tr></thead>
             <tbody>
-              {purchases.map((p) => (
+              {reportPurchases.map((p) => (
                 <tr key={p.id} className="cursor-default">
                   <td>{p.purchaseNo}</td>
                   <td>{formatDate(p.date)}</td>
-                  <td>{supplierName(p.supplierId)}</td>
+                  <td>{'supplierName' in p && p.supplierName ? p.supplierName : supplierName(p.supplierId)}</td>
                   <td>{formatMoney(p.total)}</td>
                   <td>{formatMoney(p.balance)}</td>
                 </tr>
@@ -131,7 +160,8 @@ export function InventoryReportPage() {
       ? isCompanyWarehouseId(state.warehouses, r.warehouseId)
       : r.warehouseId === warehouse,
   )
-  const overlay = useReportingQuery<{
+  const canView = hasPermission(state, 'reports.view')
+  const query = useReportingQuery<{
     rows: Array<{
       productId: string
       productName: string
@@ -144,9 +174,9 @@ export function InventoryReportPage() {
       value: number
     }>
     inventoryValue: number
-  }>('reports.inventory', reportingRangePayload(state))
-  const value = overlay?.inventoryValue ?? inventoryValue(state, warehouse)
-  const rows = overlay?.rows ?? localRows.flatMap((r) => {
+  }>('reports.inventory', reportingRangePayload(state), { enabled: canView })
+  const overlay = query.data
+  const localMapped = localRows.flatMap((r) => {
     const p = state.products.find((x) => x.id === r.productId)
     if (!p) return []
     return [{
@@ -161,6 +191,11 @@ export function InventoryReportPage() {
       value: r.qty * p.costPrice,
     }]
   })
+  const value = pickReportingNumber(query, overlay?.inventoryValue, inventoryValue(state, warehouse))
+  const rows = pickReportingOverlay({ data: overlay?.rows ?? null, configured: query.configured, status: query.status }, localMapped, [])
+  const surface = reportingSurface(query, canView)
+  const fallback = <ReportingFallback surface={surface} title="Inventory Reports" deniedSubtitle="You do not have permission to view reports." />
+  if (isReportingFallback(surface)) return fallback
   return (
     <div>
       <PageHeader title="Inventory Reports" subtitle="On-hand quantity and inventory value." actions={<ReportToolbar onExport={() => downloadCsv('inventory-report.csv', [['Product','Warehouse','Qty','Value'], ...rows.map((r) => [r.productName, r.warehouseName, r.qty, r.value])])} />} />
@@ -191,20 +226,25 @@ export function ProfitReportPage() {
   const state = useStore()
   const sales = filteredSales(state)
   const expenses = filteredExpenses(state)
-  const overlay = useReportingQuery<{
+  const canView = hasPermission(state, 'reports.view')
+  const query = useReportingQuery<{
     revenue: number
     cogs: number
     grossProfit: number
     grossMargin: number
     expenses: number
     netProfit: number
-  }>('reports.profit', reportingRangePayload(state))
-  const revenue = overlay?.revenue ?? round2(sales.reduce((s, x) => s + x.total, 0))
-  const cogs = overlay?.cogs ?? round2(sales.reduce((s, x) => s + saleCogs(state, x), 0))
-  const gross = overlay?.grossProfit ?? round2(revenue - cogs)
-  const expenseTotal = overlay?.expenses ?? round2(expenses.reduce((s, e) => s + e.amount, 0))
-  const net = overlay?.netProfit ?? round2(gross - expenseTotal)
-  const margin = overlay?.grossMargin ?? (revenue ? (gross / revenue) * 100 : 0)
+  }>('reports.profit', reportingRangePayload(state), { enabled: canView })
+  const overlay = query.data
+  const revenue = pickReportingNumber(query, overlay?.revenue, round2(sales.reduce((s, x) => s + x.total, 0)))
+  const cogs = pickReportingNumber(query, overlay?.cogs, round2(sales.reduce((s, x) => s + saleCogs(state, x), 0)))
+  const gross = pickReportingNumber(query, overlay?.grossProfit, round2(revenue - cogs))
+  const expenseTotal = pickReportingNumber(query, overlay?.expenses, round2(expenses.reduce((s, e) => s + e.amount, 0)))
+  const net = pickReportingNumber(query, overlay?.netProfit, round2(gross - expenseTotal))
+  const margin = pickReportingNumber(query, overlay?.grossMargin, revenue ? (gross / revenue) * 100 : 0)
+  const surface = reportingSurface(query, canView)
+  const fallback = <ReportingFallback surface={surface} title="Profit Reports" deniedSubtitle="You do not have permission to view reports." />
+  if (isReportingFallback(surface)) return fallback
   const pie = [
     { name: 'COGS', value: cogs },
     { name: 'Expenses', value: expenseTotal },
