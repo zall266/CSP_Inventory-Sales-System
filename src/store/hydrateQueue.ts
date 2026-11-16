@@ -34,7 +34,12 @@ export function canBootstrapFromRead(result: ActionEnvelope): boolean {
   return result.ok === true && !isLockContention(result.error)
 }
 
+export function isPermissionDeniedLoad(message: string | undefined | null) {
+  return /do not have permission/i.test(message || '')
+}
+
 export function reportLoadError(handlers: LoadErrorHandlers, message: string) {
+  if (isPermissionDeniedLoad(message)) return
   ;(handlers.onLoadError || handlers.onError)(message)
 }
 

@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
-import { Badge, Button, Card, Field, Modal, PageHeader, StatusBadge } from '@/components/ui'
+import { Badge, Button, Card, Modal, PageHeader, StatusBadge } from '@/components/ui'
 import { ProductMark } from '@/components/ProductMark'
 import { useApi, useLookups, useStore } from '@/store/hooks'
 import { formatCalendarDate, formatDate, formatDateTime, formatQty } from '@/utils/format'
@@ -9,18 +9,9 @@ import { hasPermission } from '@/features/settings/permissions'
 import { allocationLabel, sessionAllocatedQty } from './materialClosing'
 import { formatUnit } from '@/features/products/masterData'
 import { AmendPlanModal, CancelPlanDialog, EditPlannedModal, planActionFlags } from './planAmendment'
-import { buildSessionPlan, canEditSession, currentUser, isSessionOperationalToday, originSessionForLine, systemProductionDate, todayOperationalSession } from './sessionPlan'
-
-const SAMPLE_SHEET =
-  'data:image/svg+xml;utf8,' +
-  encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" width="640" height="400">
-  <rect width="100%" height="100%" fill="#f8fafc"/>
-  <rect x="24" y="24" width="592" height="352" fill="white" stroke="#cbd5e1" rx="12"/>
-  <text x="48" y="80" font-family="sans-serif" font-size="22" fill="#0f172a">CSP Process Room Recipe Sheet</text>
-  <text x="48" y="120" font-family="sans-serif" font-size="14" fill="#64748b">10 Sep 2026 · Matcha / Chocolate Lava / Strawberry</text>
-  <text x="48" y="170" font-family="sans-serif" font-size="16" fill="#334155">Evidence photo only — BOM in StockFlow is the source of requirements.</text>
-  <text x="48" y="220" font-family="sans-serif" font-size="14" fill="#64748b">Posted on process-room mirror</text>
-</svg>`)
+import { RecipeSheetUpload } from './RecipeSheetUpload'
+import { canStartProductionWithPhoto, isSampleRecipePhoto } from './recipePhoto'
+import { buildSessionPlan, canEditSession, canStartAcceptedSession, currentUser, isSessionOperationalToday, originSessionForLine, systemProductionDate, todayOperationalSession } from './sessionPlan'
 
 function todaySession(sessions: ProductionSession[], date = systemProductionDate()) {
   return todayOperationalSession(sessions, date)
@@ -72,18 +63,36 @@ function SessionWorkspace({ session }: { session: ProductionSession }) {
   const flags = planActionFlags(state, session)
 
   const [startOpen, setStartOpen] = useState(false)
-  const [photo, setPhoto] = useState(session.recipePhoto)
-  const [photoName, setPhotoName] = useState(session.recipePhotoName)
+  const [photo, setPhoto] = useState(isSampleRecipePhoto(session.recipePhoto) ? '' : session.recipePhoto)
+  const [photoName, setPhotoName] = useState(isSampleRecipePhoto(session.recipePhoto) ? '' : session.recipePhotoName)
+  const [starting, setStarting] = useState(false)
+  const [startError, setStartError] = useState('')
   const [editPlan, setEditPlan] = useState(false)
   const [cancelPlan, setCancelPlan] = useState(false)
   const [amendPlan, setAmendPlan] = useState(false)
+  const canStart = canStartAcceptedSession(user, session)
+  const photoReady = canStartProductionWithPhoto(photo, photoName)
 
   const start = () => {
+    if (starting) return
+    if (!canStart) {
+      setStartError('Only the staff member who accepted this session can start production.')
+      return
+    }
+    if (!photoReady) {
+      setStartError('Upload a real recipe sheet photo before starting production.')
+      return
+    }
+    setStarting(true)
+    setStartError('')
     const ok = api.startSession(session.id, { recipePhoto: photo, recipePhotoName: photoName || 'recipe-sheet.jpg' })
+    setStarting(false)
     if (ok) {
       setStartOpen(false)
       navigate('/manufacturing/picking')
+      return
     }
+    setStartError('Production did not start. The selected photo is still here — try Start production again.')
   }
 
   return (
@@ -97,7 +106,7 @@ function SessionWorkspace({ session }: { session: ProductionSession }) {
             {flags.canCancel && <Button variant="secondary" onClick={() => setCancelPlan(true)}>Delete / Cancel</Button>}
             {flags.canAmend && <Button variant="secondary" onClick={() => setAmendPlan(true)}>Amend Plan</Button>}
             {session.status === 'planned' && canEdit && <Button onClick={() => api.acceptSession(session.id)}>Accept production</Button>}
-            {session.status === 'accepted' && canEdit && <Button onClick={() => setStartOpen(true)}>Start production</Button>}
+            {session.status === 'accepted' && canStart && <Button onClick={() => { setStartError(''); setStartOpen(true) }}>Start production</Button>}
             <Link to={`/manufacturing/history/${session.id}`}><Button variant="secondary">View production details</Button></Link>
             {session.status === 'in_progress' && canEdit && (
               <>
@@ -125,7 +134,7 @@ function SessionWorkspace({ session }: { session: ProductionSession }) {
         <Meta label="Accepted by" value={session.acceptedBy || '—'} />
         <Meta label="Started by" value={session.startedBy || '—'} />
         <Meta label="Completed by" value={session.completedBy || '—'} />
-        <Meta label="Recipe photo" value={session.recipePhotoName || 'Not uploaded'} />
+        <Meta label="Recipe photo" value={isSampleRecipePhoto(session.recipePhoto) ? 'Not uploaded' : session.recipePhotoName || 'Not uploaded'} />
       </div>
 
       <Card className="mb-5">
@@ -262,32 +271,23 @@ function SessionWorkspace({ session }: { session: ProductionSession }) {
         </Card>
       )}
 
-      <Modal open={startOpen} onClose={() => setStartOpen(false)} title="Start production" width="max-w-lg">
-        <p className="mb-3 text-sm text-slate-600">Upload a photo of the physical recipe sheet on the process-room mirror. This is evidence only — material requirements still come from the configured BOM.</p>
-        <Field label="Recipe sheet photo">
-          <input
-            type="file"
-            accept="image/*"
-            className="block w-full text-sm"
-            onChange={(event) => {
-              const file = event.target.files?.[0]
-              if (!file) return
-              const reader = new FileReader()
-              reader.onload = () => {
-                setPhoto(String(reader.result))
-                setPhotoName(file.name)
-              }
-              reader.readAsDataURL(file)
-            }}
-          />
-        </Field>
-        <Button className="mt-3" size="sm" variant="secondary" onClick={() => { setPhoto(SAMPLE_SHEET); setPhotoName('process-room-recipe-sheet.jpg') }}>
-          Use sample recipe sheet
-        </Button>
-        {photo && <img src={photo} alt="Recipe sheet" className="mt-3 max-h-48 rounded-xl border border-slate-200" />}
-        <div className="mt-5 flex justify-end gap-2">
-          <Button variant="secondary" onClick={() => setStartOpen(false)}>Cancel</Button>
-          <Button disabled={!photo} onClick={start}>Start production</Button>
+      <Modal open={startOpen} onClose={() => { if (!starting) setStartOpen(false) }} title="Start production" width="max-w-lg">
+        <RecipeSheetUpload
+          photo={photo}
+          photoName={photoName}
+          busy={starting}
+          onChange={(nextPhoto, nextName) => {
+            setPhoto(nextPhoto)
+            setPhotoName(nextName)
+            setStartError('')
+          }}
+        />
+        {startError ? <div className="mt-3 rounded-xl bg-rose-50 px-3 py-2 text-sm text-rose-700">{startError}</div> : null}
+        <div className="mt-5 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+          <Button variant="secondary" disabled={starting} onClick={() => setStartOpen(false)}>Cancel</Button>
+          <Button disabled={!photoReady || starting} onClick={start}>
+            {starting ? 'Starting…' : 'Start production'}
+          </Button>
         </div>
       </Modal>
       {editPlan && <EditPlannedModal session={session} open onClose={() => setEditPlan(false)} />}
