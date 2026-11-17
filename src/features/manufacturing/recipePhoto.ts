@@ -269,6 +269,9 @@ export type RecipePhotoLoadResult = {
 
 type RecipePhotoFetcher = (sessionId: string, actorUserId: string) => Promise<RecipePhotoEnvelope>
 
+/** In-memory LRU of decoded recipe photos. 2 entries ≈ 13 MB of Base64; refresh still hits the backend. */
+export const RECIPE_PHOTO_CACHE_MAX = 2
+
 const recipePhotoCache = new Map<string, RecipePhotoPayload>()
 
 export function recipePhotoCacheKey(sessionId: string, recipePhoto: string) {
@@ -279,12 +282,43 @@ export function clearRecipePhotoCache() {
   recipePhotoCache.clear()
 }
 
+export function recipePhotoCacheSize() {
+  return recipePhotoCache.size
+}
+
+export function recipePhotoCacheKeys() {
+  return Array.from(recipePhotoCache.keys())
+}
+
 export function peekRecipePhotoCache(sessionId: string, recipePhoto: string) {
   return recipePhotoCache.get(recipePhotoCacheKey(sessionId, recipePhoto))
 }
 
+function takeRecipePhotoCache(sessionId: string, recipePhoto: string) {
+  const key = recipePhotoCacheKey(sessionId, recipePhoto)
+  const cached = recipePhotoCache.get(key)
+  if (!cached) return undefined
+  recipePhotoCache.delete(key)
+  recipePhotoCache.set(key, cached)
+  return cached
+}
+
+function evictRecipePhotoCacheOverflow() {
+  while (recipePhotoCache.size > RECIPE_PHOTO_CACHE_MAX) {
+    const oldest = recipePhotoCache.keys().next().value
+    if (!oldest) break
+    recipePhotoCache.delete(oldest)
+  }
+}
+
 export function storeRecipePhotoCache(sessionId: string, recipePhoto: string, payload: RecipePhotoPayload) {
-  recipePhotoCache.set(recipePhotoCacheKey(sessionId, recipePhoto), payload)
+  const key = recipePhotoCacheKey(sessionId, recipePhoto)
+  const prefix = `${sessionId}::`
+  for (const existing of Array.from(recipePhotoCache.keys())) {
+    if (existing.startsWith(prefix)) recipePhotoCache.delete(existing)
+  }
+  recipePhotoCache.set(key, payload)
+  evictRecipePhotoCacheOverflow()
 }
 
 export function shouldFetchStoredRecipePhoto(value: string | undefined | null) {
@@ -317,11 +351,15 @@ export async function fetchSessionRecipePhoto(
     error: { code: string; message: string } | null
   }>,
 ): Promise<RecipePhotoEnvelope> {
-  const result = await postAction(RECIPE_PHOTO_GET_ACTION, { actorUserId, id: sessionId })
-  if (!result.ok) return { ok: false, data: null, error: result.error }
-  const payload = parseRecipePhotoPayload(result.data)
-  if (!payload) return { ok: false, data: null, error: { code: 'NOT_FOUND', message: RECIPE_PHOTO_MISSING } }
-  return { ok: true, data: payload, error: null }
+  try {
+    const result = await postAction(RECIPE_PHOTO_GET_ACTION, { actorUserId, id: sessionId })
+    if (!result.ok) return { ok: false, data: null, error: result.error }
+    const payload = parseRecipePhotoPayload(result.data)
+    if (!payload) return { ok: false, data: null, error: { code: 'NOT_FOUND', message: RECIPE_PHOTO_MISSING } }
+    return { ok: true, data: payload, error: null }
+  } catch {
+    return { ok: false, data: null, error: { code: 'INTERNAL_ERROR', message: RECIPE_PHOTO_LOAD_ERROR } }
+  }
 }
 
 export async function loadStoredRecipePhoto(options: {
@@ -336,9 +374,15 @@ export async function loadStoredRecipePhoto(options: {
   if (!shouldFetchStoredRecipePhoto(recipePhoto)) {
     return { requestId, status: 'missing', error: RECIPE_PHOTO_MISSING }
   }
-  const cached = peekRecipePhotoCache(sessionId, recipePhoto)
+  const cached = takeRecipePhotoCache(sessionId, recipePhoto)
   if (cached) return { requestId, status: 'ready', payload: cached }
-  const result = await fetchPhoto(sessionId, actorUserId)
+  let result: RecipePhotoEnvelope
+  try {
+    result = await fetchPhoto(sessionId, actorUserId)
+  } catch {
+    if (!isCurrent(requestId)) return { requestId, status: 'error', error: RECIPE_PHOTO_LOAD_ERROR }
+    return { requestId, status: 'error', error: RECIPE_PHOTO_LOAD_ERROR }
+  }
   if (!isCurrent(requestId)) return { requestId, status: 'error', error: RECIPE_PHOTO_LOAD_ERROR }
   if (!result.ok || !result.data) {
     const code = result.error?.code

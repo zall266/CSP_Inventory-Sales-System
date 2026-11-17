@@ -809,7 +809,28 @@ function setSessionPhotoField(backend, sessionId, photo, photoName) {
   }
 }
 
-function putDriveFile(backend, mime, bytes, name) {
+function getSessionPhotoField(backend, sessionId) {
+  const rows = backend.spreadsheet.store.ProductionSessions
+  const headers = rows[0]
+  const idIdx = headers.indexOf('id')
+  const photoIdx = headers.indexOf('recipePhoto')
+  const nameIdx = headers.indexOf('recipePhotoName')
+  for (let i = 1; i < rows.length; i += 1) {
+    if (String(rows[i][idIdx]) === sessionId) {
+      return { recipePhoto: rows[i][photoIdx], recipePhotoName: rows[i][nameIdx] }
+    }
+  }
+  return null
+}
+
+function recipePhotosFolder(backend) {
+  const existing = backend.drive.folder.getFoldersByName('RecipePhotos')
+  if (existing.hasNext()) return existing.next()
+  return backend.drive.folder.createFolder('RecipePhotos')
+}
+
+function putDriveFile(backend, mime, bytes, name, parent) {
+  const folder = parent || recipePhotosFolder(backend)
   const id = `recipefile${String(name).replace(/\W/g, '')}XXXXXXXXXX`
   const file = {
     getId: () => id,
@@ -819,13 +840,23 @@ function putDriveFile(backend, mime, bytes, name) {
       getContentType: () => mime,
       getBytes: () => bytes,
     }),
+    getParents: () => {
+      let remaining = 1
+      return {
+        hasNext: () => remaining > 0,
+        next: () => {
+          remaining -= 1
+          return folder
+        },
+      }
+    },
   }
   const previous = backend.drive.getFileById.bind(backend.drive)
   backend.drive.getFileById = (wanted) => {
     if (wanted === id) return file
     return previous(wanted)
   }
-  return { id, name }
+  return { id, name, folder }
 }
 
 function startAcceptedSession(backend, session, photo = RECIPE_PHOTO) {
@@ -1020,6 +1051,68 @@ test('sessions.getRecipePhoto returns a legacy valid data URL and leaves list/ge
   })
   assert.equal(cashierStart.ok, false)
   assert.equal(cashierStart.error.code, 'FORBIDDEN')
+})
+
+test('sessions.getRecipePhoto rejects files outside RecipePhotos and does not rewrite the session', () => {
+  const backend = ready()
+  const { session } = seedDailySession(backend)
+  startAcceptedSession(backend, session)
+  const uploaded = putDriveFile(backend, 'image/png', pngBytes(), 'recipe.png')
+  setSessionPhotoField(backend, session.id, uploaded.id, 'recipe.png')
+  const inside = call(backend, 'sessions.getRecipePhoto', { actorUserId: 'u-aina', id: session.id })
+  assert.equal(inside.ok, true, inside.error && inside.error.message)
+  assert.equal(inside.data.mimeType, 'image/png')
+  assert.equal(inside.data.productionSessions, undefined)
+
+  const otherFolder = backend.drive.folder.createFolder('ProductImages')
+  const other = putDriveFile(backend, 'image/png', pngBytes(), 'other.png', otherFolder)
+  setSessionPhotoField(backend, session.id, other.id, 'other.png')
+  const beforeOther = getSessionPhotoField(backend, session.id)
+  const misplaced = call(backend, 'sessions.getRecipePhoto', { actorUserId: 'u-aina', id: session.id })
+  assert.equal(misplaced.ok, false)
+  assert.equal(misplaced.error.code, 'NOT_FOUND')
+  assert.equal(misplaced.error.message, 'Recipe photo was not found.')
+  assert.equal(getSessionPhotoField(backend, session.id).recipePhoto, beforeOther.recipePhoto)
+
+  const foreign = { getId: () => 'foreign-root', getName: () => 'Other Drive' }
+  const outside = putDriveFile(backend, 'image/png', pngBytes(), 'outside.png', foreign)
+  setSessionPhotoField(backend, session.id, outside.id, 'outside.png')
+  const beforeOutside = getSessionPhotoField(backend, session.id)
+  const foreignPhoto = call(backend, 'sessions.getRecipePhoto', { actorUserId: 'u-aina', id: session.id })
+  assert.equal(foreignPhoto.ok, false)
+  assert.equal(foreignPhoto.error.code, 'NOT_FOUND')
+  assert.equal(getSessionPhotoField(backend, session.id).recipePhoto, beforeOutside.recipePhoto)
+  assert.equal(getSessionPhotoField(backend, session.id).recipePhotoName, 'outside.png')
+})
+
+test('sessions.start rejects an arbitrary Drive file id and still accepts a valid data URL', () => {
+  const backend = ready()
+  const { session } = seedDailySession(backend)
+  const accepted = call(backend, 'sessions.accept', { actorUserId: 'u-aina', id: session.id })
+  assert.equal(accepted.ok, true, accepted.error && accepted.error.message)
+  const stolen = putDriveFile(backend, 'image/png', pngBytes(), 'stolen.png')
+  const bound = call(backend, 'sessions.start', {
+    actorUserId: 'u-aina',
+    id: session.id,
+    recipePhoto: stolen.id,
+    recipePhotoName: 'stolen.png',
+  })
+  assert.equal(bound.ok, false)
+  assert.equal(bound.error.code, 'VALIDATION_ERROR')
+  assert.match(bound.error.message, /Upload recipe photo/)
+  assert.equal(getSessionPhotoField(backend, session.id).recipePhoto, '')
+
+  const started = call(backend, 'sessions.start', {
+    actorUserId: 'u-aina',
+    id: session.id,
+    recipePhoto: RECIPE_PHOTO,
+    recipePhotoName: 'recipe.png',
+  })
+  assert.equal(started.ok, true, started.error && started.error.message)
+  assert.equal(started.data.productionSession.status, 'in_progress')
+  assert.ok(started.data.productionSession.recipePhoto)
+  assert.equal(started.data.productionSession.recipePhotoName, 'recipe.png')
+  assert.equal(started.data.productionSession.recipePhoto.startsWith('data:image/png'), true)
 })
 
 

@@ -210,7 +210,16 @@ export function createFakeDrive(rootId) {
         getContentType: () => mime,
         getBytes: () => bytes,
       }),
-      getParents: () => ({ hasNext: () => true, next: () => parent }),
+      getParents: () => {
+        let remaining = 1
+        return {
+          hasNext: () => remaining > 0,
+          next: () => {
+            remaining -= 1
+            return parent
+          },
+        }
+      },
       setName(next) {
         fileName = next
       },
