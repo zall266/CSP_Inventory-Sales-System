@@ -94,6 +94,16 @@ export function canEditSession(role: UserRole, status: ProductionSessionStatus) 
   return role === 'staff' || role === 'warehouse' || role === 'manager' || role === 'admin' || role === 'owner'
 }
 
+export function canStartAcceptedSession(
+  user: { name: string; role: UserRole },
+  session: Pick<ProductionSession, 'status' | 'acceptedBy'>,
+) {
+  if (session.status !== 'accepted') return false
+  if (!canEditSession(user.role, session.status)) return false
+  if (user.role === 'admin' || user.role === 'owner' || user.role === 'manager') return true
+  return Boolean(session.acceptedBy) && session.acceptedBy === user.name
+}
+
 export function canEditCompleted(role: UserRole) {
   return role === 'admin' || role === 'owner'
 }

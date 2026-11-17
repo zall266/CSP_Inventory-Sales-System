@@ -547,6 +547,66 @@ test('daily session create is permissioned and does not post stock', () => {
   assert.equal(listed.error.code, 'FORBIDDEN')
 })
 
+test('sessions.start requires accept and photo, rejects cashier, and does not post stock', () => {
+  const backend = ready()
+  const { session } = seedDailySession(backend)
+  const beforeMoves = (backend.spreadsheet.store.StockMovements || []).length
+
+  const planned = call(backend, 'sessions.start', {
+    actorUserId: 'u-aina',
+    id: session.id,
+    recipePhoto: RECIPE_PHOTO,
+    recipePhotoName: 'recipe.png',
+  })
+  assert.equal(planned.ok, false)
+  assert.match(planned.error.message, /Accept production first/)
+
+  const cashierAccept = call(backend, 'sessions.accept', { actorUserId: 'u-siti', id: session.id })
+  assert.equal(cashierAccept.ok, false)
+  assert.equal(cashierAccept.error.code, 'FORBIDDEN')
+
+  const accepted = call(backend, 'sessions.accept', { actorUserId: 'u-aina', id: session.id })
+  assert.equal(accepted.ok, true, accepted.error && accepted.error.message)
+  assert.equal(accepted.data.productionSession.acceptedBy, 'Aina Rahman')
+
+  const cashierStart = call(backend, 'sessions.start', {
+    actorUserId: 'u-siti',
+    id: session.id,
+    recipePhoto: RECIPE_PHOTO,
+    recipePhotoName: 'recipe.png',
+  })
+  assert.equal(cashierStart.ok, false)
+  assert.equal(cashierStart.error.code, 'FORBIDDEN')
+
+  const missingPhoto = call(backend, 'sessions.start', { actorUserId: 'u-aina', id: session.id })
+  assert.equal(missingPhoto.ok, false)
+
+  const ungatedStaff = call(backend, 'sessions.start', {
+    actorUserId: 'u-mei',
+    id: session.id,
+    recipePhoto: RECIPE_PHOTO,
+    recipePhotoName: 'recipe.png',
+  })
+  assert.equal(ungatedStaff.ok, false)
+  assert.equal(ungatedStaff.error.code, 'FORBIDDEN')
+
+  backend.spreadsheet.store.RolePermissions.push(['role-staff', 'manufacturing.view', true])
+  backend.spreadsheet.store.RolePermissions.push(['role-staff', 'manufacturing.start', true])
+  const otherStaff = call(backend, 'sessions.start', {
+    actorUserId: 'u-mei',
+    id: session.id,
+    recipePhoto: RECIPE_PHOTO,
+    recipePhotoName: 'recipe.png',
+  })
+  assert.equal(otherStaff.ok, true, otherStaff.error && otherStaff.error.message)
+  assert.equal(otherStaff.data.productionSession.status, 'in_progress')
+  assert.equal(otherStaff.data.productionSession.acceptedBy, 'Aina Rahman')
+  assert.equal(otherStaff.data.productionSession.startedBy, 'Mei Ling')
+  assert.ok(otherStaff.data.productionSession.recipePhoto)
+  assert.equal(otherStaff.data.productionSession.recipePhotoName, 'recipe.png')
+  assert.equal((backend.spreadsheet.store.StockMovements || []).length, beforeMoves)
+})
+
 test('daily session complete posts AUTO out, skips MANUAL, requires display+carton=actual, and is retry-safe', () => {
   const backend = ready()
   const { session } = seedDailySession(backend)

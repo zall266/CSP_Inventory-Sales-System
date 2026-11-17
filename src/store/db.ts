@@ -121,7 +121,8 @@ import {
   packingWarehouseError,
   validatePackingQuantities,
 } from '@/features/manufacturing/packingModel'
-import { buildSessionPlan, canAmendPlanStatus, canEditSession, canRunProduction, currentUser, hydrateProductionSessions, isCarryForwardResumed, isRawStorePickingLine, isSessionOperationalToday, mergePicking, remainingTargetQty, systemProductionDate, todaySessions } from '@/features/manufacturing/sessionPlan'
+import { canStartProductionWithPhoto } from '@/features/manufacturing/recipePhoto'
+import { buildSessionPlan, canAmendPlanStatus, canEditSession, canRunProduction, canStartAcceptedSession, currentUser, hydrateProductionSessions, isCarryForwardResumed, isRawStorePickingLine, isSessionOperationalToday, mergePicking, remainingTargetQty, systemProductionDate, todaySessions } from '@/features/manufacturing/sessionPlan'
 import { buildSessionMaterialClosing, closingLineFromInput, isSignificantVariance } from '@/features/manufacturing/materialClosing'
 import {
   defaultPermissionsForLegacy,
@@ -6431,7 +6432,7 @@ export const db = {
   startSession(id: string, input: { recipePhoto: string; recipePhotoName: string }) {
     const session = state.productionSessions.find((item) => item.id === id)
     const user = currentUser(state)
-    if (!session || session.status === 'cancelled' || (session.status !== 'accepted' && session.status !== 'planned')) {
+    if (!session || session.status === 'cancelled') {
       toast('Accept production before starting', undefined, 'warning')
       return false
     }
@@ -6443,11 +6444,19 @@ export const db = {
       toast('Accept production first', undefined, 'warning')
       return false
     }
-    if (!canEditSession(user.role, session.status)) {
-      toast('Permission denied', undefined, 'danger')
+    if (session.status === 'in_progress') {
+      toast('Production already started', undefined, 'warning')
       return false
     }
-    if (!input.recipePhoto) {
+    if (session.status !== 'accepted') {
+      toast('Accept production before starting', undefined, 'warning')
+      return false
+    }
+    if (!canStartAcceptedSession(user, session)) {
+      toast('Permission denied', 'Only the staff member who accepted this session can start production.', 'danger')
+      return false
+    }
+    if (!canStartProductionWithPhoto(input.recipePhoto, input.recipePhotoName)) {
       toast('Upload recipe photo', 'Photograph the process-room recipe sheet. It is evidence only — BOM stays the source of requirements.', 'warning')
       return false
     }

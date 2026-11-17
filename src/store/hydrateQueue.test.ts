@@ -7,6 +7,8 @@ import {
   canBootstrapFromRead,
   enqueueHydrate,
   isLockContention,
+  isPermissionDeniedLoad,
+  reportLoadError,
   resetHydrateQueue,
   withConflictRetry,
 } from './hydrateQueue.ts'
@@ -99,6 +101,30 @@ test('bootstrap paths require a successful get before writing seed data', () => 
   const db = fs.readFileSync(path.join(root, 'src/store/db.ts'), 'utf8')
   assert.equal(db.includes("toast('Could not load from the server'"), true)
   assert.equal(db.includes("toast('Could not save to the server'"), true)
+  const salesReturns = fs.readFileSync(path.join(root, 'src/store/salesReturnSync.ts'), 'utf8')
+  const opening = fs.readFileSync(path.join(root, 'src/store/openingBalanceSync.ts'), 'utf8')
+  assert.equal(salesReturns.includes('reportLoadError'), true)
+  assert.equal(opening.includes('reportLoadError'), true)
+})
+
+test('permission-denied hydrations do not toast on unrelated pages', () => {
+  const loads: string[] = []
+  const saves: string[] = []
+  reportLoadError(
+    { onError: (message) => saves.push(message), onLoadError: (message) => loads.push(message) },
+    'You do not have permission to view sales returns.',
+  )
+  reportLoadError(
+    { onError: (message) => saves.push(message), onLoadError: (message) => loads.push(message) },
+    'You do not have permission to view opening balance.',
+  )
+  reportLoadError(
+    { onError: (message) => saves.push(message), onLoadError: (message) => loads.push(message) },
+    'Could not load manufacturing from the server.',
+  )
+  assert.equal(isPermissionDeniedLoad('You do not have permission to view sales returns.'), true)
+  assert.deepEqual(loads, ['Could not load manufacturing from the server.'])
+  assert.deepEqual(saves, [])
 })
 
 test('withConflictRetry does not retry FORBIDDEN', async () => {
