@@ -36,6 +36,8 @@ function app() {
     sheets,
     spreadsheet,
     context,
+    drive,
+    driveStorage,
     system: context.createSystemService({ sheetRepository: sheets, driveStorage }),
     idempotency: context.createIdempotencyService(sheets),
     foundation: context.createFoundationService(sheets),
@@ -784,4 +786,240 @@ test('daily session carry-forward continues remaining target once', () => {
   })
   assert.equal(again.ok, false)
 })
+
+function pngBytes() {
+  return Uint8Array.from(Buffer.from(RECIPE_PHOTO.split(',')[1], 'base64'))
+}
+
+function grantRole(backend, roleId, key) {
+  backend.spreadsheet.store.RolePermissions.push([roleId, key, true])
+}
+
+function setSessionPhotoField(backend, sessionId, photo, photoName) {
+  const rows = backend.spreadsheet.store.ProductionSessions
+  const headers = rows[0]
+  const idIdx = headers.indexOf('id')
+  const photoIdx = headers.indexOf('recipePhoto')
+  const nameIdx = headers.indexOf('recipePhotoName')
+  for (let i = 1; i < rows.length; i += 1) {
+    if (String(rows[i][idIdx]) === sessionId) {
+      rows[i][photoIdx] = photo
+      if (photoName != null) rows[i][nameIdx] = photoName
+    }
+  }
+}
+
+function putDriveFile(backend, mime, bytes, name) {
+  const id = `recipefile${String(name).replace(/\W/g, '')}XXXXXXXXXX`
+  const file = {
+    getId: () => id,
+    getName: () => name,
+    getMimeType: () => mime,
+    getBlob: () => ({
+      getContentType: () => mime,
+      getBytes: () => bytes,
+    }),
+  }
+  const previous = backend.drive.getFileById.bind(backend.drive)
+  backend.drive.getFileById = (wanted) => {
+    if (wanted === id) return file
+    return previous(wanted)
+  }
+  return { id, name }
+}
+
+function startAcceptedSession(backend, session, photo = RECIPE_PHOTO) {
+  const accepted = call(backend, 'sessions.accept', { actorUserId: 'u-aina', id: session.id })
+  assert.equal(accepted.ok, true, accepted.error && accepted.error.message)
+  const started = call(backend, 'sessions.start', {
+    actorUserId: 'u-aina',
+    id: session.id,
+    recipePhoto: photo,
+    recipePhotoName: 'recipe.png',
+  })
+  assert.equal(started.ok, true, started.error && started.error.message)
+  return started.data.productionSession
+}
+
+test('sessions.getRecipePhoto returns a slim Drive image for manufacturing.view', () => {
+  const backend = ready()
+  const { session } = seedDailySession(backend)
+  startAcceptedSession(backend, session)
+  const uploaded = putDriveFile(backend, 'image/png', pngBytes(), 'recipe.png')
+  setSessionPhotoField(backend, session.id, uploaded.id, 'recipe.png')
+
+  const photo = call(backend, 'sessions.getRecipePhoto', { actorUserId: 'u-aina', id: session.id })
+  assert.equal(photo.ok, true, photo.error && photo.error.message)
+  assert.equal(photo.data.sessionId, session.id)
+  assert.ok(photo.data.reference)
+  assert.equal(photo.data.recipePhotoName, 'recipe.png')
+  assert.equal(photo.data.mimeType, 'image/png')
+  assert.equal(photo.data.dataUrl.startsWith('data:image/png;base64,'), true)
+  assert.equal(photo.data.dataUrl.includes(RECIPE_PHOTO.split(',')[1]), true)
+  assert.equal(photo.data.packingAssemblies, undefined)
+  assert.equal(photo.data.productionSessions, undefined)
+  assert.equal(photo.data.inventory, undefined)
+  assert.equal(photo.data.stockMovements, undefined)
+})
+
+test('sessions.getRecipePhoto authorizes view or history.view and ignores client fileId', () => {
+  const backend = ready()
+  const { session } = seedDailySession(backend)
+  startAcceptedSession(backend, session)
+  const first = putDriveFile(backend, 'image/png', pngBytes(), 'recipe-a.png')
+  const otherBytes = Uint8Array.from([1, 2, 3, 4, 5, 6, 7, 8, 9, 10])
+  const other = putDriveFile(backend, 'image/png', otherBytes, 'recipe-b.png')
+  setSessionPhotoField(backend, session.id, first.id, 'recipe-a.png')
+
+  const second = post(backend, 'sessions.create', {
+    actorUserId: 'u-aina',
+    clientId: 'ps_s12_photo_b',
+    productionDate: todayKey(),
+    warehouseId: 'wh-main',
+    items: [{ productId: 'p-s12fg', targetQty: 10 }],
+  })
+  assert.equal(second.ok, true, second.error && second.error.message)
+  const acceptedB = call(backend, 'sessions.accept', { actorUserId: 'u-aina', id: second.data.productionSession.id })
+  assert.equal(acceptedB.ok, true, acceptedB.error && acceptedB.error.message)
+  const startedB = call(backend, 'sessions.start', {
+    actorUserId: 'u-aina',
+    id: second.data.productionSession.id,
+    recipePhoto: RECIPE_PHOTO,
+    recipePhotoName: 'recipe-b.png',
+  })
+  assert.equal(startedB.ok, true, startedB.error && startedB.error.message)
+  setSessionPhotoField(backend, second.data.productionSession.id, other.id, 'recipe-b.png')
+
+  const stolen = call(backend, 'sessions.getRecipePhoto', {
+    actorUserId: 'u-aina',
+    id: session.id,
+    fileId: other.id,
+    recipePhoto: other.id,
+  })
+  assert.equal(stolen.ok, true, stolen.error && stolen.error.message)
+  assert.equal(stolen.data.sessionId, session.id)
+  assert.equal(stolen.data.recipePhotoName, 'recipe-a.png')
+  assert.equal(stolen.data.dataUrl.includes(RECIPE_PHOTO.split(',')[1]), true)
+  assert.equal(stolen.data.dataUrl.includes(Buffer.from(otherBytes).toString('base64')), false)
+
+  const cashier = call(backend, 'sessions.getRecipePhoto', { actorUserId: 'u-siti', id: session.id })
+  assert.equal(cashier.ok, false)
+  assert.equal(cashier.error.code, 'FORBIDDEN')
+
+  const noActor = call(backend, 'sessions.getRecipePhoto', { id: session.id })
+  assert.equal(noActor.ok, false)
+  assert.equal(noActor.error.code, 'FORBIDDEN')
+
+  grantRole(backend, 'role-staff', 'manufacturing.start')
+  const startOnly = call(backend, 'sessions.getRecipePhoto', { actorUserId: 'u-mei', id: session.id })
+  assert.equal(startOnly.ok, false)
+  assert.equal(startOnly.error.code, 'FORBIDDEN')
+
+  grantRole(backend, 'role-staff', 'manufacturing.view')
+  const viewer = call(backend, 'sessions.getRecipePhoto', { actorUserId: 'u-mei', id: session.id })
+  assert.equal(viewer.ok, true, viewer.error && viewer.error.message)
+  assert.equal(viewer.data.sessionId, session.id)
+})
+
+test('sessions.getRecipePhoto allows history.view without manufacturing.view', () => {
+  const backend = ready()
+  const { session } = seedDailySession(backend)
+  startAcceptedSession(backend, session)
+  const uploaded = putDriveFile(backend, 'image/jpeg', pngBytes(), 'recipe.jpg')
+  setSessionPhotoField(backend, session.id, uploaded.id, 'recipe.jpg')
+  grantRole(backend, 'role-staff', 'manufacturing.history.view')
+  const history = call(backend, 'sessions.getRecipePhoto', { actorUserId: 'u-mei', sessionId: session.id })
+  assert.equal(history.ok, true, history.error && history.error.message)
+  assert.equal(history.data.mimeType, 'image/jpeg')
+  assert.equal(history.data.dataUrl.startsWith('data:image/jpeg;base64,'), true)
+})
+
+test('sessions.getRecipePhoto rejects missing, invalid, sample, and unsupported files', () => {
+  const backend = ready()
+  const { session } = seedDailySession(backend)
+
+  const empty = call(backend, 'sessions.getRecipePhoto', { actorUserId: 'u-aina', id: session.id })
+  assert.equal(empty.ok, false)
+  assert.equal(empty.error.code, 'NOT_FOUND')
+
+  const missing = call(backend, 'sessions.getRecipePhoto', { actorUserId: 'u-aina', id: 'ps_missing_photo' })
+  assert.equal(missing.ok, false)
+  assert.equal(missing.error.code, 'NOT_FOUND')
+
+  setSessionPhotoField(backend, session.id, 'not a file', 'recipe.png')
+  const invalid = call(backend, 'sessions.getRecipePhoto', { actorUserId: 'u-aina', id: session.id })
+  assert.equal(invalid.ok, false)
+  assert.equal(invalid.error.code, 'NOT_FOUND')
+
+  setSessionPhotoField(backend, session.id, '1missingDriveXXXXXXXX', 'recipe.png')
+  const gone = call(backend, 'sessions.getRecipePhoto', { actorUserId: 'u-aina', id: session.id })
+  assert.equal(gone.ok, false)
+  assert.equal(gone.error.code, 'NOT_FOUND')
+
+  setSessionPhotoField(backend, session.id, 'data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg"><text>CSP Process Room Recipe Sheet</text></svg>', 'demo.svg')
+  const sample = call(backend, 'sessions.getRecipePhoto', { actorUserId: 'u-aina', id: session.id })
+  assert.equal(sample.ok, false)
+  assert.equal(sample.error.code, 'NOT_FOUND')
+
+  const textFile = putDriveFile(backend, 'text/plain', Uint8Array.from([65, 66, 67]), 'notes.txt')
+  setSessionPhotoField(backend, session.id, textFile.id, 'notes.txt')
+  const unsupported = call(backend, 'sessions.getRecipePhoto', { actorUserId: 'u-aina', id: session.id })
+  assert.equal(unsupported.ok, false)
+  assert.equal(unsupported.error.code, 'VALIDATION_ERROR')
+})
+
+test('sessions.getRecipePhoto returns a legacy valid data URL and leaves list/get/start unchanged', () => {
+  const backend = ready()
+  const { session } = seedDailySession(backend)
+  const started = startAcceptedSession(backend, session)
+  assert.ok(started.recipePhoto)
+
+  const legacy = call(backend, 'sessions.getRecipePhoto', { actorUserId: 'u-aina', id: session.id })
+  assert.equal(legacy.ok, true, legacy.error && legacy.error.message)
+  assert.equal(legacy.data.mimeType, 'image/png')
+  assert.equal(legacy.data.dataUrl.startsWith('data:image/png;base64,'), true)
+  assert.equal(legacy.data.productionSessions, undefined)
+
+  const listed = call(backend, 'sessions.list', { actorUserId: 'u-aina' })
+  assert.equal(listed.ok, true)
+  assert.ok(Array.isArray(listed.data.productionSessions))
+  assert.ok(Array.isArray(listed.data.packingAssemblies))
+  const listedSession = listed.data.productionSessions.find((row) => row.id === session.id)
+  assert.ok(listedSession)
+  assert.equal(typeof listedSession.recipePhoto, 'string')
+  assert.equal(listedSession.dataUrl, undefined)
+
+  const detail = call(backend, 'sessions.get', { actorUserId: 'u-aina', id: session.id })
+  assert.equal(detail.ok, true)
+  assert.equal(detail.data.productionSession.id, session.id)
+  assert.ok(Array.isArray(detail.data.productionSessions))
+  assert.equal(detail.data.productionSession.dataUrl, undefined)
+
+  const extra = post(backend, 'sessions.create', {
+    actorUserId: 'u-aina',
+    clientId: 'ps_s12_planned_photo',
+    productionDate: todayKey(),
+    warehouseId: 'wh-main',
+    items: [{ productId: 'p-s12fg', targetQty: 10 }],
+  })
+  assert.equal(extra.ok, true, extra.error && extra.error.message)
+  const plannedStart = call(backend, 'sessions.start', {
+    actorUserId: 'u-aina',
+    id: extra.data.productionSession.id,
+    recipePhoto: RECIPE_PHOTO,
+    recipePhotoName: 'recipe.png',
+  })
+  assert.equal(plannedStart.ok, false)
+  assert.match(plannedStart.error.message, /Accept production first/)
+
+  const cashierStart = call(backend, 'sessions.start', {
+    actorUserId: 'u-siti',
+    id: session.id,
+    recipePhoto: RECIPE_PHOTO,
+    recipePhotoName: 'recipe.png',
+  })
+  assert.equal(cashierStart.ok, false)
+  assert.equal(cashierStart.error.code, 'FORBIDDEN')
+})
+
 

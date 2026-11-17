@@ -6,21 +6,29 @@ import { fileURLToPath } from 'node:url'
 import {
   RECIPE_PHOTO_CAMERA_ACCEPT,
   RECIPE_PHOTO_CAMERA_CAPTURE,
+  RECIPE_PHOTO_FORBIDDEN,
   RECIPE_PHOTO_GALLERY_ACCEPT,
+  RECIPE_PHOTO_GET_ACTION,
   RECIPE_PHOTO_HEIC_ERROR,
   RECIPE_PHOTO_MAX_BYTES,
+  RECIPE_PHOTO_MISSING,
   RECIPE_PHOTO_SIZE_ERROR,
   RECIPE_PHOTO_TYPE_ERROR,
   SAMPLE_RECIPE_SHEET,
   SAMPLE_RECIPE_SHEET_NAME,
   canStartProductionWithPhoto,
+  clearRecipePhotoCache,
   isDriveRecipePhotoRef,
   isHeicLike,
   isPreviewableRecipePhoto,
   isSampleRecipePhoto,
+  loadStoredRecipePhoto,
   openRecipePicker,
   parseRecipePhoto,
+  peekRecipePhotoCache,
   readRecipePhotoFile,
+  recipePhotoCacheKey,
+  shouldFetchStoredRecipePhoto,
 } from './recipePhoto.ts'
 
 function canStartAcceptedSession(
@@ -159,3 +167,182 @@ test('planned sessions cannot start; accepted staff can; other staff cannot over
   assert.equal(canStartAcceptedSession(admin, accepted), true)
   assert.equal(canStartAcceptedSession({ name: 'Siti Nurhaliza', role: 'cashier' }, accepted), false)
 })
+
+test('stored Drive refs fetch on demand and cache by session plus photo reference', async () => {
+  clearRecipePhotoCache()
+  const driveId = '1abcDEFGHIJ-klmnopqr'
+  const otherId = '1otherDriveFileXXXX'
+  assert.equal(shouldFetchStoredRecipePhoto(driveId), true)
+  assert.equal(shouldFetchStoredRecipePhoto(PNG_DATA_URL), false)
+  assert.equal(shouldFetchStoredRecipePhoto(SAMPLE_RECIPE_SHEET), false)
+  const calls: Array<{ sessionId: string; actorUserId: string }> = []
+  const payload = {
+    sessionId: 'ps-1',
+    recipePhotoName: 'recipe.png',
+    uploadedBy: 'Aina Rahman',
+    uploadedAt: '2026-11-16T12:00:00.000Z',
+    mimeType: 'image/png',
+    dataUrl: PNG_DATA_URL,
+  }
+  const fetchPhoto = async (sessionId: string, actorUserId: string) => {
+    calls.push({ sessionId, actorUserId })
+    return { ok: true, data: { ...payload, sessionId }, error: null }
+  }
+  const first = await loadStoredRecipePhoto({
+    sessionId: 'ps-1',
+    recipePhoto: driveId,
+    actorUserId: 'u-aina',
+    requestId: 1,
+    isCurrent: () => true,
+    fetchPhoto,
+  })
+  assert.equal(first.status, 'ready')
+  assert.equal(first.payload?.dataUrl, PNG_DATA_URL)
+  assert.equal(calls.length, 1)
+  assert.equal(peekRecipePhotoCache('ps-1', driveId)?.dataUrl, PNG_DATA_URL)
+  const cached = await loadStoredRecipePhoto({
+    sessionId: 'ps-1',
+    recipePhoto: driveId,
+    actorUserId: 'u-aina',
+    requestId: 2,
+    isCurrent: () => true,
+    fetchPhoto,
+  })
+  assert.equal(cached.status, 'ready')
+  assert.equal(calls.length, 1)
+  const switched = await loadStoredRecipePhoto({
+    sessionId: 'ps-2',
+    recipePhoto: otherId,
+    actorUserId: 'u-aina',
+    requestId: 3,
+    isCurrent: () => true,
+    fetchPhoto: async (sessionId) => ({
+      ok: true,
+      data: { ...payload, sessionId, dataUrl: 'data:image/png;base64,abc' },
+      error: null,
+    }),
+  })
+  assert.equal(switched.payload?.sessionId, 'ps-2')
+  assert.notEqual(peekRecipePhotoCache('ps-1', driveId)?.sessionId, switched.payload?.sessionId)
+  assert.equal(recipePhotoCacheKey('ps-1', driveId) !== recipePhotoCacheKey('ps-2', otherId), true)
+  clearRecipePhotoCache()
+  const refreshed = await loadStoredRecipePhoto({
+    sessionId: 'ps-1',
+    recipePhoto: driveId,
+    actorUserId: 'u-aina',
+    requestId: 4,
+    isCurrent: () => true,
+    fetchPhoto,
+  })
+  assert.equal(refreshed.status, 'ready')
+  assert.equal(calls.length, 2)
+})
+
+test('stale recipe photo responses and permission failures do not leak the previous image', async () => {
+  clearRecipePhotoCache()
+  const stale = await loadStoredRecipePhoto({
+    sessionId: 'ps-1',
+    recipePhoto: '1abcDEFGHIJ-klmnopqr',
+    actorUserId: 'u-aina',
+    requestId: 1,
+    isCurrent: () => false,
+    fetchPhoto: async () => ({
+      ok: true,
+      data: {
+        sessionId: 'ps-1',
+        recipePhotoName: 'old.png',
+        uploadedBy: 'Aina',
+        uploadedAt: '',
+        mimeType: 'image/png',
+        dataUrl: PNG_DATA_URL,
+      },
+      error: null,
+    }),
+  })
+  assert.equal(stale.status, 'error')
+  assert.equal(stale.payload, undefined)
+  assert.equal(peekRecipePhotoCache('ps-1', '1abcDEFGHIJ-klmnopqr'), undefined)
+
+  const forbidden = await loadStoredRecipePhoto({
+    sessionId: 'ps-1',
+    recipePhoto: '1abcDEFGHIJ-klmnopqr',
+    actorUserId: 'u-siti',
+    requestId: 2,
+    isCurrent: () => true,
+    fetchPhoto: async () => ({ ok: false, data: null, error: { code: 'FORBIDDEN', message: RECIPE_PHOTO_FORBIDDEN } }),
+  })
+  assert.equal(forbidden.status, 'forbidden')
+  assert.equal(forbidden.error, RECIPE_PHOTO_FORBIDDEN)
+
+  const missing = await loadStoredRecipePhoto({
+    sessionId: 'ps-1',
+    recipePhoto: '1abcDEFGHIJ-klmnopqr',
+    actorUserId: 'u-aina',
+    requestId: 3,
+    isCurrent: () => true,
+    fetchPhoto: async () => ({ ok: false, data: null, error: { code: 'NOT_FOUND', message: RECIPE_PHOTO_MISSING } }),
+  })
+  assert.equal(missing.status, 'missing')
+
+  const retryable = await loadStoredRecipePhoto({
+    sessionId: 'ps-1',
+    recipePhoto: '1abcDEFGHIJ-klmnopqr',
+    actorUserId: 'u-aina',
+    requestId: 4,
+    isCurrent: () => true,
+    fetchPhoto: async () => ({ ok: false, data: null, error: { code: 'INTERNAL_ERROR', message: 'down' } }),
+  })
+  assert.equal(retryable.status, 'error')
+  const recovered = await loadStoredRecipePhoto({
+    sessionId: 'ps-1',
+    recipePhoto: '1abcDEFGHIJ-klmnopqr',
+    actorUserId: 'u-aina',
+    requestId: 5,
+    isCurrent: () => true,
+    fetchPhoto: async () => ({
+      ok: true,
+      data: {
+        sessionId: 'ps-1',
+        recipePhotoName: 'recipe.png',
+        uploadedBy: 'Aina',
+        uploadedAt: '',
+        mimeType: 'image/png',
+        dataUrl: PNG_DATA_URL,
+      },
+      error: null,
+    }),
+  })
+  assert.equal(recovered.status, 'ready')
+  assert.equal(recovered.payload?.dataUrl, PNG_DATA_URL)
+})
+
+test('today and history details fetch stored photos; lists and writes do not', () => {
+  const today = fs.readFileSync(path.join(root, 'features/manufacturing/TodaysProductionPage.tsx'), 'utf8')
+  const history = fs.readFileSync(path.join(root, 'features/manufacturing/ProductionHistoryPage.tsx'), 'utf8')
+  const evidence = fs.readFileSync(path.join(root, 'features/manufacturing/RecipeSheetEvidence.tsx'), 'utf8')
+  const sync = fs.readFileSync(path.join(root, 'store/manufacturingSync.ts'), 'utf8')
+  const store = fs.readFileSync(path.join(root, 'store/db.ts'), 'utf8')
+  const photo = fs.readFileSync(path.join(root, 'features/manufacturing/recipePhoto.ts'), 'utf8')
+  assert.equal(today.includes('RecipeSheetEvidence'), true)
+  assert.equal(today.includes('RecipeSheetUpload'), true)
+  assert.equal(history.includes('RecipeSheetEvidence'), true)
+  assert.equal(history.includes('export function ProductionHistoryPage'), true)
+  const tableFn = history.slice(history.indexOf('export function ProductionHistoryPage'), history.indexOf('export function ProductionSessionDetailPage'))
+  assert.equal(tableFn.includes('RecipeSheetEvidence'), false)
+  assert.equal(tableFn.includes(RECIPE_PHOTO_GET_ACTION), false)
+  assert.equal(history.includes('export function ProductionSessionDetailPage'), true)
+  const detailFn = history.slice(history.indexOf('export function ProductionSessionDetailPage'))
+  assert.equal(detailFn.includes('RecipeSheetEvidence'), true)
+  assert.equal(evidence.includes('loadStoredRecipePhoto'), true)
+  assert.equal(evidence.includes('Try again'), true)
+  assert.equal(evidence.includes('Loading recipe sheet photo'), true)
+  assert.equal(sync.includes('queueManufacturingWrite'), true)
+  assert.equal(sync.includes(RECIPE_PHOTO_GET_ACTION), false)
+  assert.equal(store.includes("queueSessionWrite('sessions.start'"), true)
+  assert.equal(store.includes(RECIPE_PHOTO_GET_ACTION), false)
+  assert.equal(photo.includes('RECIPE_PHOTO_GET_ACTION'), true)
+  assert.equal(evidence.includes('postIdentityAction'), true)
+  assert.equal(evidence.includes('queueManufacturingWrite'), false)
+  assert.equal(photo.includes('productionSessions'), false)
+})
+
