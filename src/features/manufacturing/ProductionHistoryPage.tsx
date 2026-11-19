@@ -5,8 +5,9 @@ import { movementLabel } from '@/components/ProductMark'
 import { useApi, useLookups, useStore } from '@/store/hooks'
 import { formatCalendarDate, formatDateTime, formatQty } from '@/utils/format'
 import { formatUnit } from '@/features/products/masterData'
-import { originSessionForLine, sessionTotals } from './sessionPlan'
-import { isPreviewableRecipePhoto, isSampleRecipePhoto } from './recipePhoto'
+import { currentUser, originSessionForLine, sessionTotals } from './sessionPlan'
+import { RecipeSheetEvidence } from './RecipeSheetEvidence'
+import { isSampleRecipePhoto } from './recipePhoto'
 import { allocationLabel, expectedRemainingQty, usesPurchaseUnitSplit } from './materialClosing'
 import { hasPermission } from '@/features/settings/permissions'
 import { canPrintBmr } from '@/features/manufacturing/bmrModel'
@@ -148,17 +149,16 @@ export function ProductionSessionDetailPage() {
         )}
       </div>
       {session.recipePhoto && !isSampleRecipePhoto(session.recipePhoto) && (
-        <Card className="mb-5 p-5">
-          <div className="mb-2 text-sm font-semibold">Recipe sheet (evidence)</div>
-          {isPreviewableRecipePhoto(session.recipePhoto) ? (
-            <img src={session.recipePhoto} alt={session.recipePhotoName} className="max-h-56 rounded-xl border border-slate-200 object-contain" />
-          ) : (
-            <div className="rounded-xl bg-slate-50 px-3 py-4 text-sm text-slate-600">
-              Photo stored with this production session. Preview is the selected image before start; after save the Drive file id is kept on the session.
-            </div>
-          )}
-          <div className="mt-2 text-xs text-slate-400">{session.recipePhotoName} · {session.uploadedBy} · {session.uploadedAt ? formatDateTime(session.uploadedAt) : ''}</div>
-        </Card>
+        <div className="mb-5">
+          <RecipeSheetEvidence
+            sessionId={session.id}
+            recipePhoto={session.recipePhoto}
+            recipePhotoName={session.recipePhotoName}
+            uploadedBy={session.uploadedBy}
+            uploadedAt={session.uploadedAt}
+            actorUserId={currentUser(state).id}
+          />
+        </div>
       )}
       <Card className="mb-5">
         <div className="sf-table-wrap">

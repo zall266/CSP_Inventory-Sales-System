@@ -32,6 +32,7 @@ var PRODUCTION_ORDER_ACTIONS = {
 var SESSION_ACTIONS = {
   'sessions.list': true,
   'sessions.get': true,
+  'sessions.getRecipePhoto': true,
   'sessions.create': true,
   'sessions.accept': true,
   'sessions.start': true,
@@ -132,6 +133,14 @@ function createManufacturingService(deps) {
     var actor = loadActor(spreadsheet, actorUserId, message);
     if (!actorMay(spreadsheet, actor, key)) throw appError('FORBIDDEN', message);
     return actor;
+  }
+
+  function requireAnyPermission(spreadsheet, actorUserId, keys, message) {
+    var actor = loadActor(spreadsheet, actorUserId, message);
+    for (var i = 0; i < keys.length; i += 1) {
+      if (actorMay(spreadsheet, actor, keys[i])) return actor;
+    }
+    throw appError('FORBIDDEN', message);
   }
 
   function requireKey(request) {
@@ -2079,10 +2088,103 @@ function createManufacturingService(deps) {
     return session;
   }
 
+  function encodeRecipePhotoBase64(bytes) {
+    if (typeof Utilities !== 'undefined' && Utilities.base64Encode) return Utilities.base64Encode(bytes);
+    if (typeof Buffer !== 'undefined') return Buffer.from(bytes).toString('base64');
+    throw appError('INTERNAL_ERROR', 'Base64 encoding is unavailable.');
+  }
+
+  function isSampleRecipePhotoValue(value) {
+    var textValue = text(value);
+    return textValue.indexOf('CSP Process Room Recipe Sheet') >= 0 || textValue.indexOf('data:image/svg+xml') === 0;
+  }
+
+  function isDriveRecipePhotoRefValue(value) {
+    var textValue = text(value).trim();
+    if (!textValue || textValue.indexOf('data:') === 0) return false;
+    if (textValue.indexOf('/') >= 0 || textValue.indexOf(' ') >= 0 || textValue.indexOf(':') >= 0) return false;
+    return /^[a-zA-Z0-9_-]{10,}$/.test(textValue);
+  }
+
+  function loadRecipePhotoSession(spreadsheet, payload) {
+    requireAnyPermission(
+      spreadsheet,
+      payload.actorUserId,
+      ['manufacturing.view', 'manufacturing.history.view'],
+      'You cannot view this recipe photo.'
+    );
+    var session = findSession(spreadsheet, payload);
+    return {
+      id: session.id,
+      reference: session.reference,
+      recipePhoto: text(session.recipePhoto).trim(),
+      recipePhotoName: text(session.recipePhotoName).trim(),
+      uploadedBy: text(session.uploadedBy).trim(),
+      uploadedAt: text(session.uploadedAt).trim()
+    };
+  }
+
+  function readStoredRecipePhoto(session) {
+    var value = text(session.recipePhoto).trim();
+    if (!value || isSampleRecipePhotoValue(value)) {
+      throw appError('NOT_FOUND', 'Recipe photo was not found.');
+    }
+    if (value.indexOf('data:') === 0) {
+      var parsed = parseRecipePhoto(value, session.recipePhotoName);
+      if (!parsed || parsed.stored) throw appError('NOT_FOUND', 'Recipe photo was not found.');
+      return {
+        sessionId: session.id,
+        reference: session.reference,
+        recipePhotoName: parsed.name || session.recipePhotoName || 'recipe-sheet.jpg',
+        uploadedBy: session.uploadedBy,
+        uploadedAt: session.uploadedAt,
+        mimeType: parsed.mime,
+        dataUrl: parsed.dataUrl
+      };
+    }
+    if (!isDriveRecipePhotoRefValue(value)) {
+      throw appError('NOT_FOUND', 'Recipe photo was not found.');
+    }
+    if (!drive || !drive.verifyFileExists(value)) {
+      throw appError('NOT_FOUND', 'Recipe photo was not found.');
+    }
+    var file;
+    try {
+      file = drive.readFileBytes(value);
+    } catch (error) {
+      throw appError('NOT_FOUND', 'Recipe photo was not found.');
+    }
+    var mime = text(file && file.mimeType).trim().toLowerCase();
+    if (mime === 'image/jpg') mime = 'image/jpeg';
+    if (!SESSION_PHOTO_TYPES[mime]) {
+      throw appError('VALIDATION_ERROR', 'Use a JPG, PNG, or WebP image up to 5 MB.');
+    }
+    var bytes = file.bytes;
+    var length = bytes && (bytes.length || bytes.byteLength) ? (bytes.length || bytes.byteLength) : 0;
+    if (!(length > 0) || length > SESSION_PHOTO_MAX_BYTES) {
+      throw appError('VALIDATION_ERROR', 'Use a JPG, PNG, or WebP image up to 5 MB.');
+    }
+    return {
+      sessionId: session.id,
+      reference: session.reference,
+      recipePhotoName: session.recipePhotoName || file.name || 'recipe-sheet.jpg',
+      uploadedBy: session.uploadedBy,
+      uploadedAt: session.uploadedAt,
+      mimeType: mime,
+      dataUrl: 'data:' + mime + ';base64,' + encodeRecipePhotoBase64(bytes)
+    };
+  }
+
   function dispatch(request) {
     var action = request.action;
     var payload = request.payload || {};
     var requestId = request.requestId ? String(request.requestId) : '';
+    if (action === 'sessions.getRecipePhoto') {
+      var storedSession = locked(function (spreadsheet) {
+        return loadRecipePhotoSession(spreadsheet, payload);
+      });
+      return okEnvelope(readStoredRecipePhoto(storedSession));
+    }
     return locked(function (spreadsheet) {
       if (action === 'packing.list' || action === 'productionOrders.list' || action === 'sessions.list') {
         requirePermission(spreadsheet, payload.actorUserId, 'manufacturing.view', 'You cannot view manufacturing.');

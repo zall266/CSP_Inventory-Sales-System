@@ -236,3 +236,116 @@ export async function readRecipePhotoFile(file: File | undefined | null): Promis
     return { ok: false, error: RECIPE_PHOTO_READ_ERROR }
   }
 }
+
+export const RECIPE_PHOTO_GET_ACTION = 'sessions.getRecipePhoto'
+export const RECIPE_PHOTO_MISSING = 'Recipe photo was not found.'
+export const RECIPE_PHOTO_FORBIDDEN = 'You cannot view this recipe photo.'
+export const RECIPE_PHOTO_LOAD_ERROR = 'The recipe sheet photo could not be loaded. Try again.'
+
+export type RecipePhotoPayload = {
+  sessionId: string
+  reference?: string
+  recipePhotoName: string
+  uploadedBy: string
+  uploadedAt: string
+  mimeType: string
+  dataUrl: string
+}
+
+export type RecipePhotoEnvelope = {
+  ok: boolean
+  data: RecipePhotoPayload | null
+  error: { code: string; message: string } | null
+}
+
+export type RecipePhotoLoadStatus = 'ready' | 'missing' | 'forbidden' | 'error'
+
+export type RecipePhotoLoadResult = {
+  requestId: number
+  status: RecipePhotoLoadStatus
+  payload?: RecipePhotoPayload
+  error?: string
+}
+
+type RecipePhotoFetcher = (sessionId: string, actorUserId: string) => Promise<RecipePhotoEnvelope>
+
+const recipePhotoCache = new Map<string, RecipePhotoPayload>()
+
+export function recipePhotoCacheKey(sessionId: string, recipePhoto: string) {
+  return `${sessionId}::${recipePhoto}`
+}
+
+export function clearRecipePhotoCache() {
+  recipePhotoCache.clear()
+}
+
+export function peekRecipePhotoCache(sessionId: string, recipePhoto: string) {
+  return recipePhotoCache.get(recipePhotoCacheKey(sessionId, recipePhoto))
+}
+
+export function storeRecipePhotoCache(sessionId: string, recipePhoto: string, payload: RecipePhotoPayload) {
+  recipePhotoCache.set(recipePhotoCacheKey(sessionId, recipePhoto), payload)
+}
+
+export function shouldFetchStoredRecipePhoto(value: string | undefined | null) {
+  return isDriveRecipePhotoRef(value)
+}
+
+export function parseRecipePhotoPayload(data: unknown): RecipePhotoPayload | null {
+  if (!data || typeof data !== 'object') return null
+  const row = data as Record<string, unknown>
+  if (typeof row.sessionId !== 'string' || typeof row.dataUrl !== 'string' || typeof row.mimeType !== 'string') return null
+  if (!isPreviewableRecipePhoto(row.dataUrl)) return null
+  if (!RECIPE_PHOTO_TYPES.has(row.mimeType === 'image/jpg' ? 'image/jpeg' : row.mimeType)) return null
+  return {
+    sessionId: row.sessionId,
+    reference: typeof row.reference === 'string' ? row.reference : undefined,
+    recipePhotoName: typeof row.recipePhotoName === 'string' ? row.recipePhotoName : '',
+    uploadedBy: typeof row.uploadedBy === 'string' ? row.uploadedBy : '',
+    uploadedAt: typeof row.uploadedAt === 'string' ? row.uploadedAt : '',
+    mimeType: row.mimeType === 'image/jpg' ? 'image/jpeg' : row.mimeType,
+    dataUrl: row.dataUrl,
+  }
+}
+
+export async function fetchSessionRecipePhoto(
+  sessionId: string,
+  actorUserId: string,
+  postAction: (action: string, payload: Record<string, unknown>) => Promise<{
+    ok: boolean
+    data: unknown
+    error: { code: string; message: string } | null
+  }>,
+): Promise<RecipePhotoEnvelope> {
+  const result = await postAction(RECIPE_PHOTO_GET_ACTION, { actorUserId, id: sessionId })
+  if (!result.ok) return { ok: false, data: null, error: result.error }
+  const payload = parseRecipePhotoPayload(result.data)
+  if (!payload) return { ok: false, data: null, error: { code: 'NOT_FOUND', message: RECIPE_PHOTO_MISSING } }
+  return { ok: true, data: payload, error: null }
+}
+
+export async function loadStoredRecipePhoto(options: {
+  sessionId: string
+  recipePhoto: string
+  actorUserId: string
+  requestId: number
+  isCurrent: (requestId: number) => boolean
+  fetchPhoto: RecipePhotoFetcher
+}): Promise<RecipePhotoLoadResult> {
+  const { sessionId, recipePhoto, actorUserId, requestId, isCurrent, fetchPhoto } = options
+  if (!shouldFetchStoredRecipePhoto(recipePhoto)) {
+    return { requestId, status: 'missing', error: RECIPE_PHOTO_MISSING }
+  }
+  const cached = peekRecipePhotoCache(sessionId, recipePhoto)
+  if (cached) return { requestId, status: 'ready', payload: cached }
+  const result = await fetchPhoto(sessionId, actorUserId)
+  if (!isCurrent(requestId)) return { requestId, status: 'error', error: RECIPE_PHOTO_LOAD_ERROR }
+  if (!result.ok || !result.data) {
+    const code = result.error?.code
+    if (code === 'FORBIDDEN') return { requestId, status: 'forbidden', error: result.error?.message || RECIPE_PHOTO_FORBIDDEN }
+    if (code === 'NOT_FOUND') return { requestId, status: 'missing', error: result.error?.message || RECIPE_PHOTO_MISSING }
+    return { requestId, status: 'error', error: result.error?.message || RECIPE_PHOTO_LOAD_ERROR }
+  }
+  storeRecipePhotoCache(sessionId, recipePhoto, result.data)
+  return { requestId, status: 'ready', payload: result.data }
+}

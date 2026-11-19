@@ -9,6 +9,7 @@ import { hasPermission } from '@/features/settings/permissions'
 import { allocationLabel, sessionAllocatedQty } from './materialClosing'
 import { formatUnit } from '@/features/products/masterData'
 import { AmendPlanModal, CancelPlanDialog, EditPlannedModal, planActionFlags } from './planAmendment'
+import { RecipeSheetEvidence } from './RecipeSheetEvidence'
 import { RecipeSheetUpload } from './RecipeSheetUpload'
 import { canStartProductionWithPhoto, isSampleRecipePhoto } from './recipePhoto'
 import { buildSessionPlan, canEditSession, canStartAcceptedSession, currentUser, isSessionOperationalToday, originSessionForLine, systemProductionDate, todayOperationalSession } from './sessionPlan'
@@ -136,6 +137,19 @@ function SessionWorkspace({ session }: { session: ProductionSession }) {
         <Meta label="Completed by" value={session.completedBy || '—'} />
         <Meta label="Recipe photo" value={isSampleRecipePhoto(session.recipePhoto) ? 'Not uploaded' : session.recipePhotoName || 'Not uploaded'} />
       </div>
+
+      {session.recipePhoto && !isSampleRecipePhoto(session.recipePhoto) ? (
+        <div className="mb-5">
+          <RecipeSheetEvidence
+            sessionId={session.id}
+            recipePhoto={session.recipePhoto}
+            recipePhotoName={session.recipePhotoName}
+            uploadedBy={session.uploadedBy}
+            uploadedAt={session.uploadedAt}
+            actorUserId={user.id}
+          />
+        </div>
+      ) : null}
 
       <Card className="mb-5">
         <div className="sf-table-wrap">
