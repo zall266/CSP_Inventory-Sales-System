@@ -64,6 +64,9 @@ export function RecipeSheetEvidence({
         status: result.status === 'forbidden' ? 'forbidden' : result.status === 'missing' ? 'missing' : 'error',
         error: result.error || (result.status === 'forbidden' ? RECIPE_PHOTO_FORBIDDEN : result.status === 'missing' ? RECIPE_PHOTO_MISSING : RECIPE_PHOTO_LOAD_ERROR),
       })
+    }).catch(() => {
+      if (requestId !== requestRef.current) return
+      setView({ status: 'error', error: RECIPE_PHOTO_LOAD_ERROR })
     })
   }
 

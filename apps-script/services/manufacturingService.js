@@ -1334,7 +1334,7 @@ function createManufacturingService(deps) {
     if (existing.status === 'planned') throw appError('VALIDATION_ERROR', 'Accept production first');
     if (existing.status !== 'accepted') throw appError('VALIDATION_ERROR', 'Accept production before starting');
     var parsed = parseRecipePhoto(payload.recipePhoto, payload.recipePhotoName);
-    if (!parsed) throw appError('VALIDATION_ERROR', 'Upload recipe photo');
+    if (!parsed || parsed.stored) throw appError('VALIDATION_ERROR', 'Upload recipe photo');
     var stored = storeRecipePhoto(parsed);
     var plan = sessionBuildPlan(
       products.readProducts(spreadsheet),
@@ -2146,6 +2146,9 @@ function createManufacturingService(deps) {
       throw appError('NOT_FOUND', 'Recipe photo was not found.');
     }
     if (!drive || !drive.verifyFileExists(value)) {
+      throw appError('NOT_FOUND', 'Recipe photo was not found.');
+    }
+    if (!drive.fileBelongsToChildFolder || !drive.fileBelongsToChildFolder(value, SESSION_PHOTO_FOLDER)) {
       throw appError('NOT_FOUND', 'Recipe photo was not found.');
     }
     var file;

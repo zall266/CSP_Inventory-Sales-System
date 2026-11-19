@@ -4,12 +4,14 @@ import path from 'path'
 import test from 'node:test'
 import { fileURLToPath } from 'node:url'
 import {
+  RECIPE_PHOTO_CACHE_MAX,
   RECIPE_PHOTO_CAMERA_ACCEPT,
   RECIPE_PHOTO_CAMERA_CAPTURE,
   RECIPE_PHOTO_FORBIDDEN,
   RECIPE_PHOTO_GALLERY_ACCEPT,
   RECIPE_PHOTO_GET_ACTION,
   RECIPE_PHOTO_HEIC_ERROR,
+  RECIPE_PHOTO_LOAD_ERROR,
   RECIPE_PHOTO_MAX_BYTES,
   RECIPE_PHOTO_MISSING,
   RECIPE_PHOTO_SIZE_ERROR,
@@ -18,6 +20,7 @@ import {
   SAMPLE_RECIPE_SHEET_NAME,
   canStartProductionWithPhoto,
   clearRecipePhotoCache,
+  fetchSessionRecipePhoto,
   isDriveRecipePhotoRef,
   isHeicLike,
   isPreviewableRecipePhoto,
@@ -28,7 +31,10 @@ import {
   peekRecipePhotoCache,
   readRecipePhotoFile,
   recipePhotoCacheKey,
+  recipePhotoCacheKeys,
+  recipePhotoCacheSize,
   shouldFetchStoredRecipePhoto,
+  storeRecipePhotoCache,
 } from './recipePhoto.ts'
 
 function canStartAcceptedSession(
@@ -344,5 +350,179 @@ test('today and history details fetch stored photos; lists and writes do not', (
   assert.equal(evidence.includes('postIdentityAction'), true)
   assert.equal(evidence.includes('queueManufacturingWrite'), false)
   assert.equal(photo.includes('productionSessions'), false)
+  assert.equal(evidence.includes('.catch'), true)
+  assert.equal(evidence.includes('RECIPE_PHOTO_LOAD_ERROR'), true)
+})
+
+function photoPayload(sessionId: string, dataUrl = PNG_DATA_URL): {
+  sessionId: string
+  recipePhotoName: string
+  uploadedBy: string
+  uploadedAt: string
+  mimeType: string
+  dataUrl: string
+} {
+  return {
+    sessionId,
+    recipePhotoName: 'recipe.png',
+    uploadedBy: 'Aina Rahman',
+    uploadedAt: '2026-11-16T12:00:00.000Z',
+    mimeType: 'image/png',
+    dataUrl,
+  }
+}
+
+test('network, JSON, and malformed recipe photo responses leave a retryable error and are not cached', async () => {
+  clearRecipePhotoCache()
+  const driveId = '1abcDEFGHIJ-klmnopqr'
+  const network = await fetchSessionRecipePhoto('ps-1', 'u-aina', async () => {
+    throw new Error('Failed to fetch')
+  })
+  assert.equal(network.ok, false)
+  assert.equal(network.error?.code, 'INTERNAL_ERROR')
+  assert.equal(network.error?.message, RECIPE_PHOTO_LOAD_ERROR)
+
+  const json = await fetchSessionRecipePhoto('ps-1', 'u-aina', async () => {
+    throw new SyntaxError('Unexpected token < in JSON')
+  })
+  assert.equal(json.ok, false)
+  assert.equal(json.error?.code, 'INTERNAL_ERROR')
+
+  const malformed = await fetchSessionRecipePhoto('ps-1', 'u-aina', async () => ({
+    ok: true,
+    data: { sessionId: 'ps-1', packingAssemblies: [] },
+    error: null,
+  }))
+  assert.equal(malformed.ok, false)
+  assert.equal(malformed.error?.code, 'NOT_FOUND')
+
+  const missingUrl = await fetchSessionRecipePhoto('ps-1', 'u-aina', async () => ({
+    ok: true,
+    data: { sessionId: 'ps-1', mimeType: 'image/png', dataUrl: '' },
+    error: null,
+  }))
+  assert.equal(missingUrl.ok, false)
+  assert.equal(missingUrl.error?.code, 'NOT_FOUND')
+
+  const server = await loadStoredRecipePhoto({
+    sessionId: 'ps-1',
+    recipePhoto: driveId,
+    actorUserId: 'u-aina',
+    requestId: 1,
+    isCurrent: () => true,
+    fetchPhoto: async () => { throw new Error('Failed to fetch') },
+  })
+  assert.equal(server.status, 'error')
+  assert.equal(server.error, RECIPE_PHOTO_LOAD_ERROR)
+  assert.equal(server.payload, undefined)
+  assert.equal(peekRecipePhotoCache('ps-1', driveId), undefined)
+
+  let calls = 0
+  const retried = await loadStoredRecipePhoto({
+    sessionId: 'ps-1',
+    recipePhoto: driveId,
+    actorUserId: 'u-aina',
+    requestId: 2,
+    isCurrent: () => true,
+    fetchPhoto: async () => {
+      calls += 1
+      return { ok: true, data: photoPayload('ps-1'), error: null }
+    },
+  })
+  assert.equal(retried.status, 'ready')
+  assert.equal(retried.payload?.dataUrl, PNG_DATA_URL)
+  assert.equal(calls, 1)
+  assert.equal(peekRecipePhotoCache('ps-1', driveId)?.dataUrl, PNG_DATA_URL)
+})
+
+test('bounded recipe photo cache evicts the oldest entry and keeps a displayed payload', async () => {
+  clearRecipePhotoCache()
+  assert.equal(RECIPE_PHOTO_CACHE_MAX, 2)
+  const firstId = '1firstDriveXXXXXXXX'
+  const secondId = '1secondDriveXXXXXXX'
+  const thirdId = '1thirdDriveXXXXXXXX'
+  const first = await loadStoredRecipePhoto({
+    sessionId: 'ps-1',
+    recipePhoto: firstId,
+    actorUserId: 'u-aina',
+    requestId: 1,
+    isCurrent: () => true,
+    fetchPhoto: async () => ({ ok: true, data: photoPayload('ps-1'), error: null }),
+  })
+  const displayed = first.payload?.dataUrl
+  await loadStoredRecipePhoto({
+    sessionId: 'ps-2',
+    recipePhoto: secondId,
+    actorUserId: 'u-aina',
+    requestId: 2,
+    isCurrent: () => true,
+    fetchPhoto: async () => ({ ok: true, data: photoPayload('ps-2', 'data:image/png;base64,abc'), error: null }),
+  })
+  assert.equal(recipePhotoCacheSize(), 2)
+  await loadStoredRecipePhoto({
+    sessionId: 'ps-3',
+    recipePhoto: thirdId,
+    actorUserId: 'u-aina',
+    requestId: 3,
+    isCurrent: () => true,
+    fetchPhoto: async () => ({ ok: true, data: photoPayload('ps-3', 'data:image/png;base64,def'), error: null }),
+  })
+  assert.equal(recipePhotoCacheSize(), RECIPE_PHOTO_CACHE_MAX)
+  assert.equal(peekRecipePhotoCache('ps-1', firstId), undefined)
+  assert.ok(peekRecipePhotoCache('ps-2', secondId))
+  assert.ok(peekRecipePhotoCache('ps-3', thirdId))
+  assert.equal(displayed, PNG_DATA_URL)
+  assert.equal(first.payload?.dataUrl, PNG_DATA_URL)
+  assert.equal(recipePhotoCacheKeys().includes(recipePhotoCacheKey('ps-1', firstId)), false)
+
+  const changedId = '1changedDriveXXXXXXX'
+  await loadStoredRecipePhoto({
+    sessionId: 'ps-2',
+    recipePhoto: changedId,
+    actorUserId: 'u-aina',
+    requestId: 4,
+    isCurrent: () => true,
+    fetchPhoto: async () => ({ ok: true, data: photoPayload('ps-2', 'data:image/png;base64,xyz'), error: null }),
+  })
+  assert.equal(peekRecipePhotoCache('ps-2', secondId), undefined)
+  assert.equal(peekRecipePhotoCache('ps-2', changedId)?.dataUrl, 'data:image/png;base64,xyz')
+  assert.ok(peekRecipePhotoCache('ps-3', thirdId))
+  clearRecipePhotoCache()
+  assert.equal(recipePhotoCacheSize(), 0)
+  storeRecipePhotoCache('ps-9', firstId, photoPayload('ps-9'))
+  assert.equal(recipePhotoCacheSize(), 1)
+  clearRecipePhotoCache()
+})
+
+test('stale in-flight recipe photo failures cannot replace a later session image', async () => {
+  clearRecipePhotoCache()
+  let finishFirst: (value: { ok: true; data: ReturnType<typeof photoPayload>; error: null }) => void = () => {}
+  const firstFetch = new Promise<{ ok: true; data: ReturnType<typeof photoPayload>; error: null }>((resolve) => {
+    finishFirst = resolve
+  })
+  const pending = loadStoredRecipePhoto({
+    sessionId: 'ps-1',
+    recipePhoto: '1abcDEFGHIJ-klmnopqr',
+    actorUserId: 'u-aina',
+    requestId: 1,
+    isCurrent: () => false,
+    fetchPhoto: async () => firstFetch,
+  })
+  const later = await loadStoredRecipePhoto({
+    sessionId: 'ps-2',
+    recipePhoto: '1otherDriveFileXXXX',
+    actorUserId: 'u-aina',
+    requestId: 2,
+    isCurrent: () => true,
+    fetchPhoto: async () => ({ ok: true, data: photoPayload('ps-2', 'data:image/png;base64,abc'), error: null }),
+  })
+  finishFirst({ ok: true, data: photoPayload('ps-1'), error: null })
+  const stale = await pending
+  assert.equal(stale.status, 'error')
+  assert.equal(stale.payload, undefined)
+  assert.equal(later.status, 'ready')
+  assert.equal(later.payload?.sessionId, 'ps-2')
+  assert.equal(peekRecipePhotoCache('ps-1', '1abcDEFGHIJ-klmnopqr'), undefined)
+  assert.equal(peekRecipePhotoCache('ps-2', '1otherDriveFileXXXX')?.sessionId, 'ps-2')
 })
 
