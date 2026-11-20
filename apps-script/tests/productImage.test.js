@@ -190,6 +190,75 @@ function oversizedDataUrl() {
   return `data:image/png;base64,${bytes.toString('base64')}`
 }
 
+function productImageId(backend, productId) {
+  const listed = call(backend, 'products.list', {})
+  const product = byId(listed.data, productId)
+  return product ? product.imageFileId : undefined
+}
+
+function trackImageOps(backend) {
+  const ops = []
+  const control = { failPersist: false, failTrashIds: new Set() }
+  const replaceObjects = backend.sheets.replaceObjects.bind(backend.sheets)
+  backend.sheets.replaceObjects = (sheet, records) => {
+    if (sheet.getName() === 'Products') {
+      const row = (records || []).find((item) => item && item.id === 'prd-sugar')
+      ops.push({
+        op: 'persist',
+        imageFileId: row ? String(row.imageFileId || '') : '',
+      })
+      if (control.failPersist) {
+        const error = new Error('Sheet write failed.')
+        error.code = 'INTERNAL_ERROR'
+        error.expose = true
+        throw error
+      }
+    }
+    return replaceObjects(sheet, records)
+  }
+  const deleteFile = backend.driveStorage.deleteFile.bind(backend.driveStorage)
+  backend.driveStorage.deleteFile = (id) => {
+    ops.push({ op: 'trash', id })
+    if (control.failTrashIds.has(id) || control.failTrashIds.has('*')) {
+      const error = new Error('Drive delete failed.')
+      error.code = 'INTERNAL_ERROR'
+      error.expose = true
+      throw error
+    }
+    return deleteFile(id)
+  }
+  const uploadFile = backend.driveStorage.uploadFile.bind(backend.driveStorage)
+  backend.driveStorage.uploadFile = (folder, blob, name) => {
+    const uploaded = uploadFile(folder, blob, name)
+    ops.push({ op: 'upload', id: uploaded.id, folder, name })
+    return uploaded
+  }
+  return { ops, control }
+}
+
+function captureLogs(fn) {
+  const lines = []
+  const original = console.log
+  console.log = (...args) => {
+    lines.push(args.map((value) => String(value)).join(' '))
+    original.apply(console, args)
+  }
+  try {
+    return { result: fn(), lines }
+  } finally {
+    console.log = original
+  }
+}
+
+function seedProductWithImage(backend) {
+  assert.equal(call(backend, 'products.create', productInput()).ok, true)
+  const uploaded = call(backend, 'products.uploadImage', {
+    actorUserId: 'u-mei', productId: 'prd-sugar', dataUrl: PNG_DATA_URL, fileName: 'first.png',
+  })
+  assert.equal(uploaded.ok, true, uploaded.error && uploaded.error.message)
+  return byId(uploaded.data, 'prd-sugar').imageFileId
+}
+
 test('health and product list do not create ProductImages or mix RecipePhotos', () => {
   const backend = app()
   backend.foundation.initialize()
@@ -445,4 +514,203 @@ test('product image code stays isolated from recipe photos, POS, sales, and Prod
   assert.equal(db.includes("queueProductWrite('products.uploadImage'"), false)
   assert.equal(db.includes('createSale'), true)
   assert.equal(db.includes('createAgentSale'), true)
+})
+
+test('replaceImage persists the new file id before trashing the old image', () => {
+  const backend = ready()
+  const firstId = seedProductWithImage(backend)
+  const tracked = trackImageOps(backend)
+  tracked.ops.length = 0
+  const replaced = call(backend, 'products.replaceImage', {
+    actorUserId: 'u-mei', productId: 'prd-sugar', dataUrl: JPEG_DATA_URL, fileName: 'second.jpg',
+  })
+  assert.equal(replaced.ok, true, replaced.error && replaced.error.message)
+  const nextId = byId(replaced.data, 'prd-sugar').imageFileId
+  assert.ok(nextId)
+  assert.notEqual(nextId, firstId)
+  const persistIdx = tracked.ops.findIndex((item) => item.op === 'persist' && item.imageFileId === nextId)
+  const trashIdx = tracked.ops.findIndex((item) => item.op === 'trash' && item.id === firstId)
+  assert.ok(persistIdx >= 0)
+  assert.ok(trashIdx >= 0)
+  assert.ok(persistIdx < trashIdx)
+  assert.equal(backend.drive.trashed.includes(firstId), true)
+  assert.equal(productImageId(backend, 'prd-sugar'), nextId)
+})
+
+test('replaceImage upload failure leaves the old image reachable', () => {
+  const backend = ready()
+  const firstId = seedProductWithImage(backend)
+  const tracked = trackImageOps(backend)
+  tracked.ops.length = 0
+  const failed = call(backend, 'products.replaceImage', {
+    actorUserId: 'u-mei',
+    productId: 'prd-sugar',
+    dataUrl: 'data:image/heic;base64,AAAA',
+    fileName: 'phone.heic',
+  })
+  assert.equal(failed.error.code, 'VALIDATION_ERROR')
+  assert.equal(productImageId(backend, 'prd-sugar'), firstId)
+  assert.equal(tracked.ops.some((item) => item.op === 'trash'), false)
+  assert.equal(backend.drive.trashed.includes(firstId), false)
+  const still = call(backend, 'products.getImage', { actorUserId: 'u-siti', productId: 'prd-sugar' })
+  assert.equal(still.ok, true, still.error && still.error.message)
+})
+
+test('replaceImage Sheets failure keeps the old image and cleans up the new upload', () => {
+  const backend = ready()
+  const firstId = seedProductWithImage(backend)
+  const tracked = trackImageOps(backend)
+  tracked.ops.length = 0
+  tracked.control.failPersist = true
+  const failed = call(backend, 'products.replaceImage', {
+    actorUserId: 'u-mei', productId: 'prd-sugar', dataUrl: JPEG_DATA_URL, fileName: 'second.jpg',
+  })
+  assert.equal(failed.ok, false)
+  assert.equal(failed.error.code, 'INTERNAL_ERROR')
+  const uploaded = tracked.ops.find((item) => item.op === 'upload')
+  assert.ok(uploaded)
+  const persistIdx = tracked.ops.findIndex((item) => item.op === 'persist')
+  const newTrashIdx = tracked.ops.findIndex((item) => item.op === 'trash' && item.id === uploaded.id)
+  const oldTrashIdx = tracked.ops.findIndex((item) => item.op === 'trash' && item.id === firstId)
+  assert.ok(persistIdx >= 0)
+  assert.ok(newTrashIdx >= 0)
+  assert.ok(persistIdx < newTrashIdx)
+  assert.equal(oldTrashIdx, -1)
+  assert.equal(productImageId(backend, 'prd-sugar'), firstId)
+  assert.equal(backend.drive.trashed.includes(firstId), false)
+  assert.equal(backend.drive.trashed.includes(uploaded.id), true)
+  const still = call(backend, 'products.getImage', { actorUserId: 'u-siti', productId: 'prd-sugar' })
+  assert.equal(still.ok, true, still.error && still.error.message)
+})
+
+test('replaceImage preserves the persist error when new-file cleanup also fails', () => {
+  const backend = ready()
+  const firstId = seedProductWithImage(backend)
+  const tracked = trackImageOps(backend)
+  tracked.ops.length = 0
+  tracked.control.failPersist = true
+  tracked.control.failTrashIds.add('*')
+  const captured = captureLogs(() => call(backend, 'products.replaceImage', {
+    actorUserId: 'u-mei', productId: 'prd-sugar', dataUrl: JPEG_DATA_URL, fileName: 'second.jpg',
+  }))
+  const failed = captured.result
+  assert.equal(failed.ok, false)
+  assert.equal(failed.error.code, 'INTERNAL_ERROR')
+  assert.equal(failed.error.message, 'The request could not be completed.')
+  assert.equal(productImageId(backend, 'prd-sugar'), firstId)
+  assert.equal(backend.drive.trashed.includes(firstId), false)
+  const uploaded = tracked.ops.find((item) => item.op === 'upload')
+  assert.ok(uploaded)
+  assert.equal(tracked.ops.some((item) => item.op === 'trash' && item.id === firstId), false)
+  assert.ok(captured.lines.some((line) => line.includes('"status":"cleanup_failed"') && line.includes(uploaded.id)))
+})
+
+test('replaceImage stays successful when old-file cleanup fails after persist', () => {
+  const backend = ready()
+  const firstId = seedProductWithImage(backend)
+  const tracked = trackImageOps(backend)
+  tracked.ops.length = 0
+  tracked.control.failTrashIds.add(firstId)
+  const captured = captureLogs(() => call(backend, 'products.replaceImage', {
+    actorUserId: 'u-mei', productId: 'prd-sugar', dataUrl: JPEG_DATA_URL, fileName: 'second.jpg',
+  }))
+  const replaced = captured.result
+  assert.equal(replaced.ok, true, replaced.error && replaced.error.message)
+  const nextId = byId(replaced.data, 'prd-sugar').imageFileId
+  assert.ok(nextId)
+  assert.notEqual(nextId, firstId)
+  const persistIdx = tracked.ops.findIndex((item) => item.op === 'persist' && item.imageFileId === nextId)
+  const trashIdx = tracked.ops.findIndex((item) => item.op === 'trash' && item.id === firstId)
+  assert.ok(persistIdx >= 0)
+  assert.ok(trashIdx >= 0)
+  assert.ok(persistIdx < trashIdx)
+  assert.equal(productImageId(backend, 'prd-sugar'), nextId)
+  assert.equal(backend.drive.trashed.includes(firstId), false)
+  assert.ok(captured.lines.some((line) => line.includes('"status":"cleanup_failed"') && line.includes(firstId)))
+})
+
+test('replaceImage never trashes a file outside ProductImages', () => {
+  const backend = ready()
+  assert.equal(call(backend, 'products.create', productInput()).ok, true)
+  const recipe = putDriveFile(backend, 'image/png', pngBytes(), 'recipe.png', childFolder(backend, 'RecipePhotos'))
+  setProductImageId(backend, 'prd-sugar', recipe.id)
+  const tracked = trackImageOps(backend)
+  tracked.ops.length = 0
+  const replaced = call(backend, 'products.replaceImage', {
+    actorUserId: 'u-mei', productId: 'prd-sugar', dataUrl: PNG_DATA_URL,
+  })
+  assert.equal(replaced.ok, true, replaced.error && replaced.error.message)
+  assert.equal(tracked.ops.some((item) => item.op === 'trash' && item.id === recipe.id), false)
+  assert.equal(backend.drive.trashed.includes(recipe.id), false)
+  assert.notEqual(productImageId(backend, 'prd-sugar'), recipe.id)
+})
+
+test('removeImage clears the product reference before trashing Drive', () => {
+  const backend = ready()
+  const firstId = seedProductWithImage(backend)
+  const tracked = trackImageOps(backend)
+  tracked.ops.length = 0
+  const removed = call(backend, 'products.removeImage', { actorUserId: 'u-mei', productId: 'prd-sugar' })
+  assert.equal(removed.ok, true, removed.error && removed.error.message)
+  assert.equal(byId(removed.data, 'prd-sugar').imageFileId, undefined)
+  const persistIdx = tracked.ops.findIndex((item) => item.op === 'persist' && item.imageFileId === '')
+  const trashIdx = tracked.ops.findIndex((item) => item.op === 'trash' && item.id === firstId)
+  assert.ok(persistIdx >= 0)
+  assert.ok(trashIdx >= 0)
+  assert.ok(persistIdx < trashIdx)
+  assert.equal(backend.drive.trashed.includes(firstId), true)
+})
+
+test('removeImage Sheets failure keeps the original image', () => {
+  const backend = ready()
+  const firstId = seedProductWithImage(backend)
+  const tracked = trackImageOps(backend)
+  tracked.ops.length = 0
+  tracked.control.failPersist = true
+  const failed = call(backend, 'products.removeImage', { actorUserId: 'u-mei', productId: 'prd-sugar' })
+  assert.equal(failed.ok, false)
+  assert.equal(failed.error.code, 'INTERNAL_ERROR')
+  assert.equal(tracked.ops.some((item) => item.op === 'trash'), false)
+  assert.equal(productImageId(backend, 'prd-sugar'), firstId)
+  assert.equal(backend.drive.trashed.includes(firstId), false)
+  const still = call(backend, 'products.getImage', { actorUserId: 'u-siti', productId: 'prd-sugar' })
+  assert.equal(still.ok, true, still.error && still.error.message)
+})
+
+test('removeImage stays successful when Drive cleanup fails after persist', () => {
+  const backend = ready()
+  const firstId = seedProductWithImage(backend)
+  const tracked = trackImageOps(backend)
+  tracked.ops.length = 0
+  tracked.control.failTrashIds.add(firstId)
+  const captured = captureLogs(() => call(backend, 'products.removeImage', {
+    actorUserId: 'u-mei', productId: 'prd-sugar',
+  }))
+  const removed = captured.result
+  assert.equal(removed.ok, true, removed.error && removed.error.message)
+  assert.equal(byId(removed.data, 'prd-sugar').imageFileId, undefined)
+  const persistIdx = tracked.ops.findIndex((item) => item.op === 'persist' && item.imageFileId === '')
+  const trashIdx = tracked.ops.findIndex((item) => item.op === 'trash' && item.id === firstId)
+  assert.ok(persistIdx >= 0)
+  assert.ok(trashIdx >= 0)
+  assert.ok(persistIdx < trashIdx)
+  assert.equal(productImageId(backend, 'prd-sugar'), undefined)
+  assert.equal(backend.drive.trashed.includes(firstId), false)
+  assert.ok(captured.lines.some((line) => line.includes('"status":"cleanup_failed"') && line.includes(firstId)))
+})
+
+test('removeImage never trashes a file outside ProductImages', () => {
+  const backend = ready()
+  assert.equal(call(backend, 'products.create', productInput()).ok, true)
+  const recipe = putDriveFile(backend, 'image/png', pngBytes(), 'recipe.png', childFolder(backend, 'RecipePhotos'))
+  setProductImageId(backend, 'prd-sugar', recipe.id)
+  const tracked = trackImageOps(backend)
+  tracked.ops.length = 0
+  const removed = call(backend, 'products.removeImage', { actorUserId: 'u-mei', productId: 'prd-sugar' })
+  assert.equal(removed.ok, true, removed.error && removed.error.message)
+  assert.equal(byId(removed.data, 'prd-sugar').imageFileId, undefined)
+  const persistIdx = tracked.ops.findIndex((item) => item.op === 'persist' && item.imageFileId === '')
+  assert.ok(persistIdx >= 0)
+  assert.equal(tracked.ops.some((item) => item.op === 'trash' && item.id === recipe.id), false)
+  assert.equal(backend.drive.trashed.includes(recipe.id), false)
 })

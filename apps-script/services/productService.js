@@ -775,6 +775,28 @@ function createProductService(deps) {
     drive.deleteFile(id);
   }
 
+  function logImageCleanupFailure(action, requestId, fileId, error) {
+    var safe = toSafeError(error);
+    console.log(JSON.stringify({
+      requestId: requestId || '',
+      action: action,
+      timestamp: nowIso(),
+      status: 'cleanup_failed',
+      errorCode: safe.code,
+      fileId: text(fileId).trim()
+    }));
+  }
+
+  // Never trash a Drive file unless it is in this environment's ProductImages folder.
+  // Cleanup failures are logged and must not replace a prior persist error.
+  function cleanupOwnedProductImage(fileId, action, requestId) {
+    try {
+      trashOwnedProductImage(fileId);
+    } catch (error) {
+      logImageCleanupFailure(action, requestId, fileId, error);
+    }
+  }
+
   function uploadProductImageFile(parsed) {
     var storage = requireDrive();
     storage.createChildFolder(PRODUCT_IMAGE_FOLDER);
@@ -782,7 +804,7 @@ function createProductService(deps) {
     return uploaded.id;
   }
 
-  function persistImageFileId(spreadsheet, productId, imageFileId, actor, action, requestId, before, after) {
+  function writeProductImageFileId(spreadsheet, productId, imageFileId) {
     var current = assemble(spreadsheet);
     var products = current.products.map(function (product) {
       if (product.id !== productId) return product;
@@ -793,6 +815,11 @@ function createProductService(deps) {
       return next;
     });
     persist(spreadsheet, products, current.salesComponents, current.inventoryBalances);
+    return snapshot(assemble(spreadsheet));
+  }
+
+  function persistImageFileId(spreadsheet, productId, imageFileId, actor, action, requestId, before, after) {
+    var result = writeProductImageFileId(spreadsheet, productId, imageFileId);
     systemAudit(spreadsheet, {
       userId: actor.id,
       action: action,
@@ -803,7 +830,7 @@ function createProductService(deps) {
       after: after || '',
       requestId: requestId
     });
-    return snapshot(assemble(spreadsheet));
+    return result;
   }
 
   function loadProductImageRef(spreadsheet, payload) {
@@ -876,10 +903,28 @@ function createProductService(deps) {
     if (!previous) throw appError('NOT_FOUND', 'Product image was not found.');
     var parsed = parseProductImage(payload.dataUrl, payload.fileName, product.id);
     var imageFileId = uploadProductImageFile(parsed);
-    trashOwnedProductImage(previous);
-    return persistImageFileId(
-      spreadsheet, product.id, imageFileId, actor, 'products.replaceImage', requestId, previous, imageFileId
-    );
+    var result;
+    // Persist the new reference before trashing the previous file. A Sheets
+    // failure must leave the old image reachable and attempt to clean up only
+    // the newly uploaded ProductImages file.
+    try {
+      result = writeProductImageFileId(spreadsheet, product.id, imageFileId);
+    } catch (error) {
+      cleanupOwnedProductImage(imageFileId, 'products.replaceImage', requestId);
+      throw error;
+    }
+    systemAudit(spreadsheet, {
+      userId: actor.id,
+      action: 'products.replaceImage',
+      entityType: 'product',
+      entityId: product.id,
+      reference: '',
+      before: previous,
+      after: imageFileId,
+      requestId: requestId
+    });
+    cleanupOwnedProductImage(previous, 'products.replaceImage', requestId);
+    return result;
   }
 
   function removeImage(spreadsheet, payload, requestId) {
@@ -889,10 +934,21 @@ function createProductService(deps) {
     if (!product) throw appError('NOT_FOUND', 'Product was not found.');
     var previous = storedImageFileId(product);
     if (!previous) throw appError('NOT_FOUND', 'Product image was not found.');
-    trashOwnedProductImage(previous);
-    return persistImageFileId(
-      spreadsheet, product.id, '', actor, 'products.removeImage', requestId, previous, ''
-    );
+    // Clear the product reference before trashing Drive. Persistence failure
+    // must not delete the file still named on the product row.
+    var result = writeProductImageFileId(spreadsheet, product.id, '');
+    systemAudit(spreadsheet, {
+      userId: actor.id,
+      action: 'products.removeImage',
+      entityType: 'product',
+      entityId: product.id,
+      reference: '',
+      before: previous,
+      after: '',
+      requestId: requestId
+    });
+    cleanupOwnedProductImage(previous, 'products.removeImage', requestId);
+    return result;
   }
 
   function dispatch(request) {
