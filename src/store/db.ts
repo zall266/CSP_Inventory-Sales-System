@@ -1,4 +1,4 @@
-import { identityApiUrl } from '@/api/identityApi'
+import { identityApiUrl, postIdentityAction } from '@/api/identityApi'
 import { createSeedData, CURRENT_USER } from '@/data/seed'
 import { queueIdentityWrite, queueSettingsPatch, startIdentityHydration } from '@/store/identitySync'
 import { queueMasterWrite, startMasterHydration } from '@/store/masterSync'
@@ -93,6 +93,20 @@ import {
 } from '@/features/tasks/taskModel'
 import { clearAttachmentBlobs, deleteAttachmentBlob, putAttachmentBlob } from '@/store/attachmentBlobs'
 import { applyBomCosts, hydrateProducts, normalizeUnit, parseNonNegativeMoney, productHasBom, productIsSellable, productIsUsed, purchaseQtyToBaseQty, qtyToBaseUnit, resolveProductSku, skuIsUnique, validatePurchaseConversion } from '@/features/products/masterData'
+import {
+  PRODUCT_IMAGE_API_MISSING,
+  PRODUCT_IMAGE_PERMISSION_ERROR,
+  PRODUCT_IMAGE_REPLACE_ACTION,
+  PRODUCT_IMAGE_REMOVE_ACTION,
+  PRODUCT_IMAGE_SAVE_ERROR,
+  PRODUCT_IMAGE_TYPE_ERROR,
+  PRODUCT_IMAGE_UPLOAD_ACTION,
+  dropProductImageCache,
+  imageFileIdFromProductSnapshot,
+  mutateProductImage,
+  parseProductImage,
+  storeProductImageCache,
+} from '@/features/products/productImage'
 import { inactiveSalesComponent, salesComponentSnapshot, salesComponentsOf, validateSalesComponents } from '@/features/products/salesComponents'
 import { isDispatchDate, snapshotDispatchLines, validateDispatchLines, validateInspectionGroup } from '@/features/dispatch/dispatchModel'
 import { parseAwb } from '@/features/salesImport/parseAwb'
@@ -2604,6 +2618,156 @@ export const db = {
       products: state.products.map((product) => (product.id === id ? { ...product, status } : product)),
     })
     toast(status === 'inactive' ? 'Product deactivated' : 'Product activated')
+  },
+
+  applyProductImageFileId(productId: string, imageFileId: string | undefined) {
+    setData({
+      products: state.products.map((product) => {
+        if (product.id !== productId) return product
+        if (imageFileId) return { ...product, imageFileId }
+        const next = { ...product }
+        delete next.imageFileId
+        return next
+      }),
+    })
+  },
+
+  async uploadProductImage(productId: string, dataUrl: string, fileName: string) {
+    if (!hasPermission(state, 'products.edit')) {
+      toast('Permission denied', PRODUCT_IMAGE_PERMISSION_ERROR, 'danger')
+      return { ok: false as const }
+    }
+    const current = state.products.find((product) => product.id === productId)
+    if (!current) {
+      toast('Could not upload product image', 'Product was not found.', 'danger')
+      return { ok: false as const }
+    }
+    if (current.imageFileId) {
+      toast('Could not upload product image', 'Product already has an image.', 'warning')
+      return { ok: false as const }
+    }
+    const parsed = parseProductImage(dataUrl, fileName)
+    if (!parsed.ok) {
+      toast('Could not upload product image', parsed.error || PRODUCT_IMAGE_TYPE_ERROR, 'warning')
+      return { ok: false as const }
+    }
+    if (!identityApiUrl()) {
+      toast('Could not upload product image', PRODUCT_IMAGE_API_MISSING, 'danger')
+      return { ok: false as const }
+    }
+    const result = await mutateProductImage(
+      PRODUCT_IMAGE_UPLOAD_ACTION,
+      {
+        productId,
+        actorUserId: currentUser(state).id,
+        dataUrl: parsed.dataUrl,
+        fileName: parsed.name,
+      },
+      postIdentityAction,
+    )
+    if (!result.ok) {
+      toast('Could not upload product image', result.error?.message || PRODUCT_IMAGE_SAVE_ERROR, 'danger')
+      return { ok: false as const }
+    }
+    const imageFileId = imageFileIdFromProductSnapshot(result.data, productId)
+    if (!imageFileId) {
+      toast(
+        'Could not upload product image',
+        'The image may have been stored without updating the product record. Refresh and retry if the image is missing.',
+        'danger',
+      )
+      return { ok: false as const }
+    }
+    this.applyProductImageFileId(productId, imageFileId)
+    storeProductImageCache(productId, imageFileId, {
+      productId,
+      fileName: parsed.name,
+      mimeType: parsed.mime,
+      dataUrl: parsed.dataUrl,
+    })
+    toast('Product image uploaded')
+    return { ok: true as const, imageFileId }
+  },
+
+  async replaceProductImage(productId: string, dataUrl: string, fileName: string) {
+    if (!hasPermission(state, 'products.edit')) {
+      toast('Permission denied', PRODUCT_IMAGE_PERMISSION_ERROR, 'danger')
+      return { ok: false as const }
+    }
+    const current = state.products.find((product) => product.id === productId)
+    if (!current?.imageFileId) {
+      toast('Could not replace product image', 'Product image was not found.', 'danger')
+      return { ok: false as const }
+    }
+    const parsed = parseProductImage(dataUrl, fileName)
+    if (!parsed.ok) {
+      toast('Could not replace product image', parsed.error || PRODUCT_IMAGE_TYPE_ERROR, 'warning')
+      return { ok: false as const }
+    }
+    if (!identityApiUrl()) {
+      toast('Could not replace product image', PRODUCT_IMAGE_API_MISSING, 'danger')
+      return { ok: false as const }
+    }
+    const result = await mutateProductImage(
+      PRODUCT_IMAGE_REPLACE_ACTION,
+      {
+        productId,
+        actorUserId: currentUser(state).id,
+        dataUrl: parsed.dataUrl,
+        fileName: parsed.name,
+      },
+      postIdentityAction,
+    )
+    if (!result.ok) {
+      toast('Could not replace product image', result.error?.message || PRODUCT_IMAGE_SAVE_ERROR, 'danger')
+      return { ok: false as const }
+    }
+    const imageFileId = imageFileIdFromProductSnapshot(result.data, productId)
+    if (!imageFileId) {
+      toast('Could not replace product image', PRODUCT_IMAGE_SAVE_ERROR, 'danger')
+      return { ok: false as const }
+    }
+    this.applyProductImageFileId(productId, imageFileId)
+    storeProductImageCache(productId, imageFileId, {
+      productId,
+      fileName: parsed.name,
+      mimeType: parsed.mime,
+      dataUrl: parsed.dataUrl,
+    })
+    toast('Product image replaced')
+    return { ok: true as const, imageFileId }
+  },
+
+  async removeProductImage(productId: string) {
+    if (!hasPermission(state, 'products.edit')) {
+      toast('Permission denied', PRODUCT_IMAGE_PERMISSION_ERROR, 'danger')
+      return { ok: false as const }
+    }
+    const current = state.products.find((product) => product.id === productId)
+    if (!current?.imageFileId) {
+      toast('Could not remove product image', 'Product image was not found.', 'danger')
+      return { ok: false as const }
+    }
+    if (!identityApiUrl()) {
+      toast('Could not remove product image', PRODUCT_IMAGE_API_MISSING, 'danger')
+      return { ok: false as const }
+    }
+    const result = await mutateProductImage(
+      PRODUCT_IMAGE_REMOVE_ACTION,
+      {
+        productId,
+        actorUserId: currentUser(state).id,
+      },
+      postIdentityAction,
+    )
+    if (!result.ok) {
+      toast('Could not remove product image', result.error?.message || PRODUCT_IMAGE_SAVE_ERROR, 'danger')
+      return { ok: false as const }
+    }
+    this.applyProductImageFileId(productId, undefined)
+    dropProductImageCache(productId)
+    toast('Product image removed')
+    return { ok: true as const }
   },
 
   createCategory(name: string) {
