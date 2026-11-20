@@ -2655,38 +2655,43 @@ export const db = {
       toast('Could not upload product image', PRODUCT_IMAGE_API_MISSING, 'danger')
       return { ok: false as const }
     }
-    const result = await mutateProductImage(
-      PRODUCT_IMAGE_UPLOAD_ACTION,
-      {
-        productId,
-        actorUserId: currentUser(state).id,
-        dataUrl: parsed.dataUrl,
-        fileName: parsed.name,
-      },
-      postIdentityAction,
-    )
-    if (!result.ok) {
-      toast('Could not upload product image', result.error?.message || PRODUCT_IMAGE_SAVE_ERROR, 'danger')
-      return { ok: false as const }
-    }
-    const imageFileId = imageFileIdFromProductSnapshot(result.data, productId)
-    if (!imageFileId) {
-      toast(
-        'Could not upload product image',
-        'The image may have been stored without updating the product record. Refresh and retry if the image is missing.',
-        'danger',
+    try {
+      const result = await mutateProductImage(
+        PRODUCT_IMAGE_UPLOAD_ACTION,
+        {
+          productId,
+          actorUserId: currentUser(state).id,
+          dataUrl: parsed.dataUrl,
+          fileName: parsed.name,
+        },
+        postIdentityAction,
       )
+      if (!result.ok) {
+        toast('Could not upload product image', result.error?.message || PRODUCT_IMAGE_SAVE_ERROR, 'danger')
+        return { ok: false as const }
+      }
+      const imageFileId = imageFileIdFromProductSnapshot(result.data, productId)
+      if (!imageFileId) {
+        toast(
+          'Could not upload product image',
+          'The image may have been stored without updating the product record. Refresh and retry if the image is missing.',
+          'danger',
+        )
+        return { ok: false as const }
+      }
+      this.applyProductImageFileId(productId, imageFileId)
+      storeProductImageCache(productId, imageFileId, {
+        productId,
+        fileName: parsed.name,
+        mimeType: parsed.mime,
+        dataUrl: parsed.dataUrl,
+      })
+      toast('Product image uploaded')
+      return { ok: true as const, imageFileId }
+    } catch {
+      toast('Could not upload product image', PRODUCT_IMAGE_SAVE_ERROR, 'danger')
       return { ok: false as const }
     }
-    this.applyProductImageFileId(productId, imageFileId)
-    storeProductImageCache(productId, imageFileId, {
-      productId,
-      fileName: parsed.name,
-      mimeType: parsed.mime,
-      dataUrl: parsed.dataUrl,
-    })
-    toast('Product image uploaded')
-    return { ok: true as const, imageFileId }
   },
 
   async replaceProductImage(productId: string, dataUrl: string, fileName: string) {
@@ -2708,34 +2713,39 @@ export const db = {
       toast('Could not replace product image', PRODUCT_IMAGE_API_MISSING, 'danger')
       return { ok: false as const }
     }
-    const result = await mutateProductImage(
-      PRODUCT_IMAGE_REPLACE_ACTION,
-      {
+    try {
+      const result = await mutateProductImage(
+        PRODUCT_IMAGE_REPLACE_ACTION,
+        {
+          productId,
+          actorUserId: currentUser(state).id,
+          dataUrl: parsed.dataUrl,
+          fileName: parsed.name,
+        },
+        postIdentityAction,
+      )
+      if (!result.ok) {
+        toast('Could not replace product image', result.error?.message || PRODUCT_IMAGE_SAVE_ERROR, 'danger')
+        return { ok: false as const }
+      }
+      const imageFileId = imageFileIdFromProductSnapshot(result.data, productId)
+      if (!imageFileId) {
+        toast('Could not replace product image', PRODUCT_IMAGE_SAVE_ERROR, 'danger')
+        return { ok: false as const }
+      }
+      this.applyProductImageFileId(productId, imageFileId)
+      storeProductImageCache(productId, imageFileId, {
         productId,
-        actorUserId: currentUser(state).id,
-        dataUrl: parsed.dataUrl,
         fileName: parsed.name,
-      },
-      postIdentityAction,
-    )
-    if (!result.ok) {
-      toast('Could not replace product image', result.error?.message || PRODUCT_IMAGE_SAVE_ERROR, 'danger')
-      return { ok: false as const }
-    }
-    const imageFileId = imageFileIdFromProductSnapshot(result.data, productId)
-    if (!imageFileId) {
+        mimeType: parsed.mime,
+        dataUrl: parsed.dataUrl,
+      })
+      toast('Product image replaced')
+      return { ok: true as const, imageFileId }
+    } catch {
       toast('Could not replace product image', PRODUCT_IMAGE_SAVE_ERROR, 'danger')
       return { ok: false as const }
     }
-    this.applyProductImageFileId(productId, imageFileId)
-    storeProductImageCache(productId, imageFileId, {
-      productId,
-      fileName: parsed.name,
-      mimeType: parsed.mime,
-      dataUrl: parsed.dataUrl,
-    })
-    toast('Product image replaced')
-    return { ok: true as const, imageFileId }
   },
 
   async removeProductImage(productId: string) {
@@ -2752,22 +2762,27 @@ export const db = {
       toast('Could not remove product image', PRODUCT_IMAGE_API_MISSING, 'danger')
       return { ok: false as const }
     }
-    const result = await mutateProductImage(
-      PRODUCT_IMAGE_REMOVE_ACTION,
-      {
-        productId,
-        actorUserId: currentUser(state).id,
-      },
-      postIdentityAction,
-    )
-    if (!result.ok) {
-      toast('Could not remove product image', result.error?.message || PRODUCT_IMAGE_SAVE_ERROR, 'danger')
+    try {
+      const result = await mutateProductImage(
+        PRODUCT_IMAGE_REMOVE_ACTION,
+        {
+          productId,
+          actorUserId: currentUser(state).id,
+        },
+        postIdentityAction,
+      )
+      if (!result.ok) {
+        toast('Could not remove product image', result.error?.message || PRODUCT_IMAGE_SAVE_ERROR, 'danger')
+        return { ok: false as const }
+      }
+      this.applyProductImageFileId(productId, undefined)
+      dropProductImageCache(productId)
+      toast('Product image removed')
+      return { ok: true as const }
+    } catch {
+      toast('Could not remove product image', PRODUCT_IMAGE_SAVE_ERROR, 'danger')
       return { ok: false as const }
     }
-    this.applyProductImageFileId(productId, undefined)
-    dropProductImageCache(productId)
-    toast('Product image removed')
-    return { ok: true as const }
   },
 
   createCategory(name: string) {

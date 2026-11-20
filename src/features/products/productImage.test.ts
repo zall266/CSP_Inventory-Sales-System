@@ -117,6 +117,28 @@ test('preview appears before upload and cancel does not call the API', () => {
   assert.equal(panel.includes('api.uploadProductImage'), true)
   assert.equal(panel.includes('confirmPreview'), true)
   assert.equal(panel.includes("pickModeRef.current = mode"), true)
+  const cancelUpload = panel.slice(panel.indexOf('data-product-image-confirm-save') - 400, panel.indexOf('data-product-image-confirm-save'))
+  assert.equal(cancelUpload.includes('onClick={closePreview}'), true)
+  assert.equal(cancelUpload.includes('uploadProductImage'), false)
+  assert.equal(cancelUpload.includes('replaceProductImage'), false)
+  const cancelRemove = panel.slice(panel.indexOf('data-product-image-confirm-remove') - 450, panel.indexOf('data-product-image-confirm-remove'))
+  assert.equal(cancelRemove.includes("onClick={() => setRemoveOpen(false)}"), true)
+  assert.equal(cancelRemove.includes('removeProductImage'), false)
+})
+
+test('busy state always resets and switching products clears pending image edits', () => {
+  const panel = read('features/products/ProductImagePanel.tsx')
+  const db = read('store/db.ts')
+  assert.equal(panel.includes('} finally {'), true)
+  assert.equal(panel.includes('setBusy(false)'), true)
+  assert.equal(panel.includes('setPreview(null)'), true)
+  assert.equal(panel.includes('setRemoveOpen(false)'), true)
+  assert.equal(panel.includes('}, [product.id])'), true)
+  assert.equal(panel.includes('if (result.requestId !== requestRef.current) return'), true)
+  assert.equal(panel.includes("current.status === 'ready' ? { status: 'error', error: PRODUCT_IMAGE_LOAD_ERROR } : current"), true)
+  assert.equal(db.includes("toast('Could not upload product image', PRODUCT_IMAGE_SAVE_ERROR, 'danger')"), true)
+  assert.equal(db.includes("toast('Could not replace product image', PRODUCT_IMAGE_SAVE_ERROR, 'danger')"), true)
+  assert.equal(db.includes("toast('Could not remove product image', PRODUCT_IMAGE_SAVE_ERROR, 'danger')"), true)
 })
 
 test('successful upload refreshes the image; failed upload keeps ProductMark', () => {
@@ -241,6 +263,25 @@ test('failed or missing retrieval does not retry forever and falls back to Produ
     fetchImage: async () => ({ ok: false, data: null, error: { code: 'FORBIDDEN', message: PRODUCT_IMAGE_FORBIDDEN } }),
   })
   assert.equal(forbidden.status, 'forbidden')
+  clearProductImageCache()
+  let currentId = 7
+  const stale = await loadStoredProductImage({
+    productId: 'p-cp',
+    imageFileId: 'driveFileId123456',
+    actorUserId: 'u-admin',
+    requestId: 7,
+    isCurrent: (id) => id === currentId,
+    fetchImage: async () => {
+      currentId = 8
+      return {
+        ok: true,
+        data: { productId: 'p-cp', fileName: 'stale.png', mimeType: 'image/png', dataUrl: PNG_DATA_URL },
+        error: null,
+      }
+    },
+  })
+  assert.equal(stale.status, 'error')
+  assert.equal(peekProductImageCache('p-cp', 'driveFileId123456'), undefined)
 })
 
 test('cache keys stay per product and image file id, and can be dropped after removal', () => {

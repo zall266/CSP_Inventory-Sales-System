@@ -9,6 +9,7 @@ import {
   PRODUCT_IMAGE_FORBIDDEN,
   PRODUCT_IMAGE_LOAD_ERROR,
   PRODUCT_IMAGE_MISSING,
+  PRODUCT_IMAGE_SAVE_ERROR,
   fetchProductImage,
   loadStoredProductImage,
   openProductImagePicker,
@@ -98,6 +99,13 @@ export function ProductImageHeader({
   }
 
   useEffect(() => {
+    setPreview(null)
+    setRemoveOpen(false)
+    setBusy(false)
+    setPickerError('')
+  }, [product.id])
+
+  useEffect(() => {
     load(imageFileId)
     return () => {
       requestRef.current += 1
@@ -137,34 +145,51 @@ export function ProductImageHeader({
   const onFile = async (event: ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0]
     event.target.value = ''
-    const result = await readProductImageFile(file)
-    if (!result.ok) {
-      setPickerError(result.error)
-      return
+    try {
+      const result = await readProductImageFile(file)
+      if (!result.ok) {
+        setPickerError(result.error)
+        return
+      }
+      setPickerError('')
+      setPreview({ mode: pickModeRef.current, dataUrl: result.dataUrl, name: result.name })
+    } catch {
+      setPickerError(PRODUCT_IMAGE_LOAD_ERROR)
     }
-    setPickerError('')
-    setPreview({ mode: pickModeRef.current, dataUrl: result.dataUrl, name: result.name })
   }
 
   const confirmPreview = async () => {
     if (!preview || busy) return
+    const productId = product.id
+    const next = preview
     setBusy(true)
-    const saved =
-      preview.mode === 'replace'
-        ? await api.replaceProductImage(product.id, preview.dataUrl, preview.name)
-        : await api.uploadProductImage(product.id, preview.dataUrl, preview.name)
-    setBusy(false)
-    if (!saved.ok) return
-    setPreview(null)
+    try {
+      const saved =
+        next.mode === 'replace'
+          ? await api.replaceProductImage(productId, next.dataUrl, next.name)
+          : await api.uploadProductImage(productId, next.dataUrl, next.name)
+      if (!saved.ok) return
+      setPreview(null)
+    } catch {
+      setPickerError(PRODUCT_IMAGE_SAVE_ERROR)
+    } finally {
+      setBusy(false)
+    }
   }
 
   const confirmRemove = async () => {
     if (busy) return
+    const productId = product.id
     setBusy(true)
-    const saved = await api.removeProductImage(product.id)
-    setBusy(false)
-    if (!saved.ok) return
-    setRemoveOpen(false)
+    try {
+      const saved = await api.removeProductImage(productId)
+      if (!saved.ok) return
+      setRemoveOpen(false)
+    } catch {
+      setPickerError(PRODUCT_IMAGE_SAVE_ERROR)
+    } finally {
+      setBusy(false)
+    }
   }
 
   return (
@@ -176,7 +201,11 @@ export function ProductImageHeader({
             alt=""
             className="h-full w-full object-cover"
             data-product-image-preview="saved"
-            onError={() => setView({ status: 'error', error: PRODUCT_IMAGE_LOAD_ERROR })}
+            onError={() => {
+              setView((current) =>
+                current.status === 'ready' ? { status: 'error', error: PRODUCT_IMAGE_LOAD_ERROR } : current,
+              )
+            }}
           />
         ) : (
           <ProductMark product={product} size="lg" />
