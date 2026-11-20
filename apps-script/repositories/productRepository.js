@@ -7,14 +7,41 @@ var PRODUCT_HEADERS = [
   'id', 'name', 'sku', 'barcode', 'categoryId', 'unit', 'purchaseUnit',
   'purchaseConversionQty', 'purchaseCost', 'costPrice', 'costSource',
   'sellingPrice', 'wholesalePrice', 'agentPrice', 'sellable', 'reorderLevel',
-  'trackBatch', 'trackExpiry', 'status', 'accent'
+  'trackBatch', 'trackExpiry', 'status', 'accent', 'imageFileId'
 ];
+var PRODUCT_HEADERS_WITHOUT_IMAGE = PRODUCT_HEADERS.slice(0, -1);
 var SALES_COMPONENT_HEADERS = ['id', 'productId', 'componentProductId', 'qty'];
 var INVENTORY_BALANCE_HEADERS = ['productId', 'warehouseId', 'qty'];
 
 function createProductRepository(sheetRepository) {
+  function headerRow(sheet) {
+    var width = sheet.getLastColumn();
+    if (width < 1) return [];
+    return sheet.getRange(1, 1, 1, width).getValues()[0].map(function (header) {
+      return String(header || '').trim();
+    }).filter(Boolean);
+  }
+
+  function ensureProductSheet(spreadsheet) {
+    var existing = sheetRepository.getSheet(spreadsheet, 'Products');
+    if (!existing) {
+      return sheetRepository.ensureSheet(spreadsheet, 'Products', PRODUCT_HEADERS);
+    }
+    var current = headerRow(existing);
+    if (!current.length) {
+      existing.getRange(1, 1, 1, PRODUCT_HEADERS.length).setValues([PRODUCT_HEADERS]);
+      return existing;
+    }
+    if (current.join('|') === PRODUCT_HEADERS.join('|')) return existing;
+    if (current.join('|') === PRODUCT_HEADERS_WITHOUT_IMAGE.join('|')) {
+      existing.getRange(1, 1, 1, PRODUCT_HEADERS.length).setValues([PRODUCT_HEADERS]);
+      return existing;
+    }
+    throw appError('CONFLICT', 'Foundation sheet headers do not match.');
+  }
+
   function ensure(spreadsheet) {
-    var products = sheetRepository.ensureSheet(spreadsheet, 'Products', PRODUCT_HEADERS);
+    var products = ensureProductSheet(spreadsheet);
     var components = sheetRepository.ensureSheet(spreadsheet, 'SalesComponents', SALES_COMPONENT_HEADERS);
     var balances = sheetRepository.ensureSheet(spreadsheet, 'InventoryBalances', INVENTORY_BALANCE_HEADERS);
     forceText(products, PRODUCT_HEADERS.indexOf('sku') + 1);
@@ -67,6 +94,8 @@ function createProductRepository(sheetRepository) {
         accent: text(row.accent).trim() || '#4F46E5'
       };
       if (agentPrice !== '') product.agentPrice = num(row.agentPrice);
+      var imageFileId = text(row.imageFileId).trim();
+      if (imageFileId) product.imageFileId = imageFileId;
       return product;
     });
   }
@@ -119,7 +148,8 @@ function createProductRepository(sheetRepository) {
         trackBatch: Boolean(product.trackBatch),
         trackExpiry: Boolean(product.trackExpiry),
         status: product.status,
-        accent: product.accent
+        accent: product.accent,
+        imageFileId: text(product.imageFileId).trim()
       };
     }));
   }
@@ -134,6 +164,30 @@ function createProductRepository(sheetRepository) {
     sheetRepository.replaceObjects(sheetRepository.getSheet(spreadsheet, 'InventoryBalances'), balances);
   }
 
+  // Image mutations write only the Products imageFileId cell. They must not
+  // rewrite SalesComponents, InventoryBalances, or unrelated product fields.
+  function writeProductImageFileId(spreadsheet, productId, imageFileId) {
+    var sheet = ensureProductSheet(spreadsheet);
+    var headers = headerRow(sheet);
+    var idCol = headers.indexOf('id') + 1;
+    var imageCol = headers.indexOf('imageFileId') + 1;
+    if (idCol < 1 || imageCol < 1) {
+      throw appError('CONFLICT', 'Foundation sheet headers do not match.');
+    }
+    var last = sheet.getLastRow();
+    if (last < 2) throw appError('NOT_FOUND', 'Product was not found.');
+    var ids = sheet.getRange(2, idCol, last - 1, 1).getValues();
+    var id = text(productId).trim();
+    var value = text(imageFileId).trim();
+    for (var i = 0; i < ids.length; i += 1) {
+      if (text(ids[i][0]).trim() === id) {
+        sheet.getRange(i + 2, imageCol, 1, 1).setValues([[value]]);
+        return;
+      }
+    }
+    throw appError('NOT_FOUND', 'Product was not found.');
+  }
+
   return {
     ensure: ensure,
     readProducts: readProducts,
@@ -141,6 +195,7 @@ function createProductRepository(sheetRepository) {
     readBalances: readBalances,
     writeProducts: writeProducts,
     writeComponents: writeComponents,
-    writeBalances: writeBalances
+    writeBalances: writeBalances,
+    writeProductImageFileId: writeProductImageFileId
   };
 }

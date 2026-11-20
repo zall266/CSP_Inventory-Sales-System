@@ -132,6 +132,7 @@ export type Product = {
   trackExpiry: boolean
   status: ProductStatus
   accent: string
+  imageFileId?: string
   /** Direct sales consumption. Empty means the sold SKU is stocked out itself. */
   salesComponents?: SalesComponent[]
 }
@@ -1273,6 +1274,7 @@ export type PermissionKey =
   | 'inventory.transfer'
   | 'inventory.count'
   | 'inventory.usage'
+  | 'products.edit'
   | 'warehouse_map.view'
   | 'warehouse_map.putaway'
   | 'warehouse_map.move'

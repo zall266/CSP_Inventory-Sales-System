@@ -133,6 +133,7 @@ import {
   isOwnerUser,
   HALAL_PERMISSION_KEYS,
   MANUFACTURING_PLAN_PERMISSION_KEYS,
+  PRODUCT_PERMISSION_KEYS,
   normalizePermissions,
   roleById,
   roleName,
@@ -328,7 +329,7 @@ function hydrateData(data: AppData): AppData {
       const raw = data.settings?.roleMatrix?.[role.id] ?? {}
       const normalized = normalizePermissions(raw)
       const defaults = defaultPermissionsForLegacy(role.legacyRole)
-      for (const key of [...WAREHOUSE_MAP_KEYS, ...AGENT_PERMISSION_KEYS, ...TASK_PERMISSION_KEYS, ...RECEIVING_PERMISSION_KEYS, ...OPENING_BALANCE_PERMISSION_KEYS, ...SALES_RETURN_PERMISSION_KEYS, ...CUSTOMER_PRICING_PERMISSION_KEYS, ...MANUFACTURING_PLAN_PERMISSION_KEYS, ...INVENTORY_USAGE_PERMISSION_KEYS, ...HALAL_PERMISSION_KEYS]) {
+      for (const key of [...WAREHOUSE_MAP_KEYS, ...AGENT_PERMISSION_KEYS, ...TASK_PERMISSION_KEYS, ...RECEIVING_PERMISSION_KEYS, ...OPENING_BALANCE_PERMISSION_KEYS, ...SALES_RETURN_PERMISSION_KEYS, ...CUSTOMER_PRICING_PERMISSION_KEYS, ...MANUFACTURING_PLAN_PERMISSION_KEYS, ...INVENTORY_USAGE_PERMISSION_KEYS, ...HALAL_PERMISSION_KEYS, ...PRODUCT_PERMISSION_KEYS]) {
         if (raw[key] === undefined) normalized[key] = defaults[key]
       }
       return [role.id, normalized]

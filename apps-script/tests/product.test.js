@@ -185,7 +185,7 @@ test('product create stores the catalogue, conversion cost, category, and zero c
     'id', 'name', 'sku', 'barcode', 'categoryId', 'unit', 'purchaseUnit',
     'purchaseConversionQty', 'purchaseCost', 'costPrice', 'costSource',
     'sellingPrice', 'wholesalePrice', 'agentPrice', 'sellable', 'reorderLevel',
-    'trackBatch', 'trackExpiry', 'status', 'accent',
+    'trackBatch', 'trackExpiry', 'status', 'accent', 'imageFileId',
   ])
   assert.deepEqual(backend.spreadsheet.store.Sheet1, [['']])
   assert.equal(call(backend, 'users.list', {}).data.users[0].email, 'aina@coolslurppy.my')

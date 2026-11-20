@@ -2,6 +2,8 @@
 // setProductStatus, and saveAgentPrices. There is no product permission key
 // on the product screens, so any active user may create, edit, and change
 // status. Agent price writes still require agent.manage. Owner keeps full access.
+// Product image mutation is the exception: it requires products.edit.
+// Catalogue image reads require an active POS or image-editor actor.
 // applyBomCosts stays with BOMs (later module). This module stores the
 // purchase-derived cost the product form already calculates.
 // productIsUsed also checks later transaction sheets when they exist.
@@ -14,8 +16,18 @@ var PRODUCT_ACTIONS = {
   'products.create': true,
   'products.update': true,
   'products.setStatus': true,
-  'products.saveAgentPrices': true
+  'products.saveAgentPrices': true,
+  'products.getImage': true,
+  'products.uploadImage': true,
+  'products.replaceImage': true,
+  'products.removeImage': true
 };
+
+var PRODUCT_IMAGE_FOLDER = 'ProductImages';
+var PRODUCT_IMAGE_MAX_BYTES = 1 * 1024 * 1024;
+var PRODUCT_IMAGE_TYPES = { 'image/png': true, 'image/jpeg': true, 'image/webp': true };
+var PRODUCT_IMAGE_GET_KEYS = ['sales.create', 'agent.sale.create', 'products.edit'];
+var PRODUCT_IMAGE_MESSAGE = 'Use a JPG, PNG, or WebP image up to 1 MB.';
 
 var PRODUCT_UNIT_ALIASES = {
   g: 'G', gram: 'G', grams: 'G', kg: 'KG', kilo: 'KG', kilos: 'KG', kilogram: 'KG', kilograms: 'KG',
@@ -29,6 +41,7 @@ var PRODUCT_UNIT_ALIASES = {
 
 function createProductService(deps) {
   var sheets = deps.sheetRepository;
+  var drive = deps.driveStorage;
   var repository = createProductRepository(sheets);
   var audit = deps.audit || createAuditService(sheets);
 
@@ -159,6 +172,20 @@ function createProductService(deps) {
     if (!actorMay(spreadsheet, actor, 'agent.manage')) {
       throw appError('FORBIDDEN', 'You cannot change Agent Price.');
     }
+  }
+
+  function requirePermission(spreadsheet, actorUserId, key, message) {
+    var actor = loadActor(spreadsheet, actorUserId, message);
+    if (!actorMay(spreadsheet, actor, key)) throw appError('FORBIDDEN', message);
+    return actor;
+  }
+
+  function requireAnyPermission(spreadsheet, actorUserId, keys, message) {
+    var actor = loadActor(spreadsheet, actorUserId, message);
+    for (var i = 0; i < keys.length; i += 1) {
+      if (actorMay(spreadsheet, actor, keys[i])) return actor;
+    }
+    throw appError('FORBIDDEN', message);
   }
 
   function skuKey(sku) {
@@ -370,6 +397,7 @@ function createProductService(deps) {
       accent: text(payload.accent).trim() || '#4F46E5',
       salesComponents: components
     };
+    // Client-supplied imageFileId is ignored. Images are written only by dedicated image actions.
     if (agentPrice !== undefined) product.agentPrice = agentPrice;
     return { product: product, generated: skuResult.generated };
   }
@@ -557,6 +585,7 @@ function createProductService(deps) {
       accent: existing.accent,
       salesComponents: salesComponents
     };
+    if (existing.imageFileId) nextProduct.imageFileId = existing.imageFileId;
     if (agentPrice !== undefined) nextProduct.agentPrice = agentPrice;
     var products = current.products.map(function (product) { return product.id === id ? nextProduct : product; });
     var components = has(payload, 'salesComponents')
@@ -672,10 +701,300 @@ function createProductService(deps) {
     return snapshot(assemble(spreadsheet));
   }
 
+  function imageExtension(mime) {
+    if (mime === 'image/png') return '.png';
+    if (mime === 'image/webp') return '.webp';
+    return '.jpg';
+  }
+
+  function decodeImageBase64(b64) {
+    if (typeof Utilities !== 'undefined' && Utilities.base64Decode) return Utilities.base64Decode(b64);
+    if (typeof Buffer !== 'undefined') return Buffer.from(b64, 'base64');
+    throw appError('INTERNAL_ERROR', 'Base64 decoding is unavailable.');
+  }
+
+  function encodeImageBase64(bytes) {
+    if (typeof Utilities !== 'undefined' && Utilities.base64Encode) return Utilities.base64Encode(bytes);
+    if (typeof Buffer !== 'undefined') return Buffer.from(bytes).toString('base64');
+    throw appError('INTERNAL_ERROR', 'Base64 encoding is unavailable.');
+  }
+
+  function parseProductImage(dataUrl, fileName, productId) {
+    var value = text(dataUrl).trim();
+    if (!value) throw appError('VALIDATION_ERROR', 'Upload a product image.');
+    var match = value.match(/^data:(image\/[a-zA-Z0-9.+-]+);base64,([A-Za-z0-9+/=\s]+)$/);
+    if (!match) throw appError('VALIDATION_ERROR', PRODUCT_IMAGE_MESSAGE);
+    var mime = match[1].toLowerCase();
+    if (mime === 'image/jpg') mime = 'image/jpeg';
+    if (!PRODUCT_IMAGE_TYPES[mime]) throw appError('VALIDATION_ERROR', PRODUCT_IMAGE_MESSAGE);
+    var b64 = match[2].replace(/\s/g, '');
+    var padding = b64.endsWith('==') ? 2 : b64.endsWith('=') ? 1 : 0;
+    var size = Math.floor((b64.length * 3) / 4) - padding;
+    if (!(size > 0) || size > PRODUCT_IMAGE_MAX_BYTES) {
+      throw appError('VALIDATION_ERROR', PRODUCT_IMAGE_MESSAGE);
+    }
+    var id = text(productId).trim() || 'product';
+    var uploadedName = text(fileName).trim();
+    return {
+      mime: mime,
+      bytes: decodeImageBase64(b64),
+      name: id + imageExtension(mime),
+      originalName: uploadedName
+    };
+  }
+
+  function imageBlob(parsed) {
+    if (typeof Utilities !== 'undefined' && Utilities.newBlob) {
+      return Utilities.newBlob(parsed.bytes, parsed.mime, parsed.name);
+    }
+    return {
+      getBytes: function () { return parsed.bytes; },
+      getContentType: function () { return parsed.mime; },
+      getName: function () { return parsed.name; }
+    };
+  }
+
+  function requireDrive() {
+    if (!drive) throw appError('INTERNAL_ERROR', 'Product image storage is unavailable.');
+    return drive;
+  }
+
+  function storedImageFileId(product) {
+    return text(product && product.imageFileId).trim();
+  }
+
+  function belongsToProductImages(fileId) {
+    var id = text(fileId).trim();
+    if (!id || !drive || !drive.fileBelongsToChildFolder) return false;
+    return drive.fileBelongsToChildFolder(id, PRODUCT_IMAGE_FOLDER);
+  }
+
+  function trashOwnedProductImage(fileId) {
+    var id = text(fileId).trim();
+    if (!id || !belongsToProductImages(id)) return;
+    drive.deleteFile(id);
+  }
+
+  function logImageCleanupFailure(action, requestId, fileId, error) {
+    var safe = toSafeError(error);
+    console.log(JSON.stringify({
+      requestId: requestId || '',
+      action: action,
+      timestamp: nowIso(),
+      status: 'cleanup_failed',
+      errorCode: safe.code,
+      fileId: text(fileId).trim()
+    }));
+  }
+
+  function logImageAuditFailure(action, requestId, error) {
+    var safe = toSafeError(error);
+    console.log(JSON.stringify({
+      requestId: requestId || '',
+      action: action,
+      timestamp: nowIso(),
+      status: 'audit_failed',
+      errorCode: safe.code
+    }));
+  }
+
+  // Never trash a Drive file unless it is in this environment's ProductImages folder.
+  // Cleanup failures are logged and must not replace a prior persist error.
+  function cleanupOwnedProductImage(fileId, action, requestId) {
+    try {
+      trashOwnedProductImage(fileId);
+    } catch (error) {
+      logImageCleanupFailure(action, requestId, fileId, error);
+    }
+  }
+
+  // After the product image reference is persisted, audit is best-effort.
+  // A later audit failure must not reverse the committed imageFileId or
+  // be reported as a normal operation failure.
+  function writeImageAudit(spreadsheet, entry) {
+    try {
+      systemAudit(spreadsheet, entry);
+    } catch (error) {
+      logImageAuditFailure(entry && entry.action, entry && entry.requestId, error);
+    }
+  }
+
+  function uploadProductImageFile(parsed) {
+    var storage = requireDrive();
+    storage.createChildFolder(PRODUCT_IMAGE_FOLDER);
+    var uploaded = storage.uploadFile(PRODUCT_IMAGE_FOLDER, imageBlob(parsed), parsed.name);
+    return uploaded.id;
+  }
+
+  function writeProductImageFileId(spreadsheet, productId, imageFileId) {
+    // Image mutations persist only Products.imageFileId. Rewriting
+    // SalesComponents or InventoryBalances would expose a partial-write
+    // window where Products already names a new Drive file.
+    repository.writeProductImageFileId(spreadsheet, productId, imageFileId);
+    return snapshot(assemble(spreadsheet));
+  }
+
+  function persistImageFileId(spreadsheet, productId, imageFileId, actor, action, requestId, before, after) {
+    var result = writeProductImageFileId(spreadsheet, productId, imageFileId);
+    writeImageAudit(spreadsheet, {
+      userId: actor.id,
+      action: action,
+      entityType: 'product',
+      entityId: productId,
+      reference: '',
+      before: before || '',
+      after: after || '',
+      requestId: requestId
+    });
+    return result;
+  }
+
+  function loadProductImageRef(spreadsheet, payload) {
+    requireAnyPermission(
+      spreadsheet,
+      payload.actorUserId,
+      PRODUCT_IMAGE_GET_KEYS,
+      'You cannot view this product image.'
+    );
+    var current = assemble(spreadsheet);
+    var product = findProduct(current.products, text(payload.productId || payload.id).trim());
+    if (!product) throw appError('NOT_FOUND', 'Product was not found.');
+    return {
+      productId: product.id,
+      name: product.name,
+      imageFileId: storedImageFileId(product)
+    };
+  }
+
+  function readStoredProductImage(ref) {
+    var value = text(ref.imageFileId).trim();
+    if (!value) throw appError('NOT_FOUND', 'Product image was not found.');
+    var storage = requireDrive();
+    if (!storage.verifyFileExists(value) || !belongsToProductImages(value)) {
+      throw appError('NOT_FOUND', 'Product image was not found.');
+    }
+    var file;
+    try {
+      file = storage.readFileBytes(value);
+    } catch (error) {
+      throw appError('NOT_FOUND', 'Product image was not found.');
+    }
+    var mime = text(file && file.mimeType).trim().toLowerCase();
+    if (mime === 'image/jpg') mime = 'image/jpeg';
+    if (!PRODUCT_IMAGE_TYPES[mime]) {
+      throw appError('VALIDATION_ERROR', PRODUCT_IMAGE_MESSAGE);
+    }
+    var bytes = file.bytes;
+    var length = bytes && (bytes.length || bytes.byteLength) ? (bytes.length || bytes.byteLength) : 0;
+    if (!(length > 0) || length > PRODUCT_IMAGE_MAX_BYTES) {
+      throw appError('VALIDATION_ERROR', PRODUCT_IMAGE_MESSAGE);
+    }
+    return {
+      productId: ref.productId,
+      fileName: file.name || ref.productId + imageExtension(mime),
+      mimeType: mime,
+      dataUrl: 'data:' + mime + ';base64,' + encodeImageBase64(bytes)
+    };
+  }
+
+  function uploadImage(spreadsheet, payload, requestId) {
+    var actor = requirePermission(spreadsheet, payload.actorUserId, 'products.edit', 'You cannot change product images.');
+    var current = assemble(spreadsheet);
+    var product = findProduct(current.products, text(payload.productId || payload.id).trim());
+    if (!product) throw appError('NOT_FOUND', 'Product was not found.');
+    if (storedImageFileId(product)) throw appError('VALIDATION_ERROR', 'Product already has an image.');
+    var parsed = parseProductImage(payload.dataUrl, payload.fileName, product.id);
+    var imageFileId = uploadProductImageFile(parsed);
+    var result;
+    // Persist the new reference before treating the upload as committed. A
+    // Sheets failure must attempt to clean up only the newly uploaded
+    // ProductImages file and must not touch any other product image.
+    try {
+      result = writeProductImageFileId(spreadsheet, product.id, imageFileId);
+    } catch (error) {
+      cleanupOwnedProductImage(imageFileId, 'products.uploadImage', requestId);
+      throw error;
+    }
+    writeImageAudit(spreadsheet, {
+      userId: actor.id,
+      action: 'products.uploadImage',
+      entityType: 'product',
+      entityId: product.id,
+      reference: '',
+      before: '',
+      after: imageFileId,
+      requestId: requestId
+    });
+    return result;
+  }
+
+  function replaceImage(spreadsheet, payload, requestId) {
+    var actor = requirePermission(spreadsheet, payload.actorUserId, 'products.edit', 'You cannot change product images.');
+    var current = assemble(spreadsheet);
+    var product = findProduct(current.products, text(payload.productId || payload.id).trim());
+    if (!product) throw appError('NOT_FOUND', 'Product was not found.');
+    var previous = storedImageFileId(product);
+    if (!previous) throw appError('NOT_FOUND', 'Product image was not found.');
+    var parsed = parseProductImage(payload.dataUrl, payload.fileName, product.id);
+    var imageFileId = uploadProductImageFile(parsed);
+    var result;
+    // Persist the new reference before trashing the previous file. A Sheets
+    // failure must leave the old image reachable and attempt to clean up only
+    // the newly uploaded ProductImages file.
+    try {
+      result = writeProductImageFileId(spreadsheet, product.id, imageFileId);
+    } catch (error) {
+      cleanupOwnedProductImage(imageFileId, 'products.replaceImage', requestId);
+      throw error;
+    }
+    writeImageAudit(spreadsheet, {
+      userId: actor.id,
+      action: 'products.replaceImage',
+      entityType: 'product',
+      entityId: product.id,
+      reference: '',
+      before: previous,
+      after: imageFileId,
+      requestId: requestId
+    });
+    cleanupOwnedProductImage(previous, 'products.replaceImage', requestId);
+    return result;
+  }
+
+  function removeImage(spreadsheet, payload, requestId) {
+    var actor = requirePermission(spreadsheet, payload.actorUserId, 'products.edit', 'You cannot change product images.');
+    var current = assemble(spreadsheet);
+    var product = findProduct(current.products, text(payload.productId || payload.id).trim());
+    if (!product) throw appError('NOT_FOUND', 'Product was not found.');
+    var previous = storedImageFileId(product);
+    if (!previous) throw appError('NOT_FOUND', 'Product image was not found.');
+    // Clear the product reference before trashing Drive. Persistence failure
+    // must not delete the file still named on the product row.
+    var result = writeProductImageFileId(spreadsheet, product.id, '');
+    writeImageAudit(spreadsheet, {
+      userId: actor.id,
+      action: 'products.removeImage',
+      entityType: 'product',
+      entityId: product.id,
+      reference: '',
+      before: previous,
+      after: '',
+      requestId: requestId
+    });
+    cleanupOwnedProductImage(previous, 'products.removeImage', requestId);
+    return result;
+  }
+
   function dispatch(request) {
     var action = request.action;
     var payload = request.payload || {};
     var requestId = request.requestId ? String(request.requestId) : '';
+    if (action === 'products.getImage') {
+      var ref = locked(function (spreadsheet) {
+        return loadProductImageRef(spreadsheet, payload);
+      });
+      return okEnvelope(readStoredProductImage(ref));
+    }
     return locked(function (spreadsheet) {
       if (action === 'products.list') return okEnvelope(snapshot(assemble(spreadsheet)));
       if (action === 'products.get') {
@@ -693,6 +1012,9 @@ function createProductService(deps) {
       else if (action === 'products.update') result = update(spreadsheet, payload, requestId);
       else if (action === 'products.setStatus') result = setStatus(spreadsheet, payload, requestId);
       else if (action === 'products.saveAgentPrices') result = saveAgentPrices(spreadsheet, payload, requestId);
+      else if (action === 'products.uploadImage') result = uploadImage(spreadsheet, payload, requestId);
+      else if (action === 'products.replaceImage') result = replaceImage(spreadsheet, payload, requestId);
+      else if (action === 'products.removeImage') result = removeImage(spreadsheet, payload, requestId);
       else return errorEnvelope('UNKNOWN_ACTION', 'The action is not available.', { requestId: requestId });
       return okEnvelope(result);
     });
