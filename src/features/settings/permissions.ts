@@ -40,6 +40,7 @@ export const PERMISSION_KEYS: PermissionKey[] = [
   'inventory.transfer',
   'inventory.count',
   'inventory.usage',
+  'products.edit',
   'warehouse_map.view',
   'warehouse_map.putaway',
   'warehouse_map.move',
@@ -152,6 +153,11 @@ export const PERMISSION_GROUPS: Array<{ id: string; label: string; keys: Permiss
     keys: ['inventory.view', 'inventory.adjust', 'inventory.transfer', 'inventory.count', 'inventory.usage', 'opening_balance.view', 'opening_balance.create'],
   },
   {
+    id: 'products',
+    label: 'Products',
+    keys: ['products.edit'],
+  },
+  {
     id: 'warehouse_map',
     label: 'Warehouse Map',
     keys: [
@@ -243,6 +249,7 @@ export const PERMISSION_LABELS: Record<PermissionKey, string> = {
   'inventory.transfer': 'Stock Transfer',
   'inventory.count': 'Stock Count',
   'inventory.usage': 'Record Stock Usage',
+  'products.edit': 'Manage Product Images',
   'opening_balance.view': 'View Opening Balance',
   'opening_balance.create': 'Create Opening Balance',
   'warehouse_map.view': 'View Warehouse Map',
@@ -305,6 +312,7 @@ export const PERMISSION_LABELS: Record<PermissionKey, string> = {
 
 export const MANUFACTURING_PLAN_PERMISSION_KEYS = ['manufacturing.plan.edit', 'manufacturing.plan.amend'] as const
 export const HALAL_PERMISSION_KEYS = ['halal.view', 'halal.manage'] as const
+export const PRODUCT_PERMISSION_KEYS = ['products.edit'] as const
 
 export function emptyPermissions(): RolePermissions {
   return Object.fromEntries(PERMISSION_KEYS.map((key) => [key, false])) as RolePermissions
@@ -381,6 +389,7 @@ export function defaultPermissionsForLegacy(role: UserRole): RolePermissions {
       ...AGENT_STOCK_OPS,
       ...WAREHOUSE_MAP_ALL,
       ...MFG_RUN,
+      'products.edit',
       'reports.view',
       ...FINANCE_VIEW,
       'settings.view',
@@ -395,6 +404,7 @@ export function defaultPermissionsForLegacy(role: UserRole): RolePermissions {
       ...RECEIVING_STAFF,
       'inventory.view',
       'inventory.usage',
+      'products.edit',
       ...WAREHOUSE_MAP_STAFF,
       ...MFG_RUN,
       'reports.view',
@@ -416,6 +426,7 @@ export function defaultPermissionsForLegacy(role: UserRole): RolePermissions {
     ...PURCHASES_ALL,
     ...RECEIVING_STAFF,
     ...INVENTORY_ALL,
+    'products.edit',
     ...AGENT_STOCK_OPS,
     ...WAREHOUSE_MAP_ALL,
     ...MFG_RUN,

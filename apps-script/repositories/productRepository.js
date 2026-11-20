@@ -7,14 +7,41 @@ var PRODUCT_HEADERS = [
   'id', 'name', 'sku', 'barcode', 'categoryId', 'unit', 'purchaseUnit',
   'purchaseConversionQty', 'purchaseCost', 'costPrice', 'costSource',
   'sellingPrice', 'wholesalePrice', 'agentPrice', 'sellable', 'reorderLevel',
-  'trackBatch', 'trackExpiry', 'status', 'accent'
+  'trackBatch', 'trackExpiry', 'status', 'accent', 'imageFileId'
 ];
+var PRODUCT_HEADERS_WITHOUT_IMAGE = PRODUCT_HEADERS.slice(0, -1);
 var SALES_COMPONENT_HEADERS = ['id', 'productId', 'componentProductId', 'qty'];
 var INVENTORY_BALANCE_HEADERS = ['productId', 'warehouseId', 'qty'];
 
 function createProductRepository(sheetRepository) {
+  function headerRow(sheet) {
+    var width = sheet.getLastColumn();
+    if (width < 1) return [];
+    return sheet.getRange(1, 1, 1, width).getValues()[0].map(function (header) {
+      return String(header || '').trim();
+    }).filter(Boolean);
+  }
+
+  function ensureProductSheet(spreadsheet) {
+    var existing = sheetRepository.getSheet(spreadsheet, 'Products');
+    if (!existing) {
+      return sheetRepository.ensureSheet(spreadsheet, 'Products', PRODUCT_HEADERS);
+    }
+    var current = headerRow(existing);
+    if (!current.length) {
+      existing.getRange(1, 1, 1, PRODUCT_HEADERS.length).setValues([PRODUCT_HEADERS]);
+      return existing;
+    }
+    if (current.join('|') === PRODUCT_HEADERS.join('|')) return existing;
+    if (current.join('|') === PRODUCT_HEADERS_WITHOUT_IMAGE.join('|')) {
+      existing.getRange(1, 1, 1, PRODUCT_HEADERS.length).setValues([PRODUCT_HEADERS]);
+      return existing;
+    }
+    throw appError('CONFLICT', 'Foundation sheet headers do not match.');
+  }
+
   function ensure(spreadsheet) {
-    var products = sheetRepository.ensureSheet(spreadsheet, 'Products', PRODUCT_HEADERS);
+    var products = ensureProductSheet(spreadsheet);
     var components = sheetRepository.ensureSheet(spreadsheet, 'SalesComponents', SALES_COMPONENT_HEADERS);
     var balances = sheetRepository.ensureSheet(spreadsheet, 'InventoryBalances', INVENTORY_BALANCE_HEADERS);
     forceText(products, PRODUCT_HEADERS.indexOf('sku') + 1);
@@ -67,6 +94,8 @@ function createProductRepository(sheetRepository) {
         accent: text(row.accent).trim() || '#4F46E5'
       };
       if (agentPrice !== '') product.agentPrice = num(row.agentPrice);
+      var imageFileId = text(row.imageFileId).trim();
+      if (imageFileId) product.imageFileId = imageFileId;
       return product;
     });
   }
@@ -119,7 +148,8 @@ function createProductRepository(sheetRepository) {
         trackBatch: Boolean(product.trackBatch),
         trackExpiry: Boolean(product.trackExpiry),
         status: product.status,
-        accent: product.accent
+        accent: product.accent,
+        imageFileId: text(product.imageFileId).trim()
       };
     }));
   }
