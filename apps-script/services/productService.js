@@ -787,6 +787,17 @@ function createProductService(deps) {
     }));
   }
 
+  function logImageAuditFailure(action, requestId, error) {
+    var safe = toSafeError(error);
+    console.log(JSON.stringify({
+      requestId: requestId || '',
+      action: action,
+      timestamp: nowIso(),
+      status: 'audit_failed',
+      errorCode: safe.code
+    }));
+  }
+
   // Never trash a Drive file unless it is in this environment's ProductImages folder.
   // Cleanup failures are logged and must not replace a prior persist error.
   function cleanupOwnedProductImage(fileId, action, requestId) {
@@ -794,6 +805,17 @@ function createProductService(deps) {
       trashOwnedProductImage(fileId);
     } catch (error) {
       logImageCleanupFailure(action, requestId, fileId, error);
+    }
+  }
+
+  // After the product image reference is persisted, audit is best-effort.
+  // A later audit failure must not reverse the committed imageFileId or
+  // be reported as a normal operation failure.
+  function writeImageAudit(spreadsheet, entry) {
+    try {
+      systemAudit(spreadsheet, entry);
+    } catch (error) {
+      logImageAuditFailure(entry && entry.action, entry && entry.requestId, error);
     }
   }
 
@@ -820,7 +842,7 @@ function createProductService(deps) {
 
   function persistImageFileId(spreadsheet, productId, imageFileId, actor, action, requestId, before, after) {
     var result = writeProductImageFileId(spreadsheet, productId, imageFileId);
-    systemAudit(spreadsheet, {
+    writeImageAudit(spreadsheet, {
       userId: actor.id,
       action: action,
       entityType: 'product',
@@ -889,9 +911,27 @@ function createProductService(deps) {
     if (storedImageFileId(product)) throw appError('VALIDATION_ERROR', 'Product already has an image.');
     var parsed = parseProductImage(payload.dataUrl, payload.fileName, product.id);
     var imageFileId = uploadProductImageFile(parsed);
-    return persistImageFileId(
-      spreadsheet, product.id, imageFileId, actor, 'products.uploadImage', requestId, '', imageFileId
-    );
+    var result;
+    // Persist the new reference before treating the upload as committed. A
+    // Sheets failure must attempt to clean up only the newly uploaded
+    // ProductImages file and must not touch any other product image.
+    try {
+      result = writeProductImageFileId(spreadsheet, product.id, imageFileId);
+    } catch (error) {
+      cleanupOwnedProductImage(imageFileId, 'products.uploadImage', requestId);
+      throw error;
+    }
+    writeImageAudit(spreadsheet, {
+      userId: actor.id,
+      action: 'products.uploadImage',
+      entityType: 'product',
+      entityId: product.id,
+      reference: '',
+      before: '',
+      after: imageFileId,
+      requestId: requestId
+    });
+    return result;
   }
 
   function replaceImage(spreadsheet, payload, requestId) {
@@ -913,7 +953,7 @@ function createProductService(deps) {
       cleanupOwnedProductImage(imageFileId, 'products.replaceImage', requestId);
       throw error;
     }
-    systemAudit(spreadsheet, {
+    writeImageAudit(spreadsheet, {
       userId: actor.id,
       action: 'products.replaceImage',
       entityType: 'product',
@@ -937,7 +977,7 @@ function createProductService(deps) {
     // Clear the product reference before trashing Drive. Persistence failure
     // must not delete the file still named on the product row.
     var result = writeProductImageFileId(spreadsheet, product.id, '');
-    systemAudit(spreadsheet, {
+    writeImageAudit(spreadsheet, {
       userId: actor.id,
       action: 'products.removeImage',
       entityType: 'product',
