@@ -827,16 +827,10 @@ function createProductService(deps) {
   }
 
   function writeProductImageFileId(spreadsheet, productId, imageFileId) {
-    var current = assemble(spreadsheet);
-    var products = current.products.map(function (product) {
-      if (product.id !== productId) return product;
-      var next = {};
-      Object.keys(product).forEach(function (key) { next[key] = product[key]; });
-      if (imageFileId) next.imageFileId = imageFileId;
-      else delete next.imageFileId;
-      return next;
-    });
-    persist(spreadsheet, products, current.salesComponents, current.inventoryBalances);
+    // Image mutations persist only Products.imageFileId. Rewriting
+    // SalesComponents or InventoryBalances would expose a partial-write
+    // window where Products already names a new Drive file.
+    repository.writeProductImageFileId(spreadsheet, productId, imageFileId);
     return snapshot(assemble(spreadsheet));
   }
 

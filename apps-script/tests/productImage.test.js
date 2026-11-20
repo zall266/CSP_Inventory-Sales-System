@@ -196,25 +196,85 @@ function productImageId(backend, productId) {
   return product ? product.imageFileId : undefined
 }
 
+function sheetError(message) {
+  const error = new Error(message)
+  error.code = 'INTERNAL_ERROR'
+  error.expose = true
+  return error
+}
+
+function cloneSheet(backend, name) {
+  return JSON.parse(JSON.stringify(backend.spreadsheet.store[name] || null))
+}
+
+function productFieldsWithoutImage(backend, productId) {
+  const rows = backend.spreadsheet.store.Products || []
+  const headers = rows[0] || []
+  const idIdx = headers.indexOf('id')
+  const imageIdx = headers.indexOf('imageFileId')
+  const row = rows.find((item, index) => index > 0 && String(item[idIdx]) === productId)
+  if (!row) return null
+  return row.filter((_, index) => index !== imageIdx)
+}
+
 function trackImageOps(backend) {
   const ops = []
-  const control = { failPersist: false, failTrashIds: new Set(), failAudit: false }
+  const control = {
+    failPersist: false,
+    failTrashIds: new Set(),
+    failAudit: false,
+    failComponents: false,
+    failBalances: false,
+  }
   const replaceObjects = backend.sheets.replaceObjects.bind(backend.sheets)
   backend.sheets.replaceObjects = (sheet, records) => {
-    if (sheet.getName() === 'Products') {
+    const name = sheet.getName()
+    ops.push({ op: 'sheet-write', sheet: name, via: 'replaceObjects' })
+    if (name === 'SalesComponents' && control.failComponents) throw sheetError('SalesComponents write failed.')
+    if (name === 'InventoryBalances' && control.failBalances) throw sheetError('InventoryBalances write failed.')
+    if (name === 'Products') {
       const row = (records || []).find((item) => item && item.id === 'prd-sugar')
       ops.push({
         op: 'persist',
         imageFileId: row ? String(row.imageFileId || '') : '',
       })
-      if (control.failPersist) {
-        const error = new Error('Sheet write failed.')
-        error.code = 'INTERNAL_ERROR'
-        error.expose = true
-        throw error
-      }
+      if (control.failPersist) throw sheetError('Sheet write failed.')
     }
     return replaceObjects(sheet, records)
+  }
+  const originalGetSheetByName = backend.spreadsheet.getSheetByName.bind(backend.spreadsheet)
+  backend.spreadsheet.getSheetByName = (name) => {
+    const sheet = originalGetSheetByName(name)
+    if (!sheet) return sheet
+    const originalGetRange = sheet.getRange.bind(sheet)
+    sheet.getRange = (row, column, numRows = 1, numColumns = 1) => {
+      const range = originalGetRange(row, column, numRows, numColumns)
+      const originalSetValues = range.setValues.bind(range)
+      range.setValues = (values) => {
+        if (name === 'SalesComponents' || name === 'InventoryBalances') {
+          ops.push({ op: 'sheet-write', sheet: name, via: 'setValues' })
+          if (name === 'SalesComponents' && control.failComponents) throw sheetError('SalesComponents write failed.')
+          if (name === 'InventoryBalances' && control.failBalances) throw sheetError('InventoryBalances write failed.')
+        }
+        if (name === 'Products' && row > 1) {
+          const headers = backend.spreadsheet.store.Products[0] || []
+          const imageIdx = headers.indexOf('imageFileId')
+          const writesImage = imageIdx >= 0 && column <= imageIdx + 1 && column + numColumns - 1 >= imageIdx + 1
+          if (writesImage) {
+            const offset = imageIdx - (column - 1)
+            ops.push({
+              op: 'persist',
+              imageFileId: String((values[0] && values[0][offset]) || ''),
+            })
+            ops.push({ op: 'sheet-write', sheet: 'Products', via: 'setValues' })
+            if (control.failPersist) throw sheetError('Sheet write failed.')
+          }
+        }
+        return originalSetValues(values)
+      }
+      return range
+    }
+    return sheet
   }
   const appendObject = backend.sheets.appendObject.bind(backend.sheets)
   backend.sheets.appendObject = (sheet, record) => {
@@ -872,3 +932,125 @@ test('removeImage never trashes a file outside ProductImages', () => {
   assert.equal(tracked.ops.some((item) => item.op === 'trash' && item.id === recipe.id), false)
   assert.equal(backend.drive.trashed.includes(recipe.id), false)
 })
+
+function assertImageWriteTouchedOnlyProducts(backend, tracked, before) {
+  assert.deepEqual(cloneSheet(backend, 'SalesComponents'), before.components)
+  assert.deepEqual(cloneSheet(backend, 'InventoryBalances'), before.balances)
+  assert.deepEqual(productFieldsWithoutImage(backend, 'prd-sugar'), before.productFields)
+  assert.equal(tracked.ops.some((item) => item.op === 'sheet-write' && item.sheet === 'SalesComponents'), false)
+  assert.equal(tracked.ops.some((item) => item.op === 'sheet-write' && item.sheet === 'InventoryBalances'), false)
+  assert.equal(tracked.ops.some((item) => item.op === 'persist'), true)
+}
+
+test('successful upload changes only the Products imageFileId', () => {
+  const backend = ready()
+  assert.equal(call(backend, 'products.create', productInput()).ok, true)
+  const before = {
+    components: cloneSheet(backend, 'SalesComponents'),
+    balances: cloneSheet(backend, 'InventoryBalances'),
+    productFields: productFieldsWithoutImage(backend, 'prd-sugar'),
+  }
+  const tracked = trackImageOps(backend)
+  const uploaded = call(backend, 'products.uploadImage', {
+    actorUserId: 'u-mei', productId: 'prd-sugar', dataUrl: PNG_DATA_URL, fileName: 'first.png',
+  })
+  assert.equal(uploaded.ok, true, uploaded.error && uploaded.error.message)
+  const imageFileId = byId(uploaded.data, 'prd-sugar').imageFileId
+  assert.ok(imageFileId)
+  assert.equal(productImageId(backend, 'prd-sugar'), imageFileId)
+  assertImageWriteTouchedOnlyProducts(backend, tracked, before)
+})
+
+test('successful replace changes only the Products imageFileId', () => {
+  const backend = ready()
+  const firstId = seedProductWithImage(backend)
+  const before = {
+    components: cloneSheet(backend, 'SalesComponents'),
+    balances: cloneSheet(backend, 'InventoryBalances'),
+    productFields: productFieldsWithoutImage(backend, 'prd-sugar'),
+  }
+  const tracked = trackImageOps(backend)
+  tracked.ops.length = 0
+  const replaced = call(backend, 'products.replaceImage', {
+    actorUserId: 'u-mei', productId: 'prd-sugar', dataUrl: JPEG_DATA_URL, fileName: 'second.jpg',
+  })
+  assert.equal(replaced.ok, true, replaced.error && replaced.error.message)
+  const nextId = byId(replaced.data, 'prd-sugar').imageFileId
+  assert.ok(nextId)
+  assert.notEqual(nextId, firstId)
+  assert.equal(productImageId(backend, 'prd-sugar'), nextId)
+  assertImageWriteTouchedOnlyProducts(backend, tracked, before)
+})
+
+test('successful remove changes only the Products imageFileId', () => {
+  const backend = ready()
+  seedProductWithImage(backend)
+  const before = {
+    components: cloneSheet(backend, 'SalesComponents'),
+    balances: cloneSheet(backend, 'InventoryBalances'),
+    productFields: productFieldsWithoutImage(backend, 'prd-sugar'),
+  }
+  const tracked = trackImageOps(backend)
+  tracked.ops.length = 0
+  const removed = call(backend, 'products.removeImage', { actorUserId: 'u-mei', productId: 'prd-sugar' })
+  assert.equal(removed.ok, true, removed.error && removed.error.message)
+  assert.equal(byId(removed.data, 'prd-sugar').imageFileId, undefined)
+  assert.equal(productImageId(backend, 'prd-sugar'), undefined)
+  assertImageWriteTouchedOnlyProducts(backend, tracked, before)
+})
+
+test('SalesComponents and InventoryBalances write failures cannot affect image operations', () => {
+  const backend = ready()
+  assert.equal(call(backend, 'products.create', productInput()).ok, true)
+  const tracked = trackImageOps(backend)
+  tracked.control.failComponents = true
+  tracked.control.failBalances = true
+  const uploaded = call(backend, 'products.uploadImage', {
+    actorUserId: 'u-mei', productId: 'prd-sugar', dataUrl: PNG_DATA_URL, fileName: 'first.png',
+  })
+  assert.equal(uploaded.ok, true, uploaded.error && uploaded.error.message)
+  const firstId = byId(uploaded.data, 'prd-sugar').imageFileId
+  assert.ok(firstId)
+  assert.equal(tracked.ops.some((item) => item.op === 'sheet-write' && item.sheet === 'SalesComponents'), false)
+  assert.equal(tracked.ops.some((item) => item.op === 'sheet-write' && item.sheet === 'InventoryBalances'), false)
+
+  tracked.ops.length = 0
+  const replaced = call(backend, 'products.replaceImage', {
+    actorUserId: 'u-mei', productId: 'prd-sugar', dataUrl: JPEG_DATA_URL, fileName: 'second.jpg',
+  })
+  assert.equal(replaced.ok, true, replaced.error && replaced.error.message)
+  const nextId = byId(replaced.data, 'prd-sugar').imageFileId
+  assert.ok(nextId)
+  assert.notEqual(nextId, firstId)
+  assert.equal(tracked.ops.some((item) => item.op === 'sheet-write' && item.sheet === 'SalesComponents'), false)
+  assert.equal(tracked.ops.some((item) => item.op === 'sheet-write' && item.sheet === 'InventoryBalances'), false)
+
+  tracked.ops.length = 0
+  const removed = call(backend, 'products.removeImage', { actorUserId: 'u-mei', productId: 'prd-sugar' })
+  assert.equal(removed.ok, true, removed.error && removed.error.message)
+  assert.equal(productImageId(backend, 'prd-sugar'), undefined)
+  assert.equal(tracked.ops.some((item) => item.op === 'sheet-write' && item.sheet === 'SalesComponents'), false)
+  assert.equal(tracked.ops.some((item) => item.op === 'sheet-write' && item.sheet === 'InventoryBalances'), false)
+})
+
+test('Products persistence failure preserves the previous valid image and does not delete it', () => {
+  const backend = ready()
+  const firstId = seedProductWithImage(backend)
+  const tracked = trackImageOps(backend)
+  tracked.ops.length = 0
+  tracked.control.failPersist = true
+  const failed = call(backend, 'products.replaceImage', {
+    actorUserId: 'u-mei', productId: 'prd-sugar', dataUrl: JPEG_DATA_URL, fileName: 'second.jpg',
+  })
+  assert.equal(failed.ok, false)
+  assert.equal(failed.error.code, 'INTERNAL_ERROR')
+  const uploaded = tracked.ops.find((item) => item.op === 'upload')
+  assert.ok(uploaded)
+  assert.equal(productImageId(backend, 'prd-sugar'), firstId)
+  assert.equal(backend.drive.trashed.includes(firstId), false)
+  assert.equal(backend.drive.trashed.includes(uploaded.id), true)
+  assert.equal(tracked.ops.some((item) => item.op === 'trash' && item.id === firstId), false)
+  const still = call(backend, 'products.getImage', { actorUserId: 'u-siti', productId: 'prd-sugar' })
+  assert.equal(still.ok, true, still.error && still.error.message)
+})
+

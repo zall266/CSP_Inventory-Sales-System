@@ -164,6 +164,30 @@ function createProductRepository(sheetRepository) {
     sheetRepository.replaceObjects(sheetRepository.getSheet(spreadsheet, 'InventoryBalances'), balances);
   }
 
+  // Image mutations write only the Products imageFileId cell. They must not
+  // rewrite SalesComponents, InventoryBalances, or unrelated product fields.
+  function writeProductImageFileId(spreadsheet, productId, imageFileId) {
+    var sheet = ensureProductSheet(spreadsheet);
+    var headers = headerRow(sheet);
+    var idCol = headers.indexOf('id') + 1;
+    var imageCol = headers.indexOf('imageFileId') + 1;
+    if (idCol < 1 || imageCol < 1) {
+      throw appError('CONFLICT', 'Foundation sheet headers do not match.');
+    }
+    var last = sheet.getLastRow();
+    if (last < 2) throw appError('NOT_FOUND', 'Product was not found.');
+    var ids = sheet.getRange(2, idCol, last - 1, 1).getValues();
+    var id = text(productId).trim();
+    var value = text(imageFileId).trim();
+    for (var i = 0; i < ids.length; i += 1) {
+      if (text(ids[i][0]).trim() === id) {
+        sheet.getRange(i + 2, imageCol, 1, 1).setValues([[value]]);
+        return;
+      }
+    }
+    throw appError('NOT_FOUND', 'Product was not found.');
+  }
+
   return {
     ensure: ensure,
     readProducts: readProducts,
@@ -171,6 +195,7 @@ function createProductRepository(sheetRepository) {
     readBalances: readBalances,
     writeProducts: writeProducts,
     writeComponents: writeComponents,
-    writeBalances: writeBalances
+    writeBalances: writeBalances,
+    writeProductImageFileId: writeProductImageFileId
   };
 }
