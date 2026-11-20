@@ -75,9 +75,10 @@ type ProductImagePoster = (
   error: { code: string; message: string } | null
 }>
 
-export const PRODUCT_IMAGE_CACHE_MAX = 8
+export const PRODUCT_IMAGE_CACHE_MAX = 64
 
 const productImageCache = new Map<string, ProductImagePayload>()
+const productImageInflight = new Map()
 
 function normalizeMime(type: string) {
   const mime = type.toLowerCase()
@@ -257,6 +258,7 @@ export function productImageCacheKey(productId: string, imageFileId: string) {
 
 export function clearProductImageCache() {
   productImageCache.clear()
+  productImageInflight.clear()
 }
 
 export function productImageCacheSize() {
@@ -362,6 +364,36 @@ export async function mutateProductImage(
   }
 }
 
+function shareProductImageFetch(
+  productId: string,
+  imageFileId: string,
+  actorUserId: string,
+  fetchImage: ProductImageFetcher,
+) {
+  const key = productImageCacheKey(productId, imageFileId)
+  const existing = productImageInflight.get(key)
+  if (existing) return existing
+  const pending = Promise.resolve()
+    .then(() => fetchImage(productId, actorUserId))
+    .finally(() => {
+      if (productImageInflight.get(key) === pending) productImageInflight.delete(key)
+    })
+  productImageInflight.set(key, pending)
+  return pending
+}
+
+function envelopeToLoadResult(requestId: number, result: ProductImageEnvelope): ProductImageLoadResult {
+  if (!result.ok || !result.data) {
+    const code = result.error?.code
+    if (code === 'FORBIDDEN') return { requestId, status: 'forbidden', error: result.error?.message || PRODUCT_IMAGE_FORBIDDEN }
+    if (code === 'NOT_FOUND') return { requestId, status: 'missing', error: result.error?.message || PRODUCT_IMAGE_MISSING }
+    return { requestId, status: 'error', error: result.error?.message || PRODUCT_IMAGE_LOAD_ERROR }
+  }
+  const payload = parseProductImagePayload(result.data) ?? (result.data as ProductImagePayload)
+  if (!payload?.dataUrl) return { requestId, status: 'missing', error: PRODUCT_IMAGE_MISSING }
+  return { requestId, status: 'ready', payload }
+}
+
 export async function loadStoredProductImage(options: {
   productId: string
   imageFileId: string
@@ -378,20 +410,14 @@ export async function loadStoredProductImage(options: {
   if (cached) return { requestId, status: 'ready', payload: cached }
   let result: ProductImageEnvelope
   try {
-    result = await fetchImage(productId, actorUserId)
+    result = await shareProductImageFetch(productId, imageFileId, actorUserId, fetchImage)
   } catch {
-    if (!isCurrent(requestId)) return { requestId, status: 'error', error: PRODUCT_IMAGE_LOAD_ERROR }
     return { requestId, status: 'error', error: PRODUCT_IMAGE_LOAD_ERROR }
   }
-  if (!isCurrent(requestId)) return { requestId, status: 'error', error: PRODUCT_IMAGE_LOAD_ERROR }
-  if (!result.ok || !result.data) {
-    const code = result.error?.code
-    if (code === 'FORBIDDEN') return { requestId, status: 'forbidden', error: result.error?.message || PRODUCT_IMAGE_FORBIDDEN }
-    if (code === 'NOT_FOUND') return { requestId, status: 'missing', error: result.error?.message || PRODUCT_IMAGE_MISSING }
-    return { requestId, status: 'error', error: result.error?.message || PRODUCT_IMAGE_LOAD_ERROR }
+  const loaded = envelopeToLoadResult(requestId, result)
+  if (loaded.status === 'ready' && loaded.payload) {
+    storeProductImageCache(productId, imageFileId, loaded.payload)
   }
-  const payload = parseProductImagePayload(result.data) ?? (result.data as ProductImagePayload)
-  if (!payload?.dataUrl) return { requestId, status: 'missing', error: PRODUCT_IMAGE_MISSING }
-  storeProductImageCache(productId, imageFileId, payload)
-  return { requestId, status: 'ready', payload }
+  if (!isCurrent(requestId)) return { requestId, status: 'error', error: PRODUCT_IMAGE_LOAD_ERROR }
+  return loaded
 }

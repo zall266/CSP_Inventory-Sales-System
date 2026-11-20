@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom'
 import { Minus, Plus, Trash2, Search } from 'lucide-react'
 import { Button, Card, Modal, Select, StatusBadge } from '@/components/ui'
 import { ProductMark, paymentLabel } from '@/components/ProductMark'
+import { ProductImageThumb } from '@/features/products/ProductImageThumb'
 import { agentPosItemAvailable, belowAgentPriceMessage, configuredAgentPrice, currentLinkedAgent, defaultAgentSellingPrice, posSellingWarehouseId } from '@/features/agent/agentModel'
 import { productIsSellable } from '@/features/products/masterData'
 import { useApi, useStore } from '@/store/hooks'
@@ -268,7 +269,7 @@ export function PosPage() {
                 data-pos-product={p.id}
               >
                 <button type="button" className="min-w-0 flex-1 text-left" onClick={() => addProduct(p)}>
-                  <ProductMark product={p} size="xl" />
+                  <ProductImageThumb product={p} size="xl" />
                   <div className="mt-3 truncate text-[15px] font-semibold leading-snug text-slate-900">{p.name}</div>
                   <div className="mt-0.5 truncate text-xs text-slate-400">{p.sku}</div>
                   <div className="mt-2.5 flex min-w-0 flex-col gap-1">
