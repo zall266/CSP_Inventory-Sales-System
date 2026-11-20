@@ -112,7 +112,7 @@ export function PosPage() {
   }
 
   const cartPanel = (
-    <div className="flex h-full min-h-0 flex-col" data-pos-cart-panel>
+    <div className="flex h-full min-h-0 min-w-0 max-w-full flex-col" data-pos-cart-panel>
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <div className="text-sm font-semibold text-slate-900">Current sale</div>
@@ -235,25 +235,28 @@ export function PosPage() {
   )
 
   return (
-    <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_24rem] xl:grid-cols-[minmax(0,1fr)_26rem]" data-pos-page>
-      <div className="pb-[calc(8.75rem+env(safe-area-inset-bottom))] lg:pb-0">
-        <div className="relative mb-4">
+    <div
+      className="grid min-w-0 max-w-full grid-cols-1 gap-4 overflow-x-clip lg:grid-cols-[minmax(0,1fr)_24rem] xl:grid-cols-[minmax(0,1fr)_26rem]"
+      data-pos-page
+    >
+      <div className="min-w-0 max-w-full pb-[calc(8.75rem+env(safe-area-inset-bottom))] lg:pb-0">
+        <div className="relative mb-4 min-w-0">
           <Search size={18} className="pointer-events-none absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" />
           <input
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             placeholder="Search name, SKU or barcode"
             data-pos-search
-            className="h-12 w-full rounded-2xl border border-slate-200 bg-white pl-10 pr-3 text-base outline-none focus:border-indigo-400 focus:ring-4 focus:ring-indigo-50 md:text-sm"
+            className="h-12 w-full min-w-0 rounded-2xl border border-slate-200 bg-white pl-10 pr-3 text-base outline-none focus:border-indigo-400 focus:ring-4 focus:ring-indigo-50 md:text-sm"
           />
         </div>
-        <div className="mb-4 flex gap-2 overflow-x-auto pb-1">
+        <div className="mb-4 flex max-w-full gap-2 overflow-x-auto pb-1">
           <CatChip active={categoryId === 'all'} onClick={() => setCategoryId('all')} label="All" />
           {state.categories.map((c) => (
             <CatChip key={c.id} active={categoryId === c.id} onClick={() => setCategoryId(c.id)} label={c.name} />
           ))}
         </div>
-        <div className="grid grid-cols-2 gap-3 sm:gap-4 md:grid-cols-3 xl:grid-cols-4">
+        <div className="grid min-w-0 grid-cols-2 gap-2.5 sm:gap-3 md:grid-cols-3 md:gap-4 xl:grid-cols-4">
           {products.map((p) => {
             const qty = api.getProductQty(p.id, warehouseId)
             const status = api.getProductStockStatus(p.id, warehouseId)
@@ -261,36 +264,34 @@ export function PosPage() {
             return (
               <article
                 key={p.id}
-                className="sf-card flex flex-col p-3 text-left transition hover:-translate-y-0.5 hover:border-indigo-200"
+                className="sf-card flex min-w-0 flex-col overflow-hidden p-2.5 text-left sm:p-3"
                 data-pos-product={p.id}
               >
                 <button type="button" className="min-w-0 flex-1 text-left" onClick={() => addProduct(p)}>
                   <ProductMark product={p} size="xl" />
                   <div className="mt-3 truncate text-[15px] font-semibold leading-snug text-slate-900">{p.name}</div>
-                  <div className="mt-0.5 text-xs text-slate-400">{p.sku}</div>
-                  <div className="mt-2.5 flex items-center justify-between gap-2">
-                    <div className="text-base font-semibold tabular text-indigo-700">
+                  <div className="mt-0.5 truncate text-xs text-slate-400">{p.sku}</div>
+                  <div className="mt-2.5 flex min-w-0 flex-col gap-1">
+                    <div className="truncate text-base font-semibold tabular text-indigo-700">
                       {formatMoney(linkedAgent ? defaultAgentSellingPrice(p) : p.sellingPrice)}
                     </div>
                     <StatusBadge status={status} />
                   </div>
-                  <div className="mt-1 text-[11px] text-slate-400">{formatQty(qty)} {p.unit} on hand</div>
+                  <div className="mt-1 truncate text-[11px] text-slate-400">{formatQty(qty)} {p.unit} on hand</div>
                 </button>
-                <div className="mt-3">
+                <div className="mt-3 min-w-0">
                   {line ? (
-                    <div className="flex items-center justify-between gap-2">
-                      <span className="text-xs font-medium text-slate-500">Qty</span>
-                      <QtyControl
-                        qty={line.qty}
-                        onDecrease={() => setQty(p.id, line.qty - 1)}
-                        onIncrease={() => setQty(p.id, line.qty + 1)}
-                        testId={`card-${p.id}`}
-                      />
-                    </div>
+                    <QtyControl
+                      qty={line.qty}
+                      onDecrease={() => setQty(p.id, line.qty - 1)}
+                      onIncrease={() => setQty(p.id, line.qty + 1)}
+                      testId={`card-${p.id}`}
+                      compact
+                    />
                   ) : (
                     <button
                       type="button"
-                      className="flex h-10 w-full items-center justify-center rounded-xl bg-indigo-50 text-sm font-semibold text-indigo-700 ring-1 ring-indigo-100 hover:bg-indigo-100"
+                      className="flex h-10 w-full min-w-0 items-center justify-center rounded-xl bg-indigo-50 text-sm font-semibold text-indigo-700 ring-1 ring-indigo-100 hover:bg-indigo-100"
                       onClick={() => addProduct(p)}
                     >
                       Add
@@ -302,26 +303,26 @@ export function PosPage() {
           })}
         </div>
       </div>
-      <Card className="hidden p-5 lg:sticky lg:top-4 lg:flex lg:max-h-[calc(100vh-5.5rem)] lg:flex-col lg:overflow-hidden">{cartPanel}</Card>
+      <Card className="hidden min-w-0 p-5 lg:sticky lg:top-4 lg:flex lg:max-h-[calc(100vh-5.5rem)] lg:flex-col lg:overflow-hidden">{cartPanel}</Card>
       <div
-        className="fixed inset-x-0 bottom-0 z-20 border-t border-slate-200 bg-white/95 px-3 pt-2.5 backdrop-blur lg:hidden"
+        className="fixed inset-x-0 bottom-0 z-20 max-w-full overflow-hidden border-t border-slate-200 bg-white/95 px-3 pt-2.5 backdrop-blur lg:hidden"
         style={{ paddingBottom: 'max(0.75rem, env(safe-area-inset-bottom))' }}
         data-pos-mobile-summary
       >
-        <div className="mx-auto flex max-w-3xl items-center gap-3">
+        <div className="mx-auto flex min-w-0 max-w-3xl items-center gap-3">
           <div className="min-w-0 flex-1">
-            <div className="text-[11px] font-medium uppercase tracking-wide text-slate-500">
+            <div className="truncate text-[11px] font-medium uppercase tracking-wide text-slate-500">
               {count} {count === 1 ? 'item' : 'items'}
             </div>
             <div className="truncate text-lg font-semibold tabular text-slate-900">{formatMoney(total)}</div>
           </div>
-          <Button variant="secondary" size="lg" className="h-11 px-5" onClick={() => setMobileCart(true)} data-pos-view-cart>
+          <Button variant="secondary" size="lg" className="h-11 shrink-0 px-4 sm:px-5" onClick={() => setMobileCart(true)} data-pos-view-cart>
             View cart
           </Button>
         </div>
       </div>
-      <Modal open={mobileCart} onClose={() => setMobileCart(false)} title="Cart" width="max-w-lg">
-        <div className="flex h-[min(78dvh,36rem)] flex-col">{cartPanel}</div>
+      <Modal open={mobileCart} onClose={() => setMobileCart(false)} title="Cart" width="max-w-full sm:max-w-lg">
+        <div className="flex h-[min(78dvh,36rem)] min-w-0 max-w-full flex-col">{cartPanel}</div>
       </Modal>
       <Modal open={Boolean(completed)} onClose={() => setCompleted(null)} title="Sale completed">
         {completed && (
@@ -349,29 +350,27 @@ function QtyControl({
   onDecrease,
   onIncrease,
   testId,
+  compact = false,
 }: {
   qty: number
   onDecrease: () => void
   onIncrease: () => void
   testId?: string
+  compact?: boolean
 }) {
+  const btn = compact
+    ? 'flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-slate-700 hover:bg-white'
+    : 'flex h-10 w-10 shrink-0 items-center justify-center rounded-lg text-slate-700 hover:bg-white'
   return (
-    <div className="inline-flex items-center rounded-xl bg-slate-100 p-0.5" data-pos-qty-control={testId}>
-      <button
-        type="button"
-        className="flex h-10 w-10 items-center justify-center rounded-lg text-slate-700 hover:bg-white"
-        aria-label="Decrease quantity"
-        onClick={onDecrease}
-      >
+    <div
+      className={compact ? 'flex w-full min-w-0 items-center justify-between rounded-xl bg-slate-100 p-0.5' : 'inline-flex items-center rounded-xl bg-slate-100 p-0.5'}
+      data-pos-qty-control={testId}
+    >
+      <button type="button" className={btn} aria-label="Decrease quantity" onClick={onDecrease}>
         <Minus size={16} />
       </button>
-      <span className="min-w-[1.75rem] px-1 text-center text-sm font-semibold tabular" data-pos-qty>{qty}</span>
-      <button
-        type="button"
-        className="flex h-10 w-10 items-center justify-center rounded-lg text-slate-700 hover:bg-white"
-        aria-label="Increase quantity"
-        onClick={onIncrease}
-      >
+      <span className={compact ? 'min-w-0 flex-1 px-1 text-center text-sm font-semibold tabular' : 'min-w-[1.75rem] px-1 text-center text-sm font-semibold tabular'} data-pos-qty>{qty}</span>
+      <button type="button" className={btn} aria-label="Increase quantity" onClick={onIncrease}>
         <Plus size={16} />
       </button>
     </div>

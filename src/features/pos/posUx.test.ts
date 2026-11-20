@@ -162,6 +162,18 @@ test('layout, sticky cart summary, safe-area, and ProductMark stay POS-only UX',
   assert.equal(posPage.includes('hidden') && posPage.includes('lg:sticky'), true)
 })
 
+test('mobile product grid is constrained to the viewport and does not rely on implicit auto columns', () => {
+  assert.equal(posPage.includes('grid min-w-0 max-w-full grid-cols-1'), true)
+  assert.equal(posPage.includes('overflow-x-clip'), true)
+  assert.equal(posPage.includes('grid min-w-0 grid-cols-2'), true)
+  assert.equal(posPage.includes('sf-card flex min-w-0 flex-col overflow-hidden'), true)
+  assert.equal(posPage.includes('compact'), true)
+  assert.equal(posPage.includes('max-w-full overflow-hidden border-t'), true)
+  assert.equal(posPage.includes('width="max-w-full sm:max-w-lg"'), true)
+  assert.equal(posPage.includes('h-12 w-full min-w-0'), true)
+  assert.equal(posPage.includes('hover:-translate-y-0.5'), false)
+})
+
 test('card quantity controls reuse the same cart mutation helpers and one cart state', () => {
   assert.equal(posPage.includes('useState<CartLine[]>([])'), true)
   assert.equal(posPage.includes('addProductToCart'), true)
