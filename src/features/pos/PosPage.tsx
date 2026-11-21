@@ -1,5 +1,5 @@
-import { useMemo, useRef, useState } from 'react'
-import { Link, useSearchParams } from 'react-router-dom'
+import { useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { Link } from 'react-router-dom'
 import { Minus, Plus, Trash2, Search } from 'lucide-react'
 import { Button, Card, Modal, Select, StatusBadge } from '@/components/ui'
 import { ProductMark, paymentLabel } from '@/components/ProductMark'
@@ -19,17 +19,15 @@ import {
   setCartQty,
   type CartLine,
 } from './posCart'
-import { parsePosImageAbVariant, posImageAbPreviewUrl } from './posImageAb'
 
 export function PosPage() {
   const state = useStore()
   const api = useApi()
-  const [searchParams] = useSearchParams()
-  const posImageAb = parsePosImageAbVariant(searchParams.get('posImage'))
-  const posImagePresentation = posImageAb === 'a' ? 'square-contain' : posImageAb === 'b' ? 'square-cover' : undefined
   const linkedAgent = currentLinkedAgent(state)
   const warehouseId = posSellingWarehouseId(state)
   const submittingRef = useRef(false)
+  const mobileSummaryRef = useRef<HTMLDivElement>(null)
+  const [mobileCartHeight, setMobileCartHeight] = useState(92)
   const [query, setQuery] = useState('')
   const [categoryId, setCategoryId] = useState('all')
   const [cart, setCart] = useState<CartLine[]>([])
@@ -40,6 +38,17 @@ export function PosPage() {
   const [completed, setCompleted] = useState<Sale | null>(null)
   const [mobileCart, setMobileCart] = useState(false)
   const [submitting, setSubmitting] = useState(false)
+
+  useLayoutEffect(() => {
+    const node = mobileSummaryRef.current
+    if (!node) return
+    const apply = () => setMobileCartHeight(Math.ceil(node.getBoundingClientRect().height))
+    apply()
+    if (typeof ResizeObserver === 'undefined') return
+    const observer = new ResizeObserver(apply)
+    observer.observe(node)
+    return () => observer.disconnect()
+  }, [])
 
   const products = useMemo(() => {
     return state.products.filter((p) => {
@@ -244,7 +253,11 @@ export function PosPage() {
       className="grid min-w-0 max-w-full grid-cols-1 gap-4 overflow-x-clip lg:grid-cols-[minmax(0,1fr)_24rem] xl:grid-cols-[minmax(0,1fr)_26rem]"
       data-pos-page
     >
-      <div className="min-w-0 max-w-full pb-[calc(8.75rem+env(safe-area-inset-bottom))] lg:pb-0">
+      <div
+        className="min-w-0 max-w-full pb-[calc(var(--pos-mobile-cart-height,5.75rem)+1rem)] lg:pb-0"
+        style={{ ['--pos-mobile-cart-height' as string]: `${mobileCartHeight}px` }}
+        data-pos-catalogue
+      >
         <div className="relative mb-4 min-w-0">
           <Search size={18} className="pointer-events-none absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" />
           <input
@@ -261,10 +274,7 @@ export function PosPage() {
             <CatChip key={c.id} active={categoryId === c.id} onClick={() => setCategoryId(c.id)} label={c.name} />
           ))}
         </div>
-        <div
-          className="grid min-w-0 grid-cols-2 gap-2.5 sm:gap-3 md:grid-cols-3 md:gap-4 xl:grid-cols-4"
-          data-pos-image-ab={posImageAb || 'default'}
-        >
+        <div className="grid min-w-0 grid-cols-2 items-stretch gap-2.5 sm:gap-3 md:grid-cols-3 md:gap-4 xl:grid-cols-4">
           {products.map((p) => {
             const qty = api.getProductQty(p.id, warehouseId)
             const status = api.getProductStockStatus(p.id, warehouseId)
@@ -272,17 +282,12 @@ export function PosPage() {
             return (
               <article
                 key={p.id}
-                className="sf-card flex min-w-0 flex-col overflow-hidden p-2.5 text-left sm:p-3"
+                className="sf-card flex h-full min-w-0 flex-col overflow-hidden p-2.5 text-left sm:p-3"
                 data-pos-product={p.id}
               >
                 <button type="button" className="min-w-0 flex-1 text-left" onClick={() => addProduct(p)}>
-                  <ProductImageThumb
-                    product={p}
-                    size="xl"
-                    presentation={posImagePresentation}
-                    previewDataUrl={posImageAb && import.meta.env.DEV ? posImageAbPreviewUrl(p.id) : undefined}
-                  />
-                  <div className="mt-3 truncate text-[15px] font-semibold leading-snug text-slate-900">{p.name}</div>
+                  <ProductImageThumb product={p} size="xl" />
+                  <div className="mt-2.5 truncate text-[15px] font-semibold leading-snug text-slate-900">{p.name}</div>
                   <div className="mt-0.5 truncate text-xs text-slate-400">{p.sku}</div>
                   <div className="mt-2.5 flex min-w-0 flex-col gap-1">
                     <div className="truncate text-base font-semibold tabular text-indigo-700">
@@ -318,6 +323,7 @@ export function PosPage() {
       </div>
       <Card className="hidden min-w-0 p-5 lg:sticky lg:top-4 lg:flex lg:max-h-[calc(100vh-5.5rem)] lg:flex-col lg:overflow-hidden">{cartPanel}</Card>
       <div
+        ref={mobileSummaryRef}
         className="fixed inset-x-0 bottom-0 z-20 max-w-full overflow-hidden border-t border-slate-200 bg-white/95 px-3 pt-2.5 backdrop-blur lg:hidden"
         style={{ paddingBottom: 'max(0.75rem, env(safe-area-inset-bottom))' }}
         data-pos-mobile-summary

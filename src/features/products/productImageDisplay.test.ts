@@ -14,12 +14,6 @@ import {
   shouldFetchProductImage,
   storeProductImageCache,
 } from './productImage.ts'
-import {
-  POS_IMAGE_AB_PREVIEWS,
-  parsePosImageAbVariant,
-  posImageAbFit,
-  posImageAbPreviewUrl,
-} from '../pos/posImageAb.ts'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
 const PNG_B64 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=='
@@ -61,7 +55,7 @@ test('POS catalogue cards show thumbs; cart, qty, price, and sales stay unchange
   const thumb = read('features/products/ProductImageThumb.tsx')
   assert.equal(pos.includes('<ProductImageThumb'), true)
   assert.equal(pos.includes('size="xl"'), true)
-  assert.equal(pos.includes('presentation={posImagePresentation}'), true)
+  assert.equal(pos.includes('<ProductImageThumb product={p} size="xl" />'), true)
   assert.equal(pos.includes('{p.name}'), true)
   assert.equal(pos.includes('{p.sku}'), true)
   assert.equal(pos.includes('p.sellingPrice'), true)
@@ -73,7 +67,8 @@ test('POS catalogue cards show thumbs; cart, qty, price, and sales stay unchange
   assert.equal(pos.includes('products.getImage'), false)
   assert.equal(pos.includes('products.list'), false)
   assert.equal(pos.includes('Drive'), false)
-  assert.equal(thumb.includes('h-[4.75rem] w-full rounded-2xl'), true)
+  assert.equal(thumb.includes('aspect-square w-full'), true)
+  assert.equal(thumb.includes('object-contain'), true)
   assert.equal(pos.includes('grid min-w-0 grid-cols-2'), true)
   assert.equal(pos.includes('md:grid-cols-3'), true)
   assert.equal(pos.includes('xl:grid-cols-4'), true)
@@ -217,37 +212,38 @@ test('lazy thumbs observe visibility and listing/POS keep existing responsive fr
   assert.equal(thumb.includes('IntersectionObserver'), true)
   assert.equal(thumb.includes("rootMargin: '180px 0px'"), true)
   assert.equal(thumb.includes('h-9 w-9 rounded-xl'), true)
-  assert.equal(thumb.includes('h-[4.75rem] w-full rounded-2xl'), true)
+  assert.equal(thumb.includes('object-contain'), true)
   assert.equal(pos.includes('overflow-x-clip'), true)
   assert.equal(pos.includes('grid min-w-0 grid-cols-2'), true)
-  assert.equal(pos.includes('pb-[calc(8.75rem+env(safe-area-inset-bottom))]'), true)
+  assert.equal(pos.includes('pb-[calc(var(--pos-mobile-cart-height,5.75rem)+1rem)]'), true)
+  assert.equal(pos.includes('lg:pb-0'), true)
   assert.equal(productsPage.includes('sf-table-wrap'), true)
   assert.equal(PRODUCT_IMAGE_CACHE_MAX >= 64, true)
 })
 
-test('POS image A/B uses a 1:1 frame; default catalogue stays Phase 3C cover', () => {
+test('POS catalogue uses square contain and can scroll the last row above the sticky cart', () => {
   const thumb = read('features/products/ProductImageThumb.tsx')
   const pos = read('features/pos/PosPage.tsx')
-  assert.equal(parsePosImageAbVariant(null), null)
-  assert.equal(parsePosImageAbVariant('a'), 'a')
-  assert.equal(parsePosImageAbVariant('b'), 'b')
-  assert.equal(posImageAbFit('a'), 'contain')
-  assert.equal(posImageAbFit('b'), 'cover')
-  assert.equal(pos.includes("searchParams.get('posImage')"), true)
-  assert.equal(pos.includes('data-pos-image-ab={posImageAb || \'default\'}'), true)
-  assert.equal(thumb.includes("presentation === 'square-contain' ? 'object-contain' : 'object-cover'"), true)
   assert.equal(thumb.includes('aspect-square w-full'), true)
-  assert.equal(thumb.includes('bg-white p-2.5'), true)
-  assert.equal(thumb.includes("data-pos-image-fit={presentation === 'square-contain' ? 'contain' : 'cover'}"), true)
-  assert.equal(thumb.includes('h-[4.75rem] w-full rounded-2xl'), true)
-  assert.equal(thumb.includes('h-full w-full object-cover'), true)
+  assert.equal(thumb.includes('bg-white p-2'), true)
+  assert.equal(thumb.includes('object-contain'), true)
+  assert.equal(thumb.includes("data-pos-image-fit=\"contain\""), true)
+  assert.equal(thumb.includes('object-cover'), true)
+  assert.equal(pos.includes('useSearchParams'), false)
+  assert.equal(pos.includes('posImageAb'), false)
+  assert.equal(pos.includes('posImagePreview'), false)
+  assert.equal(pos.includes('<ProductImageThumb product={p} size="xl" />'), true)
+  assert.equal(pos.includes('h-full min-w-0 flex-col'), true)
+  assert.equal(pos.includes('items-stretch'), true)
+  assert.equal(pos.includes('data-pos-mobile-summary'), true)
+  assert.equal(pos.includes('data-pos-catalogue'), true)
+  assert.equal(pos.includes('--pos-mobile-cart-height'), true)
+  assert.equal(pos.includes('ResizeObserver'), true)
+  assert.equal(pos.includes('safe-area-inset-bottom'), true)
+  assert.equal(pos.includes('lg:pb-0'), true)
+  assert.equal(pos.includes('lg:grid-cols-[minmax(0,1fr)_24rem]'), true)
   assert.equal(pos.includes('api.createSale({'), true)
   assert.equal(pos.includes('api.createAgentSale({'), true)
-  assert.equal(POS_IMAGE_AB_PREVIEWS['p-mt']?.shape, 'portrait')
-  assert.equal(POS_IMAGE_AB_PREVIEWS['p-st']?.shape, 'landscape')
-  assert.equal(POS_IMAGE_AB_PREVIEWS['p-wf']?.shape, 'square')
-  assert.equal(Boolean(posImageAbPreviewUrl('p-cp')), false)
   assert.equal(pos.includes('products.uploadImage'), false)
   assert.equal(pos.includes('products.replaceImage'), false)
-  assert.equal(pos.includes('import.meta.env.DEV'), true)
 })

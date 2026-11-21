@@ -12,43 +12,30 @@ import {
   shouldFetchProductImage,
 } from './productImage'
 
-const FRAME: Record<'sm' | 'md' | 'lg' | 'xl', string> = {
+const FRAME: Record<'sm' | 'md' | 'lg', string> = {
   sm: 'h-9 w-9 rounded-xl',
   md: 'h-11 w-11 rounded-xl',
   lg: 'h-16 w-16 rounded-xl',
-  xl: 'h-[4.75rem] w-full rounded-2xl',
 }
-
-export type ProductImageThumbPresentation = 'square-contain' | 'square-cover'
 
 export function ProductImageThumb({
   product,
   size,
-  presentation,
-  previewDataUrl,
 }: {
   product: Product
   size: 'sm' | 'md' | 'lg' | 'xl'
-  presentation?: ProductImageThumbPresentation
-  previewDataUrl?: string
 }) {
   const actorUserId = useStore().ui.currentUserId
   const imageFileId = product.imageFileId?.trim() || ''
   const rootRef = useRef<HTMLDivElement>(null)
   const requestRef = useRef(0)
-  const square = presentation === 'square-contain' || presentation === 'square-cover'
-  const objectFit = presentation === 'square-contain' ? 'object-contain' : 'object-cover'
+  const square = size === 'xl'
   const [visible, setVisible] = useState(false)
-  const [dataUrl, setDataUrl] = useState(() => {
-    if (previewDataUrl) return previewDataUrl
-    return shouldFetchProductImage(imageFileId) ? peekProductImageCache(product.id, imageFileId)?.dataUrl ?? '' : ''
-  })
+  const [dataUrl, setDataUrl] = useState(() =>
+    shouldFetchProductImage(imageFileId) ? peekProductImageCache(product.id, imageFileId)?.dataUrl ?? '' : '',
+  )
 
   useEffect(() => {
-    if (previewDataUrl) {
-      setDataUrl(previewDataUrl)
-      return
-    }
     if (!shouldFetchProductImage(imageFileId)) {
       setVisible(false)
       return
@@ -70,14 +57,10 @@ export function ProductImageThumb({
     )
     observer.observe(node)
     return () => observer.disconnect()
-  }, [product.id, imageFileId, previewDataUrl])
+  }, [product.id, imageFileId])
 
   useEffect(() => {
     const requestId = ++requestRef.current
-    if (previewDataUrl) {
-      setDataUrl(previewDataUrl)
-      return
-    }
     if (!shouldFetchProductImage(imageFileId)) {
       setDataUrl('')
       return
@@ -115,26 +98,25 @@ export function ProductImageThumb({
     return () => {
       requestRef.current += 1
     }
-  }, [product.id, imageFileId, actorUserId, visible, previewDataUrl])
+  }, [product.id, imageFileId, actorUserId, visible])
 
   return (
     <div
       ref={rootRef}
-      className={cn('relative shrink-0', (size === 'xl' || square) && 'w-full')}
+      className={cn('relative shrink-0', square && 'w-full')}
       data-product-image-thumb={product.id}
-      data-pos-image-presentation={presentation || 'default'}
     >
-      {square ? (
+      {size === 'xl' ? (
         <div
-          className="flex aspect-square w-full items-center justify-center overflow-hidden rounded-2xl bg-white p-2.5"
+          className="flex aspect-square w-full items-center justify-center overflow-hidden rounded-2xl bg-white p-2"
           data-pos-image-frame="square"
-          data-pos-image-fit={presentation === 'square-contain' ? 'contain' : 'cover'}
+          data-pos-image-fit="contain"
         >
           {dataUrl ? (
             <img
               src={dataUrl}
               alt=""
-              className={cn('h-full w-full', objectFit)}
+              className="h-full w-full object-contain"
               draggable={false}
               onError={() => setDataUrl('')}
             />
