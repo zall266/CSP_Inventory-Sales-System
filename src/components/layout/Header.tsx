@@ -90,8 +90,8 @@ export function Header() {
           }}
           onFocus={() => setSearchOpen(true)}
           onBlur={() => window.setTimeout(() => setSearchOpen(false), 180)}
-          placeholder="Search products, invoices, production, batches..."
-          className="h-10 w-full rounded-xl border border-slate-200 bg-slate-50 pl-9 pr-16 text-sm outline-none placeholder:text-slate-400 focus:border-indigo-400 focus:bg-white focus:ring-4 focus:ring-indigo-50"
+          placeholder="Search"
+          className="h-10 w-full rounded-xl border border-slate-200 bg-slate-50 pl-9 pr-3 text-sm outline-none placeholder:text-slate-400 focus:border-indigo-400 focus:bg-white focus:ring-4 focus:ring-indigo-50 sm:pr-16"
         />
         <kbd className="pointer-events-none absolute right-2 top-1/2 hidden -translate-y-1/2 rounded-md border border-slate-200 bg-white px-1.5 py-0.5 text-[10px] text-slate-400 sm:block">
           ⌘K

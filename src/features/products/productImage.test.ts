@@ -189,17 +189,21 @@ test('remove action is authorized-only, requires confirmation, and preserves the
   assert.equal(failReturn > -1 && clearCall > failReturn, true)
 })
 
-test('image retrieval uses products.getImage only when Product Details needs it', async () => {
+test('image retrieval uses products.getImage, never products.list bytes', async () => {
   const panel = read('features/products/ProductImagePanel.tsx')
+  const thumb = read('features/products/ProductImageThumb.tsx')
   const db = read('store/db.ts')
   const pos = read('features/pos/PosPage.tsx')
   const productsPage = read('features/products/ProductsPage.tsx')
   assert.equal(PRODUCT_IMAGE_GET_ACTION, 'products.getImage')
   assert.equal(panel.includes('fetchProductImage'), true)
   assert.equal(panel.includes('loadStoredProductImage'), true)
+  assert.equal(thumb.includes('loadStoredProductImage'), true)
+  assert.equal(thumb.includes('fetchProductImage'), true)
   assert.equal(db.includes("queueProductWrite('products.list'"), false)
   assert.equal(db.includes("queueProductWrite('products.uploadImage'"), false)
   assert.equal(pos.includes('products.getImage'), false)
+  assert.equal(pos.includes('products.list'), false)
   assert.equal(productsPage.includes('products.getImage'), false)
   assert.equal(productsPage.includes('uploadImage'), false)
   let fetched = 0
@@ -281,7 +285,7 @@ test('failed or missing retrieval does not retry forever and falls back to Produ
     },
   })
   assert.equal(stale.status, 'error')
-  assert.equal(peekProductImageCache('p-cp', 'driveFileId123456'), undefined)
+  assert.equal(peekProductImageCache('p-cp', 'driveFileId123456')?.fileName, 'stale.png')
 })
 
 test('cache keys stay per product and image file id, and can be dropped after removal', () => {
@@ -363,7 +367,7 @@ test('Product Details tabs, Overview, Stock Card, Batches, and Production remain
   assert.equal(drawers.includes('Stock Card'), true)
 })
 
-test('ProductMark, POS, Agent POS, RecipePhotos, and sales/stock behaviour stay unchanged', () => {
+test('ProductMark, cart, Agent POS sales, RecipePhotos, and sales/stock behaviour stay unchanged', () => {
   const mark = read('components/ProductMark.tsx')
   const pos = read('features/pos/PosPage.tsx')
   const recipe = read('features/manufacturing/recipePhoto.ts')
@@ -373,7 +377,9 @@ test('ProductMark, POS, Agent POS, RecipePhotos, and sales/stock behaviour stay 
   assert.equal(mark.includes('initials(product.name)'), true)
   assert.equal(mark.includes('getImage'), false)
   assert.equal(mark.includes('imageFileId'), false)
-  assert.equal(pos.includes('<ProductMark product={p} size="xl" />'), true)
+  assert.equal(pos.includes('<ProductImageThumb'), true)
+  assert.equal(pos.includes('size="xl"'), true)
+  assert.equal(pos.includes('<ProductMark product={product} size="md" />'), true)
   assert.equal(pos.includes('products.getImage'), false)
   assert.equal(pos.includes('uploadImage'), false)
   assert.equal(pos.includes('api.createSale({'), true)
