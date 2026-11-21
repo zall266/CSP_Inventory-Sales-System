@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { Button, Card, Checkbox, ConfirmDialog, Field, Input, PageHeader, Select, Textarea } from '@/components/ui'
 import { useApi, useLookups, useStore } from '@/store/hooks'
-import { formatDate, formatDateTime, formatQty, round2 } from '@/utils/format'
+import { calendarDatesEqual, formatCalendarDate, formatDateTime, formatQty, round2 } from '@/utils/format'
 import { formatUnit } from '@/features/products/masterData'
 import type { ProductionSession, ShortProductionReason } from '@/types'
 import { canEditSession, currentUser, isSessionOperationalToday, sessionTotals, systemProductionDate } from './sessionPlan'
@@ -57,7 +57,7 @@ export function CompleteProductionPage() {
   const user = currentUser(state)
   const today = systemProductionDate()
   const session = state.productionSessions.find((item) => item.id === (id ?? ''))
-    ?? state.productionSessions.find((item) => item.status === 'in_progress' && item.productionDate === today)
+    ?? state.productionSessions.find((item) => item.status === 'in_progress' && calendarDatesEqual(item.productionDate, today))
 
   const [step, setStep] = useState<CompletionStep>(() => defaultStep(session))
   const [results, setResults] = useState(() =>
@@ -239,7 +239,7 @@ export function CompleteProductionPage() {
     <div>
       <PageHeader
         title="Complete production"
-        subtitle={`${session.reference} · ${formatDate(session.productionDate + 'T00:00:00+08:00')} · Today · ${subtitle}`}
+        subtitle={`${session.reference} · ${formatCalendarDate(session.productionDate)} · Today · ${subtitle}`}
         actions={<Link to="/manufacturing/today"><Button variant="secondary">Back to today</Button></Link>}
       />
       <div className="mb-4 grid gap-2 sm:grid-cols-3">

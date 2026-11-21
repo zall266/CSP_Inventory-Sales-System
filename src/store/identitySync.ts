@@ -1,5 +1,6 @@
 import { identityApiUrl, postIdentityAction, type IdentitySlice } from '@/api/identityApi'
 import { createSeedData } from '@/data/seed'
+import { canBootstrapFromRead, enqueueHydrate, hydrateRead, reportLoadError } from '@/store/hydrateQueue'
 import type { Settings } from '@/types'
 
 type SyncOptions = {
@@ -7,6 +8,7 @@ type SyncOptions = {
   actorId: () => string
   settings: () => Settings
   onError: (message: string) => void
+  onLoadError?: (message: string) => void
 }
 
 let options: SyncOptions | null = null
@@ -36,11 +38,16 @@ export function startIdentityHydration(next: SyncOptions) {
   if (!identityApiUrl()) return
   options = next
   const seen = epoch
-  void (async () => {
+  void enqueueHydrate(async () => {
     try {
-      const loaded = await postIdentityAction('identity.get', {})
-      if (epoch !== seen || !loaded.ok) return
-      if (loaded.data?.empty) {
+      const loaded = await hydrateRead(postIdentityAction, 'identity.get', {})
+      if (epoch !== seen) return
+      if (!canBootstrapFromRead(loaded)) {
+        if (!loaded.ok) reportLoadError(next, loaded.error?.message || 'Could not load identity from the server.')
+        return
+      }
+      const payload = loaded.data as { empty?: boolean } | null
+      if (payload?.empty) {
         const seed = createSeedData()
         const boot = await postIdentityAction('identity.bootstrap', {
           users: seed.users,
@@ -54,12 +61,12 @@ export function startIdentityHydration(next: SyncOptions) {
         if (slice) applyServerSlice(slice)
         return
       }
-      const slice = sliceFrom(loaded.data)
+      const slice = sliceFrom(loaded.data as Parameters<typeof sliceFrom>[0])
       if (slice) applyServerSlice(slice)
     } catch {
-      next.onError('Could not load identity from the server.')
+      reportLoadError(next, 'Could not load identity from the server.')
     }
-  })()
+  })
 }
 
 export function queueIdentityWrite(action: string, payload: Record<string, unknown>) {

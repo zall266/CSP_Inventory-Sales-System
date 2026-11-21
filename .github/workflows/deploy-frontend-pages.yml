@@ -1,0 +1,96 @@
+# Persistent DEV frontend on GitHub Pages.
+# Separate from Deploy DEV, which publishes the Apps Script web app.
+# This build is the only production-mode frontend build that calls the DEV /exec.
+# The /exec URL is public. Do not put clasp or OAuth credentials in this workflow.
+
+name: Deploy DEV frontend
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - cursor/dev-frontend-github-pages-d9ac
+      - cursor/module-1-dev-api-connect-d9ac
+      - cursor/module-2-warehouses-categories-d9ac
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: dev-frontend-pages
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Publish DEV frontend
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Enable GitHub Pages for Actions
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          status="$(curl -sS -o /tmp/pages-site.json -w '%{http_code}' \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}/pages")"
+          if [ "${status}" = "200" ]; then
+            echo "GitHub Pages is already configured."
+            exit 0
+          fi
+          if [ "${status}" != "404" ]; then
+            echo "Could not read GitHub Pages status (${status})."
+            exit 1
+          fi
+          curl -fsS -X POST \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}/pages" \
+            -d '{"build_type":"workflow"}' >/tmp/pages-create.json
+          echo "GitHub Pages enabled for GitHub Actions."
+
+      - name: Configure Pages
+        uses: actions/configure-pages@v5
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      - name: Build
+        env:
+          CSP_PAGES_BASE: /${{ github.event.repository.name }}/
+          VITE_CSP_API_URL: https://script.google.com/macros/s/AKfycbyMDLwOJ2iqD_nuLFcVMQYrS81WDkkaBhutTGBCrbUClM1Aap1MJiO6CnzzcYuTAoMbDw/exec
+        run: npm run build
+
+      - name: Add SPA fallback
+        run: |
+          cp dist/index.html dist/404.html
+          touch dist/.nojekyll
+          if grep -R -l -E 'CSP_DEV_CLASP_CREDENTIALS|client_secret|refresh_token' dist; then
+            echo "Frontend bundle contains credential material."
+            exit 1
+          fi
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: dist
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

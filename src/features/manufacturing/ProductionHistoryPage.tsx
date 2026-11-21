@@ -3,9 +3,11 @@ import { Link, useLocation, useNavigate, useParams } from 'react-router-dom'
 import { Button, Card, ConfirmDialog, Field, FilterRow, Input, Modal, PageHeader, Select, StatusBadge, Textarea } from '@/components/ui'
 import { movementLabel } from '@/components/ProductMark'
 import { useApi, useLookups, useStore } from '@/store/hooks'
-import { formatDate, formatDateTime, formatQty } from '@/utils/format'
+import { formatCalendarDate, formatDateTime, formatQty } from '@/utils/format'
 import { formatUnit } from '@/features/products/masterData'
-import { originSessionForLine, sessionTotals } from './sessionPlan'
+import { currentUser, originSessionForLine, sessionTotals } from './sessionPlan'
+import { RecipeSheetEvidence } from './RecipeSheetEvidence'
+import { isSampleRecipePhoto } from './recipePhoto'
 import { allocationLabel, expectedRemainingQty, usesPurchaseUnitSplit } from './materialClosing'
 import { hasPermission } from '@/features/settings/permissions'
 import { canPrintBmr } from '@/features/manufacturing/bmrModel'
@@ -66,7 +68,7 @@ export function ProductionHistoryPage() {
                 return (
                   <tr key={session.id}>
                     <td>
-                      <Link to={`/manufacturing/history/${session.id}`} className="font-medium text-indigo-700">{formatDate(session.productionDate + 'T00:00:00+08:00')}</Link>
+                      <Link to={`/manufacturing/history/${session.id}`} className="font-medium text-indigo-700">{formatCalendarDate(session.productionDate)}</Link>
                     </td>
                     <td>{session.reference}</td>
                     <td>{totals.products} products</td>
@@ -116,7 +118,7 @@ export function ProductionSessionDetailPage() {
     <div>
       <PageHeader
         title={session.reference}
-        subtitle={`Daily session · ${formatDate(session.productionDate + 'T00:00:00+08:00')}`}
+        subtitle={`Daily session · ${formatCalendarDate(session.productionDate)}`}
         actions={
           <div className="flex gap-2">
             {canPrintBmr(session) && <Link to={`/manufacturing/bmr/${session.id}`}><Button>Print BMR</Button></Link>}
@@ -146,12 +148,17 @@ export function ProductionSessionDetailPage() {
           </>
         )}
       </div>
-      {session.recipePhoto && (
-        <Card className="mb-5 p-5">
-          <div className="mb-2 text-sm font-semibold">Recipe sheet (evidence)</div>
-          <img src={session.recipePhoto} alt={session.recipePhotoName} className="max-h-56 rounded-xl border border-slate-200" />
-          <div className="mt-2 text-xs text-slate-400">{session.recipePhotoName} · {session.uploadedBy} · {session.uploadedAt ? formatDateTime(session.uploadedAt) : ''}</div>
-        </Card>
+      {session.recipePhoto && !isSampleRecipePhoto(session.recipePhoto) && (
+        <div className="mb-5">
+          <RecipeSheetEvidence
+            sessionId={session.id}
+            recipePhoto={session.recipePhoto}
+            recipePhotoName={session.recipePhotoName}
+            uploadedBy={session.uploadedBy}
+            uploadedAt={session.uploadedAt}
+            actorUserId={currentUser(state).id}
+          />
+        </div>
       )}
       <Card className="mb-5">
         <div className="sf-table-wrap">
@@ -178,7 +185,7 @@ export function ProductionSessionDetailPage() {
                     {product(item.productId)?.name}
                     {origin && (
                       <div className="text-xs font-normal text-indigo-700">
-                        Continued from {formatDate(`${origin.productionDate}T00:00:00+08:00`)}
+                        Continued from {formatCalendarDate(origin.productionDate)}
                         {originLine ? ` · original ${originLine.originalTargetQty}` : ''}
                       </div>
                     )}

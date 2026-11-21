@@ -1,10 +1,13 @@
 import { useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { Button, Card, FilterRow, Input, PageHeader, Select } from '@/components/ui'
-import { PermissionDenied } from '@/features/documents/A4Sheet'
-import { filterBmrRecords, listBmrRecords, type BmrRecordRange } from '@/features/manufacturing/bmrModel'
+import { filterBmrRecords, listBmrRecords, type BmrRecordListItem, type BmrRecordRange } from '@/features/manufacturing/bmrModel'
+import { currentUser } from '@/features/manufacturing/sessionPlan'
 import { hasPermission } from '@/features/settings/permissions'
 import { useStore } from '@/store/hooks'
+import { ReportingFallback } from '@/store/ReportingFallback'
+import { isReportingFallback, pickReportingOverlay, reportingSurface } from '@/store/reportingOverlay'
+import { useReportingQuery } from '@/store/reportingSync'
 import { systemDateKey } from '@/utils/format'
 
 const RANGES: Array<{ value: BmrRecordRange; label: string }> = [
@@ -23,13 +26,31 @@ export function BmrRecordsPage() {
   const [to, setTo] = useState('')
   const [warehouseId, setWarehouseId] = useState('all')
   const today = systemDateKey()
-  const rows = useMemo(() => {
+  const localRows = useMemo(() => {
     const listed = listBmrRecords(state.productionSessions, state.products, state.warehouses)
     return filterBmrRecords(listed, { query, range, from, to, warehouseId, today })
   }, [state.productionSessions, state.products, state.warehouses, query, range, from, to, warehouseId, today])
+  const canView = hasPermission(state, 'manufacturing.history.view')
+  const queryState = useReportingQuery<{ records: BmrRecordListItem[] }>('bmr.list', {
+    actorUserId: currentUser(state).id,
+    query,
+    range,
+    from,
+    to,
+    warehouseId,
+    today,
+  }, { enabled: canView })
+  const rows = pickReportingOverlay(queryState, { records: localRows }, { records: [] }).records
 
-  if (!hasPermission(state, 'manufacturing.history.view')) {
-    return <PermissionDenied title="BMR Records" subtitle="You do not have permission to view completed production." />
+  const surface = reportingSurface(queryState, canView)
+  if (isReportingFallback(surface)) {
+    return (
+      <ReportingFallback
+        surface={surface}
+        title="BMR Records"
+        deniedSubtitle="You do not have permission to view completed production."
+      />
+    )
   }
 
   return (

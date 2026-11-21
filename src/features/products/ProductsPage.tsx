@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react'
 import { Plus } from 'lucide-react'
 import { Button, Card, FilterRow, Input, Modal, PageHeader, Select, StatusBadge } from '@/components/ui'
 import { ProductMark } from '@/components/ProductMark'
+import { ProductImageThumb } from '@/features/products/ProductImageThumb'
 import { ProductForm } from '@/features/products/ProductForm'
 import { baseUnitCost, formatUnit, productHasBom } from '@/features/products/masterData'
 import { useApi, useLookups, useStore } from '@/store/hooks'
@@ -66,7 +67,7 @@ export function ProductsPage() {
                 <tr key={p.id} onClick={() => api.openDrawer({ type: 'product', id: p.id })}>
                   <td>
                     <div className="flex items-center gap-3">
-                      <ProductMark product={p} size="sm" />
+                      <ProductImageThumb product={p} size="sm" />
                       <span className="font-medium">{p.name}</span>
                     </div>
                   </td>
