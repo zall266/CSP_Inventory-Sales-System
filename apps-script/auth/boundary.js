@@ -1,6 +1,6 @@
-// Phase 1 boundary only. Phase 2 inserts a temporary session provider.
-// Phase 13 replaces that provider. Business services take a principal and a
-// permission key. They do not read passwords, HR, or Script Properties.
+// Authentication boundary. Session validation lives in authService.
+// Business services still receive actorUserId only after the router overwrites
+// it from the validated session. They do not read passwords or tokens.
 
 function authenticate() {
   return {
@@ -14,6 +14,6 @@ function authorize(principal, permissionKey) {
   return {
     principal: principal || authenticate(),
     permissionKey: permissionKey || '',
-    enforced: false
+    enforced: Boolean(principal && principal.authenticated)
   };
 }

@@ -426,6 +426,15 @@ function createIdentityService(deps) {
       userId: actor.id, action: 'users.update', entityType: 'user', entityId: target.id,
       reference: nextEmail, before: target.name, after: nextName, requestId: requestId
     });
+    var auth = createAuthService({ sheetRepository: sheets, driveStorage: deps.driveStorage });
+    if (nextEmail !== target.email) auth.syncCredentialUsername(spreadsheet, target.id, nextEmail);
+    if (nextStatus === 'inactive' && target.status !== 'inactive') {
+      auth.revokeUserSessions(spreadsheet, target.id, 'disabled');
+      systemAudit(spreadsheet, {
+        userId: actor.id, action: 'auth.account_disabled', entityType: 'user', entityId: target.id,
+        reference: nextEmail, before: 'active', after: 'inactive', requestId: requestId
+      });
+    }
     return load(spreadsheet);
   }
 

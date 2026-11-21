@@ -183,7 +183,7 @@ function pathActive(pathname: string, to: string) {
   return pathname === to || pathname.startsWith(`${to}/`)
 }
 
-function navItemVisible(state: ReturnType<typeof useStore>, item: NavItem) {
+export function navItemVisible(state: ReturnType<typeof useStore>, item: NavItem) {
   if (item.to === '/') return hasPermission(state, 'dashboard.view')
   if (item.to.startsWith('/reports/')) return hasPermission(state, 'reports.view')
   if (item.to === '/settings/users') return canAccessUsersAndRoles(state, actorUser(state))

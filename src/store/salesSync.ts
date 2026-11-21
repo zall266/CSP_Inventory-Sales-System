@@ -1,4 +1,4 @@
-import { identityApiUrl, postIdentityAction } from '@/api/identityApi'
+import { canHydrateFromServer, identityApiUrl, postIdentityAction } from '@/api/identityApi'
 import { enqueueHydrate, hydrateRead, reportLoadError } from '@/store/hydrateQueue'
 import type { DeliveryOrder, DocumentAuditLog, InventoryRow, Payment, Quotation, Sale, StockMovement } from '@/types'
 
@@ -58,8 +58,8 @@ function needsIdempotency(action: string) {
 }
 
 export function startSalesHydration(next: SyncOptions) {
-  if (!identityApiUrl()) return
   options = next
+  if (!canHydrateFromServer()) return
   const seen = epoch
   void enqueueHydrate(async () => {
     try {

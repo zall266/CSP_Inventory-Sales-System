@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { identityApiUrl, postIdentityAction } from '@/api/identityApi'
+import { canHydrateFromServer, postIdentityAction } from '@/api/identityApi'
 import { currentUser } from '@/features/manufacturing/sessionPlan'
 import type { AppState } from '@/types'
 import { PROTOTYPE_TODAY, systemDateKey } from '@/utils/format'
@@ -21,7 +21,7 @@ export function useReportingQuery<T>(
   payload: Record<string, unknown>,
   options?: { enabled?: boolean },
 ): ReportingQueryState<T> {
-  const configured = Boolean(identityApiUrl())
+  const configured = canHydrateFromServer()
   const enabled = options?.enabled ?? true
   const serialized = JSON.stringify(payload)
   const [data, setData] = useState<T | null>(null)

@@ -1,4 +1,4 @@
-import { identityApiUrl, postIdentityAction } from '@/api/identityApi'
+import { canHydrateFromServer, identityApiUrl, postIdentityAction } from '@/api/identityApi'
 import { createSeedData } from '@/data/seed'
 import { canBootstrapFromRead, enqueueHydrate, hydrateRead, reportLoadError } from '@/store/hydrateQueue'
 import type { Agent, Customer, CustomerWholesalePrice, Supplier, Warehouse } from '@/types'
@@ -41,8 +41,8 @@ function sliceFrom(data: PartySlice | null): PartySlice | null {
 }
 
 export function startPartyHydration(next: SyncOptions) {
-  if (!identityApiUrl()) return
   options = next
+  if (!canHydrateFromServer()) return
   const seen = epoch
   void enqueueHydrate(async () => {
     try {
