@@ -9,12 +9,14 @@ This document records the bootstrap takeover fix, the password-verifier replay a
 | Finding | Decision | Meaning |
 | --- | --- | --- |
 | A. Public `identity.bootstrap` takeover | **FIXED** | Anonymous callers cannot create the initial Owner. Bootstrap requires a one-time Script Properties hash, consumed under the script lock. |
-| C. Public `auth.bootstrapOwner` takeover | **FIXED** | Knowing the Owner email is not enough. First credential enrollment requires a separate one-time Script Properties hash bound to that Owner. |
+| C. Public `auth.bootstrapOwner` takeover | **FIXED** | Knowing the Owner email is not enough. First credential enrollment requires a separate one-time Script Properties hash bound to that Owner, with a mandatory 15-minute expiry. |
 | B. Password verifier replay | **MITIGATED** | Captured login HTTP requests cannot be replayed. A stolen PBKDF2 derived key can still prove a fresh challenge. Not FIXED. |
-| Session token in `sessionStorage` | **RESIDUAL** | GitHub Pages + Apps Script cannot issue an HttpOnly cookie for this SPA. XSS that can read `sessionStorage` steals the session. |
+| Session token in `sessionStorage` | **RESIDUAL** | GitHub Pages + Apps Script cannot issue an HttpOnly cookie for this SPA. XSS that can read `sessionStorage` steals the session. Not fixed. |
+| Anonymous Apps Script `/exec` | **RESIDUAL** | The web app remains `ANYONE_ANONYMOUS`. Authorization is the session or a one-time setup secret, not a Google account. Not fixed. |
+| Google Sheets non-ACID | **RESIDUAL** | Script locks serialize writers; they do not make sheet writes atomic. Crash windows remain. Not fixed. |
 | Client-enforced PBKDF2 | **RESIDUAL** | Apps Script cannot re-run 600,000 PBKDF2 rounds. A modified client can send a DK stretched with fewer iterations. |
 
-Final recommendation from this task: **READY FOR SECURITY RE-REVIEW**. Do not treat this file as approval.
+Final recommendation from this task: **READY FOR FINAL OWNER REVIEW**. Do not treat this file as approval. Do not call the system production-ready.
 
 ## Finding A — identity bootstrap
 
@@ -112,12 +114,18 @@ Option B (combine both into `identity.bootstrap`) was rejected: it would mix ide
 
 ### One-time authorization lifecycle
 
-Script Properties (never Sheets, never git, never API responses):
+All four Script Properties are **mandatory**. Missing any of them fails closed. Never store the raw secret in Sheets, API responses, or logs.
 
 - `AUTH_OWNER_ENROLL_HASH` = SHA-256 of the enrollment secret
-- `AUTH_OWNER_ENROLL_EXPIRES_AT` optional ISO expiry
+- `AUTH_OWNER_ENROLL_EXPIRES_AT` mandatory ISO-8601 UTC timestamp (`YYYY-MM-DDTHH:mm:ss.sssZ` or `YYYY-MM-DDTHH:mm:ssZ`)
 - `AUTH_OWNER_ENROLL_USERNAME` exact normalized Owner email
 - `AUTH_OWNER_ENROLL_USER_ID` exact Owner user ID
+
+Expiry policy:
+
+- Missing, empty, malformed, or unparseable `AUTH_OWNER_ENROLL_EXPIRES_AT` is rejected.
+- Expiry equal to now, earlier than now, or more than 15 minutes after now is rejected.
+- The server does not silently extend an expired authorization and does not generate a new secret on a failed request.
 
 Under `withScriptLock`:
 
@@ -126,7 +134,7 @@ Under `withScriptLock`:
 3. Reject if the user is not that bound ID, not Owner, or not active (do not consume).
 4. Reject recoverable password-policy failures (do not consume).
 5. Write the credential, re-read it, confirm it belongs to that Owner.
-6. Delete the hash and bindings.
+6. Delete the hash, expiry, and bindings.
 7. Mint a session only after that confirmation.
 
 The official SPA sign-in form cannot perform this enrollment.
@@ -139,7 +147,7 @@ Out of band, owner-controlled machine, DEV only:
 2. Generate 32 random bytes as 64 hex characters. This is the **Owner enrollment** secret, not the identity bootstrap secret.
 3. Store SHA-256(UTF-8 secret) in `AUTH_OWNER_ENROLL_HASH`.
 4. Store the existing Owner email in `AUTH_OWNER_ENROLL_USERNAME` and the Owner user ID in `AUTH_OWNER_ENROLL_USER_ID`.
-5. Optionally set `AUTH_OWNER_ENROLL_EXPIRES_AT`.
+5. Set `AUTH_OWNER_ENROLL_EXPIRES_AT` to `new Date(Date.now() + 15 * 60 * 1000).toISOString()`. Do not omit this property. Do not set a timestamp more than 15 minutes in the future.
 6. Call `auth.bootstrapOwner` once with `username`, a stretched verifier or test password, and `ownerEnrollmentAuthorization`. Use clasp / a trusted Apps Script execution, not `/login`.
 7. Confirm `AUTH_OWNER_ENROLL_HASH` was deleted.
 8. Sign in at `/login` with the Owner password.
@@ -148,17 +156,38 @@ Out of band, owner-controlled machine, DEV only:
 
 Google Sheets is not ACID.
 
-- Validation failure (wrong secret, wrong email, non-Owner, weak password): hash remains. Correct the request and retry.
+- Recoverable validation failure (wrong secret, wrong email, non-Owner, inactive Owner, weak password) while the authorization is still valid: hash and expiry remain. Correct the request and retry before expiry.
+- Expired, missing, empty, malformed, unparseable, or beyond-window expiry: fail closed, do not consume, do not mint. Do not reuse the leftover timestamp. Delete the four enrollment properties and provision a **new** secret with a new expiry no more than 15 minutes in the future.
 - Crash after credential write and before consume: `AuthCredentials` has the Owner row, leftover hash is inert because a second enroll is `FORBIDDEN`. Delete leftover properties. Sign in with the password that was written.
 - Crash after consume and before session mint: credential exists. Sign in normally. No session was issued from the failed request.
-- Credential write failed: no session, hash remains. Retry.
-- Need to start over after a bad credential write: Owner deletes `AuthCredentials` data rows, reprovisions a **new** enrollment hash (the old secret was consumed or must be rotated), then retries.
+- Credential write failed: no session, hash remains if still unexpired. Retry before expiry, or rotate as above if expired.
+- Need to start over after a bad credential write: Owner deletes `AuthCredentials` data rows, reprovisions a **new** enrollment hash and expiry (the old secret was consumed or must be rotated), then retries.
 
 There is no default Owner password and no hardcoded production secret.
 
+### Concurrency
+
+`auth.bootstrapOwner` runs under `withScriptLock`. Nested calls in the **same** Apps Script execution reuse the held lock (`scriptLockDepth`). Distinct executions are serialized by `LockService`.
+
+Automated test methodology (`apps-script/tests/authOwnerEnroll.test.js`):
+
+1. **Overlapping hold (simulated).** A test lock runs the second `handleRequest` from inside the first request's `tryLock`, before `scriptLockDepth` increments. The second independent request therefore hits the real `withScriptLock` path, sees the lock held, and returns `CONFLICT`. The first request then writes one credential, consumes the authorization, and mints one session. This is deterministic overlapping execution in Node. It is **not** two live Google Apps Script executions.
+2. **Waiter-resume analogue (sequential).** After the first request completes, a later request with the same authorization sees existing credentials and is `FORBIDDEN`. No second session is minted.
+3. **Consume-before-session crash analogue.** Restoring a leftover hash after a successful write still cannot create a second credential; enrollment stays `FORBIDDEN`.
+
+This does **not** prove live Apps Script multi-execution concurrency. Node is single-threaded; the overlapping test injects the second request during the first `tryLock`. Real GAS `LockService.tryLock` would wait up to 10 seconds, then the waiter would enter after release and fail `FORBIDDEN` because credentials already exist.
+
+Manual DEV concurrency procedure (do not run until the owner approves a DEV deploy):
+
+1. Provision a valid Owner enrollment authorization (all four properties, expiry ≤ 15 minutes).
+2. From two separate clasp / trusted executions, post `auth.bootstrapOwner` with the same secret at the same time.
+3. Expect exactly one success and one `FORBIDDEN` or `CONFLICT`.
+4. Confirm one `AuthCredentials` row, deleted enrollment properties, and at most one session from enrollment.
+5. Do not use production. Do not leave a live enrollment secret in Script Properties.
+
 ### Test evidence
 
-`apps-script/tests/authOwnerEnroll.test.js` drives `handleRequest` (the router): anonymous/missing/invalid/expired/wrong-email/non-Owner/identity-secret-reuse are rejected with no credential and no session; first authorized enroll succeeds once; reuse and a second concurrent writer fail; normal Owner login works afterward.
+`apps-script/tests/authOwnerEnroll.test.js` drives `handleRequest` (the router): anonymous/missing/invalid/expired/missing-expiry/empty-expiry/malformed-expiry/invalid-date/equal-to-now/beyond-15-minute-window/wrong-email/wrong-user-id/inactive-Owner/non-Owner/identity-secret-reuse are rejected with no credential and no session; first authorized enroll with a valid future expiry succeeds once; reuse, leftover hash, sequential second writer, and overlapping lock-hold second writer fail; normal Owner login works afterward.
 
 ## Session security
 

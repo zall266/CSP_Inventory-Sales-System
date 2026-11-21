@@ -128,6 +128,10 @@ export function harnessOwnerEnrollHash() {
   return crypto.createHash('sha256').update(HARNESS_OWNER_ENROLL_SECRET).digest('hex')
 }
 
+export function harnessOwnerEnrollExpiry(fromMs = Date.now()) {
+  return new Date(Number(fromMs) + 10 * 60 * 1000).toISOString()
+}
+
 function injectHarnessSetup(context, request) {
   if (!request || !request.payload || typeof request.payload !== 'object') return
   if (typeof context.setupAuthorizationField !== 'function') return
@@ -236,7 +240,9 @@ export function memoryProperties(initial) {
   const store = { ...initial }
   return {
     getProperty(key) {
-      return store[key] || null
+      if (!Object.prototype.hasOwnProperty.call(store, key)) return null
+      const value = store[key]
+      return value === undefined || value === null ? null : String(value)
     },
     setProperty(key, value) {
       store[key] = String(value)
@@ -257,6 +263,7 @@ export function devProperties() {
     AUTH_OWNER_ENROLL_HASH: harnessOwnerEnrollHash(),
     AUTH_OWNER_ENROLL_USERNAME: HARNESS_OWNER_ENROLL_USERNAME,
     AUTH_OWNER_ENROLL_USER_ID: HARNESS_OWNER_ENROLL_USER_ID,
+    AUTH_OWNER_ENROLL_EXPIRES_AT: harnessOwnerEnrollExpiry(),
   })
 }
 

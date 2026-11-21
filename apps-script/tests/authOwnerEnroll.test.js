@@ -5,12 +5,51 @@ import {
   createFakeDrive,
   createFakeSpreadsheet,
   devProperties,
+  harnessOwnerEnrollExpiry,
+  harnessOwnerEnrollHash,
   HARNESS_IDENTITY_BOOTSTRAP_SECRET,
   HARNESS_OWNER_ENROLL_SECRET,
+  HARNESS_OWNER_ENROLL_USER_ID,
+  HARNESS_OWNER_ENROLL_USERNAME,
   loadBackend,
 } from './harness.js'
 
-function app(propertyOverrides = {}) {
+function alwaysSucceedLock() {
+  return {
+    getScriptLock() {
+      return { tryLock: () => true, releaseLock() {} }
+    },
+  }
+}
+
+function createHoldLock(state) {
+  return {
+    getScriptLock() {
+      return {
+        tryLock() {
+          if (state.held) {
+            state.events.push('blocked')
+            return false
+          }
+          state.held = true
+          state.events.push('acquired')
+          if (typeof state.onHold === 'function') {
+            const nested = state.onHold
+            state.onHold = null
+            state.nestedResult = nested()
+          }
+          return true
+        },
+        releaseLock() {
+          state.held = false
+          state.events.push('released')
+        },
+      }
+    },
+  }
+}
+
+function app(propertyOverrides = {}, lockService = alwaysSucceedLock()) {
   const spreadsheet = createFakeSpreadsheet()
   const drive = createFakeDrive('drive-id')
   const properties = devProperties()
@@ -20,11 +59,7 @@ function app(propertyOverrides = {}) {
   })
   const context = loadBackend({
     PropertiesService: { getScriptProperties: () => properties },
-    LockService: {
-      getScriptLock() {
-        return { tryLock: () => true, releaseLock() {} }
-      },
-    },
+    LockService: lockService,
     SpreadsheetApp: { openById: () => spreadsheet },
     DriveApp: drive,
     ContentService: {
@@ -85,11 +120,38 @@ function identityPayload() {
   }
 }
 
-function ready(propertyOverrides) {
-  const backend = app(propertyOverrides)
+function ready(propertyOverrides, lockService) {
+  const backend = app(propertyOverrides, lockService)
   backend.foundation.initialize()
   assert.equal(call(backend, 'identity.bootstrap', identityPayload()).ok, true)
   return backend
+}
+
+function enrollPayload(overrides = {}) {
+  return {
+    username: 'aina@coolslurppy.my',
+    password: 'OwnerPass12',
+    ownerEnrollmentAuthorization: HARNESS_OWNER_ENROLL_SECRET,
+    ...overrides,
+  }
+}
+
+function deniedEnroll(propertyOverrides, payloadOverrides = {}) {
+  const backend = ready(propertyOverrides)
+  backend.context.AUTH_INJECT_TEST_OWNER_ENROLL = false
+  const denied = call(backend, 'auth.bootstrapOwner', enrollPayload(payloadOverrides))
+  assertNoEnrollment(backend, denied)
+  return { backend, denied }
+}
+
+function setUserStatus(backend, userId, status) {
+  const rows = backend.spreadsheet.store.Users
+  const headers = rows[0]
+  const idIdx = headers.indexOf('id')
+  const statusIdx = headers.indexOf('status')
+  for (let i = 1; i < rows.length; i += 1) {
+    if (String(rows[i][idIdx]) === userId) rows[i][statusIdx] = status
+  }
 }
 
 function credentialRows(backend) {
@@ -190,14 +252,68 @@ test('identity bootstrap secret cannot be reused for Owner enrollment', () => {
 })
 
 test('expired owner enrollment authorization is rejected', () => {
-  const backend = ready({ AUTH_OWNER_ENROLL_EXPIRES_AT: '2000-01-01T00:00:00.000Z' })
-  backend.context.AUTH_INJECT_TEST_OWNER_ENROLL = false
-  const denied = call(backend, 'auth.bootstrapOwner', {
-    username: 'aina@coolslurppy.my',
-    password: 'OwnerPass12',
-    ownerEnrollmentAuthorization: HARNESS_OWNER_ENROLL_SECRET,
+  const { backend, denied } = deniedEnroll({ AUTH_OWNER_ENROLL_EXPIRES_AT: '2000-01-01T00:00:00.000Z' })
+  assert.equal(denied.error.code, 'UNAUTHORIZED')
+  assert.ok(backend.properties.getProperty('AUTH_OWNER_ENROLL_HASH'))
+})
+
+test('missing owner enrollment expiry property is rejected', () => {
+  const { backend, denied } = deniedEnroll({ AUTH_OWNER_ENROLL_EXPIRES_AT: null })
+  assert.equal(denied.error.code, 'UNAUTHORIZED')
+  assert.ok(backend.properties.getProperty('AUTH_OWNER_ENROLL_HASH'))
+})
+
+test('empty owner enrollment expiry property is rejected', () => {
+  const { backend, denied } = deniedEnroll({ AUTH_OWNER_ENROLL_EXPIRES_AT: '' })
+  assert.equal(denied.error.code, 'UNAUTHORIZED')
+  assert.ok(backend.properties.getProperty('AUTH_OWNER_ENROLL_HASH'))
+})
+
+test('malformed owner enrollment expiry is rejected', () => {
+  const { backend, denied } = deniedEnroll({ AUTH_OWNER_ENROLL_EXPIRES_AT: 'not-a-timestamp' })
+  assert.equal(denied.error.code, 'UNAUTHORIZED')
+  assert.ok(backend.properties.getProperty('AUTH_OWNER_ENROLL_HASH'))
+})
+
+test('invalid owner enrollment expiry date string is rejected', () => {
+  const { backend, denied } = deniedEnroll({ AUTH_OWNER_ENROLL_EXPIRES_AT: '2026-13-40T99:99:99.000Z' })
+  assert.equal(denied.error.code, 'UNAUTHORIZED')
+  assert.ok(backend.properties.getProperty('AUTH_OWNER_ENROLL_HASH'))
+})
+
+test('owner enrollment expiry equal to current time is rejected', () => {
+  const now = Date.now()
+  const { backend, denied } = deniedEnroll({ AUTH_OWNER_ENROLL_EXPIRES_AT: new Date(now).toISOString() })
+  assert.equal(denied.error.code, 'UNAUTHORIZED')
+  assert.ok(backend.properties.getProperty('AUTH_OWNER_ENROLL_HASH'))
+})
+
+test('owner enrollment expiry beyond the 15-minute window is rejected', () => {
+  const { backend, denied } = deniedEnroll({
+    AUTH_OWNER_ENROLL_EXPIRES_AT: new Date(Date.now() + 16 * 60 * 1000).toISOString(),
   })
   assert.equal(denied.error.code, 'UNAUTHORIZED')
+  assert.ok(backend.properties.getProperty('AUTH_OWNER_ENROLL_HASH'))
+})
+
+test('wrong owner enrollment secret is rejected', () => {
+  const { backend, denied } = deniedEnroll({}, { ownerEnrollmentAuthorization: 'c'.repeat(64) })
+  assert.equal(denied.error.code, 'UNAUTHORIZED')
+  assert.ok(backend.properties.getProperty('AUTH_OWNER_ENROLL_HASH'))
+})
+
+test('wrong bound Owner user ID is rejected', () => {
+  const { backend, denied } = deniedEnroll({ AUTH_OWNER_ENROLL_USER_ID: 'u-wrong' })
+  assert.equal(denied.error.code, 'FORBIDDEN')
+  assert.ok(backend.properties.getProperty('AUTH_OWNER_ENROLL_HASH'))
+})
+
+test('inactive Owner cannot enroll even with a valid authorization', () => {
+  const backend = ready()
+  backend.context.AUTH_INJECT_TEST_OWNER_ENROLL = false
+  setUserStatus(backend, 'u-aina', 'inactive')
+  const denied = call(backend, 'auth.bootstrapOwner', enrollPayload())
+  assert.equal(denied.error.code, 'FORBIDDEN')
   assertNoEnrollment(backend, denied)
   assert.ok(backend.properties.getProperty('AUTH_OWNER_ENROLL_HASH'))
 })
@@ -287,21 +403,66 @@ test('reused owner enrollment authorization fails even if credentials are cleare
   assert.equal(backend.properties.getProperty('AUTH_OWNER_ENROLL_HASH'), null)
 })
 
-test('concurrent owner enrollment attempts cannot both succeed', () => {
+test('second owner enrollment after the first succeeds is rejected', () => {
   const backend = ready()
-  const first = call(backend, 'auth.bootstrapOwner', {
-    username: 'aina@coolslurppy.my',
-    password: 'OwnerPass12',
-  }, { requestId: 'enroll-a' })
-  const second = call(backend, 'auth.bootstrapOwner', {
-    username: 'aina@coolslurppy.my',
+  backend.context.AUTH_INJECT_TEST_OWNER_ENROLL = false
+  const first = call(backend, 'auth.bootstrapOwner', enrollPayload(), { requestId: 'enroll-a' })
+  const second = call(backend, 'auth.bootstrapOwner', enrollPayload({
     password: 'OwnerPass13x',
-  }, { requestId: 'enroll-b' })
+  }), { requestId: 'enroll-b' })
   assert.equal(first.ok, true)
   assert.equal(second.ok, false)
   assert.equal(second.error.code, 'FORBIDDEN')
   assert.equal(Boolean(second.data && second.data.sessionToken), false)
   assert.equal(credentialRows(backend).length, 1)
+  assert.equal(sessionRows(backend).length, 1)
+})
+
+test('overlapping owner enrollment requests cannot both succeed', () => {
+  const state = { held: false, events: [], onHold: null, nestedResult: null }
+  const backend = ready({}, createHoldLock(state))
+  backend.context.AUTH_INJECT_TEST_OWNER_ENROLL = false
+  state.onHold = () => call(backend, 'auth.bootstrapOwner', enrollPayload({
+    password: 'OwnerPass13x',
+  }), { requestId: 'enroll-b' })
+  const first = call(backend, 'auth.bootstrapOwner', enrollPayload(), { requestId: 'enroll-a' })
+  assert.equal(first.ok, true, first.error && first.error.message)
+  assert.equal(state.nestedResult && state.nestedResult.ok, false)
+  assert.equal(state.nestedResult.error.code, 'CONFLICT')
+  assert.ok(state.events.includes('acquired'))
+  assert.ok(state.events.includes('blocked'))
+  assert.ok(state.events.includes('released'))
+  assert.equal(Boolean(state.nestedResult.data && state.nestedResult.data.sessionToken), false)
+  assert.equal(credentialRows(backend).length, 1)
+  assert.equal(sessionRows(backend).length, 1)
+  assert.equal(backend.properties.getProperty('AUTH_OWNER_ENROLL_HASH'), null)
+  const late = call(backend, 'auth.bootstrapOwner', enrollPayload({
+    password: 'OwnerPass14x',
+  }), { requestId: 'enroll-c' })
+  assert.equal(late.ok, false)
+  assert.equal(late.error.code, 'FORBIDDEN')
+  assert.equal(Boolean(late.data && late.data.sessionToken), false)
+  assert.equal(credentialRows(backend).length, 1)
+  assert.equal(sessionRows(backend).length, 1)
+})
+
+test('leftover enrollment hash cannot mint a second Owner credential', () => {
+  const backend = ready()
+  backend.context.AUTH_INJECT_TEST_OWNER_ENROLL = false
+  const first = call(backend, 'auth.bootstrapOwner', enrollPayload())
+  assert.equal(first.ok, true)
+  backend.properties.setProperty('AUTH_OWNER_ENROLL_HASH', harnessOwnerEnrollHash())
+  backend.properties.setProperty('AUTH_OWNER_ENROLL_USERNAME', HARNESS_OWNER_ENROLL_USERNAME)
+  backend.properties.setProperty('AUTH_OWNER_ENROLL_USER_ID', HARNESS_OWNER_ENROLL_USER_ID)
+  backend.properties.setProperty('AUTH_OWNER_ENROLL_EXPIRES_AT', harnessOwnerEnrollExpiry())
+  const second = call(backend, 'auth.bootstrapOwner', enrollPayload({
+    password: 'OwnerPass99x',
+  }))
+  assert.equal(second.ok, false)
+  assert.equal(second.error.code, 'FORBIDDEN')
+  assert.equal(Boolean(second.data && second.data.sessionToken), false)
+  assert.equal(credentialRows(backend).length, 1)
+  assert.equal(sessionRows(backend).length, 1)
 })
 
 test('after credentials exist, bootstrapOwner stays unavailable on the public route', () => {

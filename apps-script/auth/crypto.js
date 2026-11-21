@@ -32,6 +32,10 @@ var AUTH_OWNER_ENROLL_HASH_PROPERTY = 'AUTH_OWNER_ENROLL_HASH';
 var AUTH_OWNER_ENROLL_EXPIRES_PROPERTY = 'AUTH_OWNER_ENROLL_EXPIRES_AT';
 var AUTH_OWNER_ENROLL_USERNAME_PROPERTY = 'AUTH_OWNER_ENROLL_USERNAME';
 var AUTH_OWNER_ENROLL_USER_ID_PROPERTY = 'AUTH_OWNER_ENROLL_USER_ID';
+// Owner enrollment expiry is mandatory and fail-closed. Remaining TTL must be
+// greater than zero and at most 15 minutes. Date.now is supplied by the caller.
+var AUTH_OWNER_ENROLL_MAX_MS = 15 * 60 * 1000;
+var AUTH_OWNER_ENROLL_ISO = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{3})?Z$/;
 var AUTH_SETUP_SECRET_MIN = 32;
 var AUTH_CHALLENGE_TTL_MS = 2 * 60 * 1000;
 var AUTH_LOGIN_PURPOSE = 'login';
@@ -364,19 +368,32 @@ function authOwnerEnrollBinding() {
   };
 }
 
+function authParseOwnerEnrollExpiryMs(value) {
+  var text = String(value || '').trim();
+  if (!text || !AUTH_OWNER_ENROLL_ISO.test(text)) return NaN;
+  var at = Date.parse(text);
+  return isFinite(at) ? at : NaN;
+}
+
+function authOwnerEnrollExpiryMs() {
+  if (typeof PropertiesService === 'undefined' || !PropertiesService.getScriptProperties) return NaN;
+  return authParseOwnerEnrollExpiryMs(PropertiesService.getScriptProperties().getProperty(AUTH_OWNER_ENROLL_EXPIRES_PROPERTY));
+}
+
 function authOwnerEnrollConfigured() {
   if (typeof PropertiesService === 'undefined' || !PropertiesService.getScriptProperties) return false;
   var hash = String(PropertiesService.getScriptProperties().getProperty(AUTH_OWNER_ENROLL_HASH_PROPERTY) || '').trim().toLowerCase();
   var bound = authOwnerEnrollBinding();
-  return authIsHex(hash, 32) && Boolean(bound.username) && Boolean(bound.userId);
+  return authIsHex(hash, 32) && Boolean(bound.username) && Boolean(bound.userId) && isFinite(authOwnerEnrollExpiryMs());
 }
 
 function authOwnerEnrollExpired(nowMs) {
-  if (typeof PropertiesService === 'undefined' || !PropertiesService.getScriptProperties) return true;
-  var expires = String(PropertiesService.getScriptProperties().getProperty(AUTH_OWNER_ENROLL_EXPIRES_PROPERTY) || '').trim();
-  if (!expires) return false;
-  var at = Date.parse(expires);
-  return isFinite(at) && at <= Number(nowMs);
+  var at = authOwnerEnrollExpiryMs();
+  var now = Number(nowMs);
+  if (!isFinite(at) || !isFinite(now)) return true;
+  if (at <= now) return true;
+  if (at - now > AUTH_OWNER_ENROLL_MAX_MS) return true;
+  return false;
 }
 
 function authVerifyOwnerEnrollSecret(secret, username, nowMs) {

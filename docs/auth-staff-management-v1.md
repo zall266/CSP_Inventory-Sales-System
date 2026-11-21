@@ -110,7 +110,7 @@ Existing User IDs, staff records, and business documents are not deleted. No pas
 
 1. Deploy this Apps Script to **DEV only** after owner approval. Do not deploy from this PR.
 2. Confirm identity already exists (`auth.status.identityReady`).
-3. Open `/login`. If `needsOwnerBootstrap` is true, the Owner email from the Users sheet can set the first password.
+3. If `needsOwnerBootstrap` is true, provision the four Owner enrollment Script Properties (`AUTH_OWNER_ENROLL_HASH`, mandatory `AUTH_OWNER_ENROLL_EXPIRES_AT` within 15 minutes, `AUTH_OWNER_ENROLL_USERNAME`, `AUTH_OWNER_ENROLL_USER_ID`) and call `auth.bootstrapOwner` out of band. `/login` cannot enroll the first Owner password.
 4. Other prototype users (`u-admin`, supervisors, staff) cannot sign in until the Owner uses **Reset password** and hands the temporary password out of band.
 5. Temporary passwords force a change at next login. They are not committed to git.
 
@@ -167,7 +167,7 @@ Findings:
 
 ## Bootstrap and test-session isolation
 
-- `auth.bootstrapOwner` is not public. It requires `AUTH_OWNER_ENROLL_HASH` bound to the Owner email and user ID in Script Properties, consumed after a successful credential write. Second call `FORBIDDEN`. See `docs/auth-security-hardening-v2.md`.
+- `auth.bootstrapOwner` is not public. It requires `AUTH_OWNER_ENROLL_HASH` bound to the Owner email and user ID, plus a mandatory `AUTH_OWNER_ENROLL_EXPIRES_AT` no more than 15 minutes in the future. Consumed after a successful credential write. Second call `FORBIDDEN`. See `docs/auth-security-hardening-v2.md`.
 - `identity.bootstrap` is not public. It requires `IDENTITY_BOOTSTRAP_HASH` in Script Properties and consumes that hash after a successful write. Second call `CONFLICT`. See `docs/auth-security-hardening-v2.md`.
 - `auth.status` does not list users or emails.
 - `issueHarnessSession` was removed from production Apps Script. `issueTestSession` returns empty unless `AUTH_ALLOW_TEST_SESSION === true` (Node harness only).
@@ -178,7 +178,8 @@ Findings:
 - Password stretch is enforced by the official SPA and stored peppered hash. Apps Script does not re-run 600,000 PBKDF2 rounds. Login now requires a single-use challenge-bound HMAC proof, so a captured HTTP login request cannot be replayed. A captured PBKDF2 DK can still answer a fresh challenge (MITIGATED, not FIXED).
 - Google Sheets is not an ACID user store; script locks serialize writes.
 - Empty identity no longer allows anonymous `identity.bootstrap`. First-time init requires the owner-provisioned setup hash. Residual: a secret submitted through `/exec` is visible to anyone who can read that one request.
-- Owner enrollment is available only while the credentials sheet is empty and only with a one-time `AUTH_OWNER_ENROLL_HASH` bound to that Owner. Knowing the Owner email is not enough.
+- Owner enrollment is available only while the credentials sheet is empty and only with a one-time `AUTH_OWNER_ENROLL_HASH` bound to that Owner, with mandatory 15-minute expiry. Knowing the Owner email is not enough.
+- Node overlapping-lock tests serialize two `auth.bootstrapOwner` requests through `withScriptLock`. They do not prove live Google Apps Script multi-execution concurrency. Sheets writes remain non-ACID.
 - Web app access is still `ANYONE_ANONYMOUS`; authorization is the session, not Google accounts.
 - Frontend hiding of menus is not the security boundary.
 - Module `FORBIDDEN` denials are returned to the caller; they are not all copied into `AuthEvents`.
@@ -202,8 +203,8 @@ Findings:
 
 | Command | Result |
 | --- | --- |
-| `npm run test:backend` | **212 pass / 0 fail** |
-| `npm run test:ui` | **93 pass / 0 fail** |
+| `npm run test:backend` | **260 pass / 0 fail** |
+| `npm run test:ui` | **94 pass / 0 fail** |
 | `npx tsc --noEmit` / `npm run lint` | pass |
 | `npm run build` | pass |
 
