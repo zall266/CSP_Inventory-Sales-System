@@ -1,7 +1,9 @@
 import { useState, type FormEvent } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { postIdentityAction } from '@/api/identityApi'
+import { preparePasswordVerifier } from '@/auth/passwordHash'
 import { passwordPolicyMessage } from '@/auth/passwordPolicy'
+import { verifierForUsername } from '@/auth/passwordRequest'
 import { clearAuthSession, readAuthSession, writeAuthSession } from '@/auth/session'
 import { Button, Field, Input } from '@/components/ui'
 
@@ -31,8 +33,8 @@ export function FirstPasswordPage() {
     setError('')
     try {
       const result = await postIdentityAction('auth.changePassword', {
-        currentPassword,
-        newPassword: password,
+        currentPasswordVerifier: await verifierForUsername(session?.username || '', currentPassword),
+        ...(await preparePasswordVerifier(password)),
       })
       if (!result.ok) {
         setError(result.error?.message || 'Could not change password.')

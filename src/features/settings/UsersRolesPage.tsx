@@ -1,5 +1,6 @@
 import { Fragment, useEffect, useMemo, useState } from 'react'
 import { identityApiUrl, postIdentityAction } from '@/api/identityApi'
+import { preparePasswordVerifier } from '@/auth/passwordHash'
 import { passwordPolicyMessage } from '@/auth/passwordPolicy'
 import { Badge, Button, Card, Checkbox, ConfirmDialog, Field, Input, Modal, PageHeader, Select, StatusBadge, Textarea } from '@/components/ui'
 import { useApi, useStore } from '@/store/hooks'
@@ -122,6 +123,8 @@ export function UsersSettingsPage() {
   const [resetConfirm, setResetConfirm] = useState('')
   const [resetError, setResetError] = useState('')
   const [resetBusy, setResetBusy] = useState(false)
+  const [newPassword, setNewPassword] = useState('')
+  const [newPasswordConfirm, setNewPasswordConfirm] = useState('')
   const [accounts, setAccounts] = useState<Record<string, AccountSummary>>({})
   const [securityEvents, setSecurityEvents] = useState<SecurityEvent[]>([])
   const auditRows = useMemo(() => state.userAuditLogs ?? [], [state.userAuditLogs])
@@ -164,6 +167,8 @@ export function UsersSettingsPage() {
     setSelectedUser(null)
     setUserError('')
     setUserForm({ name: '', email: '', roleId: firstActiveRole, departmentId: firstActiveDept, status: 'active' })
+    setNewPassword('')
+    setNewPasswordConfirm('')
     setUserMode('add')
   }
   const openEditUser = (user: User) => {
@@ -176,7 +181,7 @@ export function UsersSettingsPage() {
     setSelectedUser(user)
     setUserMode('view')
   }
-  const saveUser = () => {
+  const saveUser = async () => {
     const name = userForm.name.trim()
     const email = userForm.email.trim()
     if (!name || !email) {
@@ -184,8 +189,30 @@ export function UsersSettingsPage() {
       return
     }
     if (userMode === 'add') {
-      const created = api.createUser(userForm)
-      if (created) setUserMode(null)
+      let secret: { passwordVerifier?: string; salt?: string; iterations?: number } = {}
+      if (connected) {
+        const policy = passwordPolicyMessage(newPassword, email)
+        if (policy) {
+          setUserError(policy)
+          return
+        }
+        if (newPassword !== newPasswordConfirm) {
+          setUserError('Passwords do not match.')
+          return
+        }
+        try {
+          secret = await preparePasswordVerifier(newPassword)
+        } catch (error) {
+          setUserError(error instanceof Error ? error.message : 'Secure password hashing is unavailable in this browser.')
+          return
+        }
+      }
+      const created = api.createUser({ ...userForm, ...secret })
+      if (created) {
+        setNewPassword('')
+        setNewPasswordConfirm('')
+        setUserMode(null)
+      }
       return
     }
     if (userMode === 'edit' && selectedUser) {
@@ -484,7 +511,15 @@ export function UsersSettingsPage() {
           <Field label="Name"><Input value={userForm.name} onChange={(e) => setUserForm({ ...userForm, name: e.target.value })} /></Field>
           <Field label="Email / Username"><Input type="email" value={userForm.email} onChange={(e) => setUserForm({ ...userForm, email: e.target.value })} /></Field>
           {userMode === 'add' && connected && (
-            <p className="text-xs text-slate-500">No password is created here. After saving, use Reset password and give the temporary password to the staff member out of band.</p>
+            <>
+              <Field label="Temporary password">
+                <Input type="password" autoComplete="new-password" value={newPassword} onChange={(event) => setNewPassword(event.target.value)} />
+              </Field>
+              <Field label="Confirm temporary password">
+                <Input type="password" autoComplete="new-password" value={newPasswordConfirm} onChange={(event) => setNewPasswordConfirm(event.target.value)} />
+              </Field>
+              <p className="text-xs text-slate-500">Give this password to the staff member out of band. They must change it at first login. It is not stored in this browser after you close the dialog.</p>
+            </>
           )}
           <Field label="Role">
             <Select
@@ -681,7 +716,7 @@ export function UsersSettingsPage() {
                 try {
                   const result = await postIdentityAction('auth.resetPassword', {
                     userId: resetUser.id,
-                    newPassword: resetPassword,
+                    ...(await preparePasswordVerifier(resetPassword)),
                   })
                   if (!result.ok) {
                     setResetError(result.error?.message || 'Could not reset password.')

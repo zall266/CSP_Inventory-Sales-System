@@ -1,20 +1,27 @@
 // Password hashing for the Apps Script V8 runtime.
-// Algorithm: PBKDF2-HMAC-SHA256 (RFC 8018).
-// Utilities.computeHmacSha256Signature is the vetted primitive. There is no
-// bcrypt, scrypt, or native PBKDF2 in Apps Script.
 //
-// Iteration count is 12_000. OWASP Password Storage Cheat Sheet (2023+)
-// recommends 600_000 PBKDF2-HMAC-SHA256 iterations. That work factor is not
-// achievable here: each round is Utilities.computeHmacSha256Signature, a
-// Java/native bridge call with high per-call overhead on Apps Script.
-// This is NOT OWASP-compliant. Do not describe 12_000 as equivalent.
+// Apps Script has HMAC-SHA256 and SHA-256, but no bcrypt, scrypt, argon2, or
+// native PBKDF2. A Java-bridge PBKDF2 loop cannot reach the OWASP 2023
+// PBKDF2-HMAC-SHA256 work factor (600,000) inside a web-app request.
+//
+// Stored secret:
+//   1. Unique 16-byte CSPRNG salt
+//   2. PBKDF2-HMAC-SHA256, 600,000 iterations, 32-byte DK (official SPA Web
+//      Crypto, or the Node test harness native stretcher)
+//   3. HMAC-SHA256(server pepper, DK) stored in Sheets
+//
+// The pepper lives in Script Properties, not in the spreadsheet. A Sheets leak
+// without the script does not yield an offline-guessable password hash.
+// Apps Script never accepts a weaker iteration count and never falls back to
+// unsalted SHA-256 or a short PBKDF2 loop.
 
-var AUTH_PBKDF2_ITERATIONS = 12000;
+var AUTH_PBKDF2_ITERATIONS = 600000;
 var AUTH_PBKDF2_OWASP_SHA256_ITERATIONS = 600000;
 var AUTH_PBKDF2_DKLEN = 32;
 var AUTH_SALT_BYTES = 16;
 var AUTH_PASSWORD_MIN = 10;
 var AUTH_PASSWORD_MAX = 128;
+var AUTH_PEPPER_PROPERTY = 'AUTH_PASSWORD_PEPPER';
 
 function authUtf8Bytes(value) {
   var text = String(value || '');
@@ -79,15 +86,6 @@ function authHexToBytes(hex) {
   return out;
 }
 
-function authConcatBytes(left, right) {
-  var a = authToBytes(left);
-  var b = authToBytes(right);
-  var out = new Uint8Array(a.length + b.length);
-  out.set(a, 0);
-  out.set(b, a.length);
-  return out;
-}
-
 function authHmacSha256(key, message) {
   if (typeof Utilities === 'undefined' || !Utilities.computeHmacSha256Signature) {
     throw appError('INTERNAL_ERROR', 'HMAC-SHA256 is unavailable.');
@@ -102,36 +100,6 @@ function authSha256(value) {
     return authUnsigned(digest);
   }
   throw appError('INTERNAL_ERROR', 'SHA-256 is unavailable.');
-}
-
-function authPbkdf2Block(passwordBytes, saltBytes, iterations, index) {
-  var blockIndex = new Uint8Array(4);
-  blockIndex[0] = (index >>> 24) & 255;
-  blockIndex[1] = (index >>> 16) & 255;
-  blockIndex[2] = (index >>> 8) & 255;
-  blockIndex[3] = index & 255;
-  var u = authHmacSha256(passwordBytes, authConcatBytes(saltBytes, blockIndex));
-  var out = new Uint8Array(u.length);
-  out.set(u);
-  for (var round = 1; round < iterations; round += 1) {
-    u = authHmacSha256(passwordBytes, u);
-    for (var i = 0; i < out.length; i += 1) out[i] ^= u[i];
-  }
-  return out;
-}
-
-function authPbkdf2HmacSha256(password, salt, iterations, dkLen) {
-  var passwordBytes = authToBytes(password);
-  var saltBytes = authToBytes(salt);
-  var length = dkLen || AUTH_PBKDF2_DKLEN;
-  var rounds = iterations || AUTH_PBKDF2_ITERATIONS;
-  if (rounds < 1 || length < 1) throw appError('INTERNAL_ERROR', 'Password hash parameters are invalid.');
-  var blockCount = Math.ceil(length / 32);
-  var derived = new Uint8Array(blockCount * 32);
-  for (var i = 1; i <= blockCount; i += 1) {
-    derived.set(authPbkdf2Block(passwordBytes, saltBytes, rounds, i), (i - 1) * 32);
-  }
-  return derived.subarray(0, length);
 }
 
 function authFillFromUuidString(uuid, out, offset) {
@@ -162,9 +130,6 @@ function authRandomBytes(size) {
     return out;
   }
   if (typeof Utilities !== 'undefined' && typeof Utilities.getUuid === 'function') {
-    // Google documents getUuid() as equivalent to java.util.UUID.randomUUID(),
-    // which fills 16 bytes from SecureRandom (CSPRNG) and then sets RFC 4122
-    // version/variant bits. Do not mix wall-clock time or a non-crypto PRNG.
     while (offset < needed) offset = authFillFromUuidString(Utilities.getUuid(), out, offset);
     return out;
   }
@@ -204,24 +169,130 @@ function authValidatePasswordPolicy(password, username) {
   }
 }
 
+function authIsHex(value, bytes) {
+  return new RegExp('^[0-9a-f]{' + String(bytes * 2) + '}$').test(String(value || ''));
+}
+
+function authNormalizeVerifier(value) {
+  var hex = String(value || '').trim().toLowerCase();
+  if (!authIsHex(hex, AUTH_PBKDF2_DKLEN)) {
+    throw appError('VALIDATION_ERROR', 'Password is invalid.');
+  }
+  return hex;
+}
+
+function authNormalizeSalt(value) {
+  var hex = String(value || '').trim().toLowerCase();
+  if (!authIsHex(hex, AUTH_SALT_BYTES)) {
+    throw appError('VALIDATION_ERROR', 'Password is invalid.');
+  }
+  return hex;
+}
+
+function authRequireIterations(value) {
+  var rounds = Number(value);
+  if (rounds !== AUTH_PBKDF2_ITERATIONS) {
+    throw appError('VALIDATION_ERROR', 'Password work factor is invalid.');
+  }
+  return rounds;
+}
+
+function authPasswordPepperHex() {
+  if (typeof PropertiesService === 'undefined' || !PropertiesService.getScriptProperties) {
+    throw appError('INTERNAL_ERROR', 'Password pepper storage is unavailable.');
+  }
+  var props = PropertiesService.getScriptProperties();
+  var existing = String(props.getProperty(AUTH_PEPPER_PROPERTY) || '').trim().toLowerCase();
+  if (authIsHex(existing, 32)) return existing;
+  var generated = authBytesToHex(authRandomBytes(32));
+  props.setProperty(AUTH_PEPPER_PROPERTY, generated);
+  return generated;
+}
+
+function authSealVerifier(verifierHex) {
+  var verifier = authHexToBytes(authNormalizeVerifier(verifierHex));
+  var pepper = authHexToBytes(authPasswordPepperHex());
+  return authBytesToHex(authHmacSha256(pepper, verifier));
+}
+
+function authHasNativeStretcher() {
+  return typeof authNativePbkdf2HmacSha256 === 'function';
+}
+
+function authStretchPassword(password, saltBytes, iterations) {
+  var rounds = Number(iterations) || AUTH_PBKDF2_ITERATIONS;
+  if (rounds < AUTH_PBKDF2_ITERATIONS) {
+    throw appError('INTERNAL_ERROR', 'Password work factor is below the required minimum.');
+  }
+  if (!authHasNativeStretcher()) {
+    throw appError('INTERNAL_ERROR', 'Password stretching is not available in Apps Script. Send a PBKDF2 verifier.');
+  }
+  return authUnsigned(authNativePbkdf2HmacSha256(
+    authUtf8Bytes(password),
+    authToBytes(saltBytes),
+    rounds,
+    AUTH_PBKDF2_DKLEN
+  ));
+}
+
 function authHashPassword(password, saltHex, iterations) {
-  var salt = saltHex ? authHexToBytes(saltHex) : authRandomBytes(AUTH_SALT_BYTES);
-  var rounds = iterations || AUTH_PBKDF2_ITERATIONS;
-  var hash = authPbkdf2HmacSha256(authUtf8Bytes(password), salt, rounds, AUTH_PBKDF2_DKLEN);
+  var salt = saltHex ? authHexToBytes(authNormalizeSalt(saltHex)) : authRandomBytes(AUTH_SALT_BYTES);
+  var rounds = authRequireIterations(iterations || AUTH_PBKDF2_ITERATIONS);
+  var stretched = authStretchPassword(password, salt, rounds);
   return {
     algorithm: 'pbkdf2-hmac-sha256',
     iterations: rounds,
     salt: authBytesToHex(salt),
-    hash: authBytesToHex(hash)
+    hash: authSealVerifier(authBytesToHex(stretched))
   };
 }
 
+function authHashFromVerifier(verifierHex, saltHex, iterations) {
+  var rounds = authRequireIterations(iterations || AUTH_PBKDF2_ITERATIONS);
+  return {
+    algorithm: 'pbkdf2-hmac-sha256',
+    iterations: rounds,
+    salt: authNormalizeSalt(saltHex),
+    hash: authSealVerifier(verifierHex)
+  };
+}
+
+function authCredentialWorkFactorOk(record) {
+  return Boolean(
+    record &&
+    record.algorithm === 'pbkdf2-hmac-sha256' &&
+    Number(record.iterations) >= AUTH_PBKDF2_ITERATIONS &&
+    record.salt &&
+    (record.hash || record.passwordHash)
+  );
+}
+
+function authVerifyVerifier(verifierHex, record) {
+  if (!authCredentialWorkFactorOk(record)) return false;
+  try {
+    var sealed = authSealVerifier(verifierHex);
+    var stored = record.hash || record.passwordHash;
+    return authTimingSafeEqual(authHexToBytes(sealed), authHexToBytes(stored));
+  } catch (error) {
+    return false;
+  }
+}
+
 function authVerifyPassword(password, record) {
-  var stored = record && (record.hash || record.passwordHash);
-  if (!record || record.algorithm !== 'pbkdf2-hmac-sha256' || !record.salt || !stored) return false;
-  var iterations = Number(record.iterations) || AUTH_PBKDF2_ITERATIONS;
-  var computed = authHashPassword(password, record.salt, iterations);
-  return authTimingSafeEqual(authHexToBytes(computed.hash), authHexToBytes(stored));
+  if (!authCredentialWorkFactorOk(record) || typeof password !== 'string' || !password) return false;
+  if (!authHasNativeStretcher()) return false;
+  try {
+    var stretched = authStretchPassword(password, authHexToBytes(record.salt), Number(record.iterations));
+    return authVerifyVerifier(authBytesToHex(stretched), record);
+  } catch (error) {
+    return false;
+  }
+}
+
+function authDummyChallengeSalt(username) {
+  var pepper = authHexToBytes(authPasswordPepperHex());
+  var material = authUtf8Bytes('csp-auth-challenge|' + String(username || '').trim().toLowerCase());
+  return authBytesToHex(authHmacSha256(pepper, material).subarray(0, AUTH_SALT_BYTES));
 }
 
 function authHashToken(token) {

@@ -3162,7 +3162,16 @@ export const db = {
     return true
   },
 
-  createUser(input: { name: string; email: string; roleId: string; departmentId: string; status?: UserStatus }) {
+  createUser(input: {
+    name: string
+    email: string
+    roleId: string
+    departmentId: string
+    status?: UserStatus
+    passwordVerifier?: string
+    salt?: string
+    iterations?: number
+  }) {
     const actor = currentUser(state)
     if (!canCreateUser(state, actor)) {
       toast('Permission denied', 'You cannot add users.', 'danger')
@@ -3217,6 +3226,9 @@ export const db = {
       roleId: user.roleId,
       departmentId: user.departmentId,
       status: user.status,
+      ...(input.passwordVerifier && input.salt
+        ? { passwordVerifier: input.passwordVerifier, salt: input.salt, iterations: input.iterations }
+        : {}),
     })
     toast('User created', user.name)
     return user

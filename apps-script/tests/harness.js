@@ -130,6 +130,15 @@ export function loadBackend(globals = {}) {
       getRandomValues: (value) => crypto.getRandomValues(value),
       randomUUID: () => crypto.randomUUID(),
     },
+    authNativePbkdf2HmacSha256(password, salt, iterations, dkLen) {
+      return new Uint8Array(crypto.pbkdf2Sync(
+        toNodeBuffer(password),
+        toNodeBuffer(salt),
+        Number(iterations) || 600000,
+        Number(dkLen) || 32,
+        'sha256',
+      ))
+    },
     Buffer,
     Uint8Array,
     Map,

@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { pbkdf2Sync } from 'node:crypto'
 import fs from 'node:fs'
 import test from 'node:test'
 import {
@@ -104,7 +105,7 @@ test('PBKDF2-HMAC-SHA256 hashes and verifies with a unique salt', () => {
   const first = backend.context.authHashPassword('OwnerPass12')
   const elapsed = Date.now() - started
   assert.equal(first.algorithm, 'pbkdf2-hmac-sha256')
-  assert.equal(first.iterations, 12000)
+  assert.equal(first.iterations, 600000)
   assert.equal(first.salt.length, 32)
   assert.equal(first.hash.length, 64)
   assert.equal(backend.context.authVerifyPassword('OwnerPass12', first), true)
@@ -112,7 +113,7 @@ test('PBKDF2-HMAC-SHA256 hashes and verifies with a unique salt', () => {
   const second = backend.context.authHashPassword('OwnerPass12')
   assert.notEqual(first.salt, second.salt)
   assert.notEqual(first.hash, second.hash)
-  assert.ok(elapsed < 2000, `hashing took ${elapsed}ms`)
+  assert.ok(elapsed < 15000, `hashing took ${elapsed}ms`)
 })
 
 test('password policy rejects short, letter-only, and username-matching secrets', () => {
@@ -381,15 +382,19 @@ test('missing CSPRNG sources fail closed', () => {
   }
 })
 
-test('PBKDF2 work factor is below OWASP and Node timing is recorded', () => {
+test('PBKDF2 work factor matches OWASP and weaker counts are rejected', () => {
   const backend = app()
-  assert.equal(backend.context.AUTH_PBKDF2_ITERATIONS, 12000)
+  assert.equal(backend.context.AUTH_PBKDF2_ITERATIONS, 600000)
   assert.equal(backend.context.AUTH_PBKDF2_OWASP_SHA256_ITERATIONS, 600000)
   const salt = Buffer.from(backend.context.authRandomBytes(16)).toString('hex')
+  assert.throws(
+    () => backend.context.authHashPassword('OwnerPass12', salt, 12000),
+    (error) => error.code === 'VALIDATION_ERROR' || error.code === 'INTERNAL_ERROR',
+  )
   const started = Date.now()
-  backend.context.authHashPassword('OwnerPass12', salt, 12000)
+  backend.context.authHashPassword('OwnerPass12', salt, 600000)
   const elapsed = Date.now() - started
-  assert.ok(elapsed < 2000, `12k PBKDF2 took ${elapsed}ms on Node`)
+  assert.ok(elapsed < 15000, `600k PBKDF2 took ${elapsed}ms on Node`)
 })
 
 test('production request routing does not mint harness sessions', () => {
@@ -490,3 +495,114 @@ test('auth events never include secrets and owner can list them', () => {
   assert.ok(events.data.events.some((item) => item.eventType === 'login' || item.eventType === 'owner_bootstrap'))
   assert.ok(events.data.events.some((item) => item.eventType === 'login_failed'))
 })
+
+test('owner creates a staff account with a temporary password and duplicate emails are rejected', () => {
+  const backend = ready()
+  const owner = ownerSession(backend)
+  const created = call(backend, 'users.create', {
+    sessionToken: owner.sessionToken,
+    name: 'New Staff',
+    email: 'new@coolslurppy.my',
+    roleId: 'role-staff',
+    departmentId: 'dept-sales',
+    temporaryPassword: 'TempPass12a',
+  })
+  assert.equal(created.ok, true, created.error && created.error.message)
+  const first = call(backend, 'auth.login', { username: 'new@coolslurppy.my', password: 'TempPass12a' })
+  assert.equal(first.ok, true, first.error && first.error.message)
+  assert.equal(first.data.user.mustChange, true)
+  const blocked = call(backend, 'users.list', { sessionToken: first.data.sessionToken })
+  assert.equal(blocked.ok, false)
+  assert.equal(blocked.error.code, 'FORBIDDEN')
+  const duplicate = call(backend, 'users.create', {
+    sessionToken: owner.sessionToken,
+    name: 'Copy',
+    email: 'new@coolslurppy.my',
+    roleId: 'role-staff',
+    departmentId: 'dept-sales',
+    temporaryPassword: 'TempPass12b',
+  })
+  assert.equal(duplicate.ok, false)
+  assert.equal(duplicate.error.message, 'Email already in use')
+})
+
+test('unknown user status cannot log in or keep a session', () => {
+  const backend = ready()
+  const owner = ownerSession(backend)
+  call(backend, 'auth.resetPassword', {
+    sessionToken: owner.sessionToken,
+    userId: 'u-mei',
+    newPassword: 'StaffPass12',
+  })
+  const users = backend.spreadsheet.store.Users
+  const header = users[0]
+  const statusIdx = header.indexOf('status')
+  const idIdx = header.indexOf('id')
+  const mei = users.find((row, index) => index > 0 && row[idIdx] === 'u-mei')
+  mei[statusIdx] = 'pending'
+  const denied = call(backend, 'auth.login', { username: 'mei@coolslurppy.my', password: 'StaffPass12' })
+  assert.equal(denied.ok, false)
+  assert.equal(denied.error.message, 'This account is disabled.')
+})
+
+test('login accepts a stretched verifier without a plaintext password', () => {
+  const backend = ready()
+  ownerSession(backend)
+  const challenge = call(backend, 'auth.challenge', { username: 'aina@coolslurppy.my' })
+  assert.equal(challenge.ok, true)
+  assert.equal(challenge.data.iterations, 600000)
+  const verifier = pbkdf2Sync(
+    'OwnerPass12',
+    Buffer.from(challenge.data.salt, 'hex'),
+    600000,
+    32,
+    'sha256',
+  ).toString('hex')
+  const original = backend.context.authNativePbkdf2HmacSha256
+  backend.context.authNativePbkdf2HmacSha256 = undefined
+  try {
+    const ok = call(backend, 'auth.login', {
+      username: 'aina@coolslurppy.my',
+      passwordVerifier: verifier,
+    })
+    assert.equal(ok.ok, true, ok.error && ok.error.message)
+    const plaintext = call(backend, 'auth.login', {
+      username: 'aina@coolslurppy.my',
+      password: 'OwnerPass12',
+    })
+    assert.equal(plaintext.ok, false)
+  } finally {
+    backend.context.authNativePbkdf2HmacSha256 = original
+  }
+})
+
+test('supervisor cannot create staff accounts', () => {
+  const backend = ready()
+  const owner = ownerSession(backend)
+  call(backend, 'auth.resetPassword', {
+    sessionToken: owner.sessionToken,
+    userId: 'u-siti',
+    newPassword: 'TempPass12a',
+  })
+  const first = call(backend, 'auth.login', { username: 'siti@coolslurppy.my', password: 'TempPass12a' })
+  call(backend, 'auth.changePassword', {
+    sessionToken: first.data.sessionToken,
+    currentPassword: 'TempPass12a',
+    newPassword: 'SitiPass12b',
+  })
+  const supervisor = call(backend, 'auth.login', { username: 'siti@coolslurppy.my', password: 'SitiPass12b' })
+  const created = call(backend, 'users.create', {
+    sessionToken: supervisor.data.sessionToken,
+    actorUserId: 'u-aina',
+    actorRole: 'owner',
+    isOwner: true,
+    name: 'Escalated Three',
+    email: 'esc3@coolslurppy.my',
+    roleId: 'role-staff',
+    departmentId: 'dept-sales',
+    temporaryPassword: 'TempPass12a',
+  })
+  assert.equal(created.ok, false)
+  assert.equal(created.error.code, 'FORBIDDEN')
+})
+

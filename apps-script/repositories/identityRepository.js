@@ -148,7 +148,7 @@ function createIdentityRepository(sheetRepository, driveStorage) {
         roleId: text(row.roleId),
         role: text(row.role),
         departmentId: text(row.departmentId),
-        status: text(row.status) === 'inactive' ? 'inactive' : 'active',
+        status: text(row.status) === 'active' ? 'active' : 'inactive',
         lastLogin: text(row.lastLogin),
         createdAt: text(row.createdAt),
         updatedAt: text(row.updatedAt)

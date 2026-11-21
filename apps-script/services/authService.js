@@ -1,5 +1,6 @@
 var AUTH_ACTIONS = {
   'auth.status': true,
+  'auth.challenge': true,
   'auth.login': true,
   'auth.logout': true,
   'auth.me': true,
@@ -14,6 +15,7 @@ var AUTH_PUBLIC_ACTIONS = {
   'system.health': true,
   'system.ping': true,
   'auth.status': true,
+  'auth.challenge': true,
   'auth.login': true,
   'auth.bootstrapOwner': true,
   'identity.bootstrap': true
@@ -160,9 +162,7 @@ function createAuthService(deps) {
     repository.writeCredentials(spreadsheet, written);
   }
 
-  function setPassword(record, password, actorId, mustChange) {
-    authValidatePasswordPolicy(password, record.username);
-    var hashed = authHashPassword(password);
+  function applySecret(record, hashed, actorId, mustChange) {
     record.passwordHash = hashed.hash;
     record.salt = hashed.salt;
     record.iterations = hashed.iterations;
@@ -178,12 +178,48 @@ function createAuthService(deps) {
     return record;
   }
 
+  function hashFromPayload(payload, passwordValue, username) {
+    var verifier = text(payload && payload.passwordVerifier).trim().toLowerCase();
+    var salt = text(payload && payload.salt).trim().toLowerCase();
+    if (verifier) {
+      return authHashFromVerifier(verifier, salt, payload.iterations);
+    }
+    if (typeof passwordValue === 'string' && passwordValue) {
+      authValidatePasswordPolicy(passwordValue, username);
+      return authHashPassword(passwordValue);
+    }
+    throw appError('VALIDATION_ERROR', 'Username and password are required.');
+  }
+
+  function matchesSecret(record, payload, passwordValue) {
+    var verifier = text(payload && payload.passwordVerifier).trim().toLowerCase();
+    if (verifier) return authVerifyVerifier(verifier, record);
+    if (typeof passwordValue === 'string' && passwordValue) return authVerifyPassword(passwordValue, record);
+    return false;
+  }
+
+  function setPassword(record, password, actorId, mustChange) {
+    return applySecret(record, hashFromPayload({}, password, record.username), actorId, mustChange);
+  }
+
+  function setPasswordFromPayload(record, payload, passwordValue, actorId, mustChange) {
+    return applySecret(record, hashFromPayload(payload, passwordValue, record.username), actorId, mustChange);
+  }
+
   function createCredential(user, password, actorId, mustChange) {
     return setPassword({
       id: createId(),
       userId: user.id,
       username: String(user.email || '').trim().toLowerCase()
     }, password, actorId, mustChange);
+  }
+
+  function createCredentialFromPayload(user, payload, passwordValue, actorId, mustChange) {
+    return setPasswordFromPayload({
+      id: createId(),
+      userId: user.id,
+      username: String(user.email || '').trim().toLowerCase()
+    }, payload, passwordValue, actorId, mustChange);
   }
 
   function revokeSessions(spreadsheet, userId, reason, exceptId) {
@@ -274,10 +310,22 @@ function createAuthService(deps) {
     throw appError('UNAUTHORIZED', AUTH_GENERIC_LOGIN);
   }
 
+  function challenge(spreadsheet, payload) {
+    var username = text(payload.username).trim().toLowerCase();
+    if (!username) throw appError('VALIDATION_ERROR', 'Username and password are required.');
+    var credential = findCredential(repository.readCredentials(spreadsheet), username);
+    return {
+      salt: credential && credential.salt ? credential.salt : authDummyChallengeSalt(username),
+      iterations: AUTH_PBKDF2_ITERATIONS,
+      algorithm: 'pbkdf2-hmac-sha256'
+    };
+  }
+
   function login(spreadsheet, payload, requestId) {
     var username = text(payload.username).trim().toLowerCase();
+    var hasVerifier = Boolean(text(payload.passwordVerifier).trim());
     var password = payload.password;
-    if (!username || typeof password !== 'string' || !password) {
+    if (!username || (!hasVerifier && (typeof password !== 'string' || !password))) {
       throw appError('VALIDATION_ERROR', 'Username and password are required.');
     }
     var snapshot = identitySnapshot(spreadsheet);
@@ -296,7 +344,7 @@ function createAuthService(deps) {
       throw appError('FORBIDDEN', AUTH_GENERIC_LOGIN);
     }
     var user = credential ? findUser(snapshot, credential.userId) : findUserByUsername(snapshot, username);
-    if (!credential || !authVerifyPassword(password, credential)) {
+    if (!credential || !matchesSecret(credential, payload, password)) {
       return failLogin(spreadsheet, credentials, credential, username, 'invalid_credentials', requestId);
     }
     if (!user || user.status !== 'active') {
@@ -349,14 +397,16 @@ function createAuthService(deps) {
     var credentials = repository.readCredentials(spreadsheet);
     if (credentials.length) throw appError('FORBIDDEN', 'Owner bootstrap is not available.');
     var username = text(payload.username).trim().toLowerCase();
+    var hasVerifier = Boolean(text(payload.passwordVerifier).trim());
     var password = payload.password;
-    if (!username || typeof password !== 'string') throw appError('VALIDATION_ERROR', 'Username and password are required.');
+    if (!username || (!hasVerifier && typeof password !== 'string')) {
+      throw appError('VALIDATION_ERROR', 'Username and password are required.');
+    }
     var user = findUserByUsername(snapshot, username);
     if (!user || !isOwnerUser(snapshot, user) || user.status !== 'active') {
       throw appError('FORBIDDEN', 'Owner bootstrap is not available.');
     }
-    authValidatePasswordPolicy(password, username);
-    var credential = createCredential(user, password, user.id, false);
+    var credential = createCredentialFromPayload(user, payload, password, user.id, false);
     repository.writeCredentials(spreadsheet, [credential]);
     var minted = createSessionRecord(spreadsheet, user, new Date());
     touchLastLogin(spreadsheet, snapshot, user.id, minted.session.createdAt);
@@ -452,7 +502,7 @@ function createAuthService(deps) {
           roleId: text(records[i].roleId),
           role: text(records[i].role),
           departmentId: text(records[i].departmentId),
-          status: text(records[i].status) === 'inactive' ? 'inactive' : 'active',
+          status: text(records[i].status) === 'active' ? 'active' : 'inactive',
           lastLogin: text(records[i].lastLogin)
         };
       }
@@ -503,12 +553,17 @@ function createAuthService(deps) {
   function changePassword(spreadsheet, payload, requestId, resolved) {
     var currentPassword = payload.currentPassword;
     var nextPassword = payload.newPassword;
-    if (typeof currentPassword !== 'string' || typeof nextPassword !== 'string') {
+    var currentVerifier = text(payload.currentPasswordVerifier).trim();
+    var nextVerifier = text(payload.passwordVerifier).trim();
+    if (!currentVerifier && typeof currentPassword !== 'string') {
+      throw appError('VALIDATION_ERROR', 'Current and new passwords are required.');
+    }
+    if (!nextVerifier && typeof nextPassword !== 'string') {
       throw appError('VALIDATION_ERROR', 'Current and new passwords are required.');
     }
     var credentials = repository.readCredentials(spreadsheet);
     var credential = findCredentialByUserId(credentials, resolved.user.id);
-    if (!credential || !authVerifyPassword(currentPassword, credential)) {
+    if (!credential || !matchesSecret(credential, { passwordVerifier: currentVerifier }, currentPassword)) {
       recordEvent(spreadsheet, {
         actorUserId: resolved.user.id,
         targetUserId: resolved.user.id,
@@ -519,10 +574,13 @@ function createAuthService(deps) {
       });
       throw appError('FORBIDDEN', 'Current password is incorrect.');
     }
-    if (currentPassword === nextPassword) {
+    if (currentVerifier && nextVerifier && currentVerifier === nextVerifier) {
       throw appError('VALIDATION_ERROR', 'New password must be different.');
     }
-    setPassword(credential, nextPassword, resolved.user.id, false);
+    if (!currentVerifier && !nextVerifier && currentPassword === nextPassword) {
+      throw appError('VALIDATION_ERROR', 'New password must be different.');
+    }
+    setPasswordFromPayload(credential, payload, nextPassword, resolved.user.id, false);
     persistCredentials(spreadsheet, credentials, credential);
     revokeSessions(spreadsheet, resolved.user.id, 'password_change', resolved.session.id);
     recordEvent(spreadsheet, {
@@ -551,11 +609,12 @@ function createAuthService(deps) {
     var target = findUser(resolved.snapshot, text(payload.userId));
     if (!target) throw appError('NOT_FOUND', 'User was not found.');
     var nextPassword = payload.newPassword;
-    if (typeof nextPassword !== 'string') throw appError('VALIDATION_ERROR', 'A new password is required.');
+    var hasVerifier = Boolean(text(payload.passwordVerifier).trim());
+    if (!hasVerifier && typeof nextPassword !== 'string') throw appError('VALIDATION_ERROR', 'A new password is required.');
     var credentials = repository.readCredentials(spreadsheet);
     var credential = findCredentialByUserId(credentials, target.id);
-    if (!credential) credential = createCredential(target, nextPassword, resolved.user.id, true);
-    else setPassword(credential, nextPassword, resolved.user.id, true);
+    if (!credential) credential = createCredentialFromPayload(target, payload, nextPassword, resolved.user.id, true);
+    else setPasswordFromPayload(credential, payload, nextPassword, resolved.user.id, true);
     persistCredentials(spreadsheet, credentials, credential);
     revokeSessions(spreadsheet, target.id, 'password_reset');
     recordEvent(spreadsheet, {
@@ -668,12 +727,24 @@ function createAuthService(deps) {
     revokeSessions(spreadsheet, userId, reason || 'revoked');
   }
 
+  function provisionStaffPassword(spreadsheet, user, payload, actorId) {
+    if (!user || !user.id) return;
+    var credentials = repository.readCredentials(spreadsheet);
+    var credential = findCredentialByUserId(credentials, user.id);
+    var secret = payload.newPassword || payload.password || payload.temporaryPassword;
+    if (!credential) credential = createCredentialFromPayload(user, payload, secret, actorId, true);
+    else setPasswordFromPayload(credential, payload, secret, actorId, true);
+    persistCredentials(spreadsheet, credentials, credential);
+    revokeSessions(spreadsheet, user.id, 'password_reset');
+  }
+
   function dispatch(request) {
     var action = request.action;
     var payload = request.payload;
     var requestId = request.requestId ? String(request.requestId) : '';
     return locked(function (spreadsheet) {
       if (action === 'auth.status') return okEnvelope(status(spreadsheet));
+      if (action === 'auth.challenge') return okEnvelope(challenge(spreadsheet, payload));
       if (action === 'auth.login') return okEnvelope(login(spreadsheet, payload, requestId));
       if (action === 'auth.bootstrapOwner') return okEnvelope(bootstrapOwner(spreadsheet, payload, requestId));
       var resolved = parseSession(spreadsheet, payload.sessionToken);
@@ -693,7 +764,8 @@ function createAuthService(deps) {
     authenticateRequest: authenticateRequest,
     issueTestSession: issueTestSession,
     revokeUserSessions: revokeUserSessions,
-    syncCredentialUsername: syncCredentialUsername
+    syncCredentialUsername: syncCredentialUsername,
+    provisionStaffPassword: provisionStaffPassword
   };
 }
 

@@ -9,12 +9,12 @@ This is not a login screen alone. Backend session validation is the security bou
 | Finding | Status |
 | --- | --- |
 | CSPRNG for salts and session tokens | **Remediated.** `crypto.getRandomValues` in tests; Apps Script uses `Utilities.getUuid()` = `java.util.UUID.randomUUID()` / `SecureRandom`. Fail closed. No `Date.now` / `Math.random`. |
-| PBKDF2 work factor vs OWASP 600,000 | **BLOCKED for OWASP compliance.** 12,000 iterations is the highest parameterized PBKDF2 expected to stay inside Apps Script request time. This is **not** OWASP-compliant. Do not silently approve as production-grade password hashing. |
+| PBKDF2 work factor vs OWASP 600,000 | **Remediated for this architecture.** Official SPA uses Web Crypto PBKDF2-HMAC-SHA256 at 600,000 iterations. Apps Script stores HMAC-SHA256(server pepper, DK) and refuses weaker iteration counts. Plain SHA-256 and the previous 12,000-iteration loop are gone. |
 | Session token in `sessionStorage` | **Residual XSS risk.** Not equivalent to HttpOnly / Secure / SameSite cookies. CSP added as defense-in-depth. |
 | Owner bootstrap / public actions | **Remediated in tests.** One-time, locked, non-Owner `FORBIDDEN`. Harness test sessions are not minted on production routing. |
 | Authorization regression | **Pass.** Forged actor/role/permissions, missing/expired/revoked sessions, Supervisor/Staff Owner-only denials. |
 
-Owner must accept the PBKDF2 architecture limit and the `sessionStorage` XSS residual before any DEV deploy. Wait for owner review. Do not merge.
+Owner must still accept the `sessionStorage` XSS residual and the client-enforced stretch residual (Apps Script cannot re-run 600,000 PBKDF2 rounds itself) before any DEV deploy. Wait for owner review. Do not merge.
 
 ## Architecture compatibility
 
@@ -56,27 +56,21 @@ Apps Script V8 does **not** expose `crypto.getRandomValues` (Google issue 235538
 
 RFC 4122 version-4 UUIDs overwrite 6 bits (version + variant), so each 16-byte UUID contributes **122 bits** of CSPRNG entropy, not 128. A 16-byte salt therefore has 122 bits; a 32-byte token concatenates two UUIDs (~244 bits). That is still a CSPRNG, not a hash of a timestamp.
 
-### PBKDF2 work factor — not OWASP-compliant
+### Password hashing
 
-Verified primitives: `Utilities.computeHmacSha256Signature`, `Utilities.computeDigest(SHA_256)`.
+Apps Script V8 has HMAC-SHA256 and SHA-256 only. It does not have bcrypt, scrypt, argon2, native PBKDF2, or Web Crypto. A Java-bridge PBKDF2 loop at 600,000 rounds would exceed web-app request time, which is why PR #131 stopped at 12,000. That configuration is **not reused**.
 
-Not available: bcrypt, scrypt, native PBKDF2, argon2, Web Crypto `subtle`.
+Current stored secret:
 
-Stored hash: **PBKDF2-HMAC-SHA256**, 12,000 iterations, 16-byte CSPRNG salt, 32-byte DK.
+1. Unique 16-byte CSPRNG salt
+2. PBKDF2-HMAC-SHA256, **600,000** iterations, 32-byte DK, computed in the official SPA with Web Crypto (OWASP Password Storage Cheat Sheet for PBKDF2-SHA256)
+3. HMAC-SHA256(server pepper, DK) stored in `AuthCredentials`
 
-OWASP Password Storage Cheat Sheet recommends **600,000** PBKDF2-HMAC-SHA256 iterations. **This implementation does not meet that recommendation.** Do not describe 12,000 as OWASP-compliant.
+The pepper is generated with CSPRNG and stored in Script Properties (`AUTH_PASSWORD_PEPPER`), not in the spreadsheet. A Sheets leak without the script does not yield an offline-guessable password hash. The SPA never sends the plaintext password to Apps Script. Login uses `auth.challenge` then a 64-hex verifier.
 
-Node harness timings (same JS PBKDF2, Node HMAC — **lower bound**, not Apps Script):
+Apps Script refuses iteration counts below 600,000 and does not fall back to unsalted SHA-256 or a short PBKDF2 loop. Browsers without `crypto.subtle` fail closed. Node tests use native `pbkdf2Sync` at the same work factor.
 
-| Iterations | Node ms (this run) |
-| --- | --- |
-| 12,000 | 127 |
-| 24,000 | 201 |
-| 48,000 | 379 |
-
-On Apps Script each round is a Java/native `computeHmacSha256Signature` bridge call. That overhead is typically tens of times a Node HMAC. 600,000 rounds would exceed web-app request time. Raising above 12,000 without a live GAS measurement risks login timeouts. Live GAS timing was **not** run because Apps Script must not be deployed from this PR.
-
-**Architecture limitation:** the locked Apps Script runtime cannot host an OWASP-current PBKDF2 work factor. Owner must accept that residual before production use. This is not a silent approval of a weak hash; it is the highest parameterized PBKDF2 that is expected to stay inside GAS request time.
+Residual: Apps Script cannot independently prove that a modified client performed 600,000 rounds. A stolen verifier is password-equivalent on the wire (HTTPS), same class as a stolen plaintext password. Owner-created passwords are stretched in the official Users & Roles screen.
 
 Password policy: 10–128 characters, letter + number, must not equal the username.
 
@@ -94,7 +88,7 @@ Do not treat `localStorage` as a session. Prototype `switchUser` is a no-op when
 
 The router validates the session on every non-public action and **overwrites** `payload.actorUserId` from the session user. Client-supplied role, permission arrays, and `actorUserId` are not trusted.
 
-Public actions: `system.health`, `system.ping`, `auth.status`, `auth.login`, `auth.bootstrapOwner`, `identity.bootstrap` (empty identity only; a second bootstrap still returns `CONFLICT`).
+Public actions: `system.health`, `system.ping`, `auth.status`, `auth.challenge`, `auth.login`, `auth.bootstrapOwner`, `identity.bootstrap` (empty identity only; a second bootstrap still returns `CONFLICT`).
 
 Username is the existing unique email. Owner / Supervisor / Staff map onto the existing role matrix (`legacyRole` owner / manager / staff). Permission keys are unchanged. Owner-only actions remain Owner-only (`users.*` admin, `roles.manage`, `auth.resetPassword`, `auth.events`, `auth.accounts`).
 
@@ -181,7 +175,7 @@ Findings:
 ## Residual risks
 
 - Token in JSON / `sessionStorage` (XSS). This is **not** a fully cookie-secure session.
-- **PBKDF2 12,000 is below OWASP 600,000.** Architecture-limited. Not OWASP-compliant.
+- Password stretch is enforced by the official SPA and stored peppered hash. Apps Script does not re-run 600,000 PBKDF2 rounds. A captured verifier can be replayed like a captured password.
 - Google Sheets is not an ACID user store; script locks serialize writes.
 - `identity.bootstrap` of a completely empty spreadsheet remains callable without a session (first writer). DEV identity is already initialized.
 - Owner bootstrap is available only while the credentials sheet is empty. Anyone who knows the Owner email could race that one-time step (lock serializes writers).
@@ -208,12 +202,12 @@ Findings:
 
 | Command | Result |
 | --- | --- |
-| `npm run test:backend` | 208 pass / 0 fail (security review addendum) |
-| `npm run test:ui` | 91 pass / 0 fail |
+| `npm run test:backend` | **212 pass / 0 fail** |
+| `npm run test:ui` | **93 pass / 0 fail** |
 | `npx tsc --noEmit` / `npm run lint` | pass |
 | `npm run build` | pass |
 
-Auth-specific backend cases (`apps-script/tests/auth.test.js`, 20 tests): hash/verify, policy, status, owner bootstrap, login (valid / unknown / wrong / disabled), lockout, forged `actorUserId`, missing session, staff cannot reset, first-login + logout, password-change / deactivate revocation, expired hashed tokens, CSPRNG uniqueness, UUID CSPRNG fallback, fail-closed entropy, PBKDF2 work-factor constant, harness session gated off, forged role/permissions, supervisor cannot reset/bootstrap, events without secrets.
+Auth-specific backend cases (`apps-script/tests/auth.test.js`, 24 tests): hash/verify at 600,000 iterations, policy, status, owner bootstrap, login (valid / unknown / wrong / disabled / unknown status), lockout, forged `actorUserId`, missing session, staff cannot reset, first-login + logout, password-change / deactivate revocation, expired hashed tokens, CSPRNG uniqueness, UUID CSPRNG fallback, fail-closed entropy, OWASP work-factor constant, verifier-only login without plaintext, harness session gated off, forged role/permissions, supervisor cannot reset/bootstrap/create, owner-created temp password + duplicate email, events without secrets.
 
 Not run: production migration, live DEV Apps Script deploy, live password bootstrap, GitHub Pages deploy, browser login against the undeployed backend.
 

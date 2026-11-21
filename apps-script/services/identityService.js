@@ -1,6 +1,5 @@
-// Module 1 identity writes. actorUserId is the existing prototype switcher
-// (ui.currentUserId). It is not a session provider and it is not Phase 2 auth.
-// authenticate() is unchanged. Business rules still run here.
+// Module 1 identity writes. actorUserId is overwritten from the validated
+// session before this service runs. Business rules still run here.
 
 var IDENTITY_ACTIONS = {
   'identity.get': true,
@@ -252,7 +251,10 @@ function createIdentityService(deps) {
       var name = text(item.name).trim();
       var email = text(item.email).trim().toLowerCase();
       if (!name || !email) throw appError('VALIDATION_ERROR', 'Name and email are required');
-      var status = item.status === 'inactive' ? 'inactive' : 'active';
+      if (item.status && item.status !== 'active' && item.status !== 'inactive') {
+        throw appError('VALIDATION_ERROR', 'Identity bootstrap is incomplete.');
+      }
+      var status = item.status === 'active' ? 'active' : 'inactive';
       return {
         id: clientId(item.id),
         name: name,
@@ -314,7 +316,7 @@ function createIdentityService(deps) {
   function createUser(spreadsheet, payload, requestId) {
     var snapshot = requireReady(load(spreadsheet));
     var actor = requireActor(snapshot, payload.actorUserId, 'You cannot add users.');
-    if (!canCreateUser(snapshot, actor)) throw appError('FORBIDDEN', 'You cannot add users.');
+    if (!isOwnerUser(snapshot, actor) || !canCreateUser(snapshot, actor)) throw appError('FORBIDDEN', 'You cannot add users.');
     var name = text(payload.name).trim();
     var email = text(payload.email).trim().toLowerCase();
     if (!name || !email) throw appError('VALIDATION_ERROR', 'Name and email are required');
@@ -349,6 +351,10 @@ function createIdentityService(deps) {
       userId: actor.id, action: 'users.create', entityType: 'user', entityId: user.id,
       reference: user.email, before: '', after: user.name, requestId: requestId
     });
+    if (text(payload.passwordVerifier) || text(payload.temporaryPassword) || text(payload.password) || text(payload.newPassword)) {
+      var auth = createAuthService({ sheetRepository: sheets, driveStorage: deps.driveStorage });
+      auth.provisionStaffPassword(spreadsheet, user, payload, actor.id);
+    }
     return load(spreadsheet);
   }
 
@@ -372,13 +378,16 @@ function createIdentityService(deps) {
       throw appError('VALIDATION_ERROR', 'Email already in use');
     }
     var nextRole = roleById(snapshot, nextRoleId);
-    if (nextRoleId !== target.roleId && !canChangeUserRole(snapshot, actor, target, nextRole)) {
+    if (nextRoleId !== target.roleId && (!isOwnerUser(snapshot, actor) || !canChangeUserRole(snapshot, actor, target, nextRole))) {
       throw appError('FORBIDDEN', 'You cannot change that user\'s role.');
     }
     if (nextRoleId === target.roleId && !nextRole) throw appError('VALIDATION_ERROR', 'Role not found');
     var nextDepartment = findDepartment(snapshot, nextDepartmentId);
     if (!nextDepartment || (nextDepartment.status !== 'active' && nextDepartmentId !== target.departmentId)) {
       throw appError('VALIDATION_ERROR', 'Department is required');
+    }
+    if (nextStatus !== target.status && !isOwnerUser(snapshot, actor)) {
+      throw appError('FORBIDDEN', 'You cannot deactivate this user.');
     }
     if (nextStatus !== target.status && nextStatus === 'inactive' && !canDeactivateUser(snapshot, actor, target)) {
       throw appError('FORBIDDEN', 'You cannot deactivate this user.');
@@ -547,7 +556,9 @@ function createIdentityService(deps) {
   function savePermissions(spreadsheet, payload, requestId) {
     var snapshot = requireReady(load(spreadsheet));
     var actor = requireActor(snapshot, payload.actorUserId, 'You cannot manage role permissions.');
-    if (!canManagePermissions(snapshot, actor)) throw appError('FORBIDDEN', 'You cannot manage role permissions.');
+    if (!isOwnerUser(snapshot, actor) || !canManagePermissions(snapshot, actor)) {
+      throw appError('FORBIDDEN', 'You cannot manage role permissions.');
+    }
     var role = roleById(snapshot, text(payload.roleId));
     if (!role) throw appError('NOT_FOUND', 'Role was not found.');
     if (isOwnerRole(role)) throw appError('FORBIDDEN', 'Owner always has full access. Permissions cannot be reduced.');
@@ -569,7 +580,9 @@ function createIdentityService(deps) {
   function updateMatrix(spreadsheet, payload, requestId) {
     var snapshot = requireReady(load(spreadsheet));
     var actor = requireActor(snapshot, payload.actorUserId, 'You cannot manage role permissions.');
-    if (!canManagePermissions(snapshot, actor)) throw appError('FORBIDDEN', 'You cannot manage role permissions.');
+    if (!isOwnerUser(snapshot, actor) || !canManagePermissions(snapshot, actor)) {
+      throw appError('FORBIDDEN', 'You cannot manage role permissions.');
+    }
     var incoming = payload.matrix || {};
     var nextMatrix = Object.assign({}, snapshot.settings.roleMatrix);
     var logs = [];

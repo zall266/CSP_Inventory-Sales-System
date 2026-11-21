@@ -1,7 +1,9 @@
 import { useEffect, useState, type FormEvent } from 'react'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
 import { identityApiUrl, postIdentityAction } from '@/api/identityApi'
+import { preparePasswordVerifier } from '@/auth/passwordHash'
 import { passwordPolicyMessage } from '@/auth/passwordPolicy'
+import { verifierForUsername } from '@/auth/passwordRequest'
 import { sessionFromLoginData, writeAuthSession } from '@/auth/session'
 import { brand } from '@/brand'
 import { Button, Field, Input } from '@/components/ui'
@@ -58,7 +60,10 @@ export function LoginPage() {
     setBusy(true)
     try {
       const action = bootstrap ? 'auth.bootstrapOwner' : 'auth.login'
-      const result = await postIdentityAction(action, { username: username.trim(), password })
+      const secret = bootstrap
+        ? await preparePasswordVerifier(password)
+        : { passwordVerifier: await verifierForUsername(username.trim(), password) }
+      const result = await postIdentityAction(action, { username: username.trim(), ...secret })
       if (!result.ok || !result.data) {
         setError(result.error?.message || 'Sign in failed.')
         setPassword('')
@@ -72,9 +77,11 @@ export function LoginPage() {
       }
       writeAuthSession(session)
       navigate(session.mustChange ? '/login/first-password' : '/', { replace: true })
-    } catch {
-      setError('Could not reach the server.')
+    } catch (error) {
+      const message = error instanceof Error ? error.message : ''
+      setError(message.includes('hashing') || message.includes('work factor') ? message : 'Could not reach the server.')
       setPassword('')
+      setConfirm('')
     } finally {
       setBusy(false)
     }
