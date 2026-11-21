@@ -19,23 +19,36 @@ const FRAME: Record<'sm' | 'md' | 'lg' | 'xl', string> = {
   xl: 'h-[4.75rem] w-full rounded-2xl',
 }
 
+export type ProductImageThumbPresentation = 'square-contain' | 'square-cover'
+
 export function ProductImageThumb({
   product,
   size,
+  presentation,
+  previewDataUrl,
 }: {
   product: Product
   size: 'sm' | 'md' | 'lg' | 'xl'
+  presentation?: ProductImageThumbPresentation
+  previewDataUrl?: string
 }) {
   const actorUserId = useStore().ui.currentUserId
   const imageFileId = product.imageFileId?.trim() || ''
   const rootRef = useRef<HTMLDivElement>(null)
   const requestRef = useRef(0)
+  const square = presentation === 'square-contain' || presentation === 'square-cover'
+  const objectFit = presentation === 'square-contain' ? 'object-contain' : 'object-cover'
   const [visible, setVisible] = useState(false)
-  const [dataUrl, setDataUrl] = useState(() =>
-    shouldFetchProductImage(imageFileId) ? peekProductImageCache(product.id, imageFileId)?.dataUrl ?? '' : '',
-  )
+  const [dataUrl, setDataUrl] = useState(() => {
+    if (previewDataUrl) return previewDataUrl
+    return shouldFetchProductImage(imageFileId) ? peekProductImageCache(product.id, imageFileId)?.dataUrl ?? '' : ''
+  })
 
   useEffect(() => {
+    if (previewDataUrl) {
+      setDataUrl(previewDataUrl)
+      return
+    }
     if (!shouldFetchProductImage(imageFileId)) {
       setVisible(false)
       return
@@ -57,10 +70,14 @@ export function ProductImageThumb({
     )
     observer.observe(node)
     return () => observer.disconnect()
-  }, [product.id, imageFileId])
+  }, [product.id, imageFileId, previewDataUrl])
 
   useEffect(() => {
     const requestId = ++requestRef.current
+    if (previewDataUrl) {
+      setDataUrl(previewDataUrl)
+      return
+    }
     if (!shouldFetchProductImage(imageFileId)) {
       setDataUrl('')
       return
@@ -98,15 +115,34 @@ export function ProductImageThumb({
     return () => {
       requestRef.current += 1
     }
-  }, [product.id, imageFileId, actorUserId, visible])
+  }, [product.id, imageFileId, actorUserId, visible, previewDataUrl])
 
   return (
     <div
       ref={rootRef}
-      className={cn('relative shrink-0', size === 'xl' && 'w-full')}
+      className={cn('relative shrink-0', (size === 'xl' || square) && 'w-full')}
       data-product-image-thumb={product.id}
+      data-pos-image-presentation={presentation || 'default'}
     >
-      {dataUrl ? (
+      {square ? (
+        <div
+          className="flex aspect-square w-full items-center justify-center overflow-hidden rounded-2xl bg-white p-2.5"
+          data-pos-image-frame="square"
+          data-pos-image-fit={presentation === 'square-contain' ? 'contain' : 'cover'}
+        >
+          {dataUrl ? (
+            <img
+              src={dataUrl}
+              alt=""
+              className={cn('h-full w-full', objectFit)}
+              draggable={false}
+              onError={() => setDataUrl('')}
+            />
+          ) : (
+            <ProductMark product={product} size="lg" />
+          )}
+        </div>
+      ) : dataUrl ? (
         <div className={cn('overflow-hidden', FRAME[size])}>
           <img
             src={dataUrl}

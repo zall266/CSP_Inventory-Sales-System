@@ -1,5 +1,5 @@
 import { useMemo, useRef, useState } from 'react'
-import { Link } from 'react-router-dom'
+import { Link, useSearchParams } from 'react-router-dom'
 import { Minus, Plus, Trash2, Search } from 'lucide-react'
 import { Button, Card, Modal, Select, StatusBadge } from '@/components/ui'
 import { ProductMark, paymentLabel } from '@/components/ProductMark'
@@ -19,10 +19,14 @@ import {
   setCartQty,
   type CartLine,
 } from './posCart'
+import { parsePosImageAbVariant, posImageAbPreviewUrl } from './posImageAb'
 
 export function PosPage() {
   const state = useStore()
   const api = useApi()
+  const [searchParams] = useSearchParams()
+  const posImageAb = parsePosImageAbVariant(searchParams.get('posImage'))
+  const posImagePresentation = posImageAb === 'a' ? 'square-contain' : posImageAb === 'b' ? 'square-cover' : undefined
   const linkedAgent = currentLinkedAgent(state)
   const warehouseId = posSellingWarehouseId(state)
   const submittingRef = useRef(false)
@@ -257,7 +261,10 @@ export function PosPage() {
             <CatChip key={c.id} active={categoryId === c.id} onClick={() => setCategoryId(c.id)} label={c.name} />
           ))}
         </div>
-        <div className="grid min-w-0 grid-cols-2 gap-2.5 sm:gap-3 md:grid-cols-3 md:gap-4 xl:grid-cols-4">
+        <div
+          className="grid min-w-0 grid-cols-2 gap-2.5 sm:gap-3 md:grid-cols-3 md:gap-4 xl:grid-cols-4"
+          data-pos-image-ab={posImageAb || 'default'}
+        >
           {products.map((p) => {
             const qty = api.getProductQty(p.id, warehouseId)
             const status = api.getProductStockStatus(p.id, warehouseId)
@@ -269,7 +276,12 @@ export function PosPage() {
                 data-pos-product={p.id}
               >
                 <button type="button" className="min-w-0 flex-1 text-left" onClick={() => addProduct(p)}>
-                  <ProductImageThumb product={p} size="xl" />
+                  <ProductImageThumb
+                    product={p}
+                    size="xl"
+                    presentation={posImagePresentation}
+                    previewDataUrl={posImageAb && import.meta.env.DEV ? posImageAbPreviewUrl(p.id) : undefined}
+                  />
                   <div className="mt-3 truncate text-[15px] font-semibold leading-snug text-slate-900">{p.name}</div>
                   <div className="mt-0.5 truncate text-xs text-slate-400">{p.sku}</div>
                   <div className="mt-2.5 flex min-w-0 flex-col gap-1">

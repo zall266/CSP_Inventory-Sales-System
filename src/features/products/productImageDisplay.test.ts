@@ -14,6 +14,12 @@ import {
   shouldFetchProductImage,
   storeProductImageCache,
 } from './productImage.ts'
+import {
+  POS_IMAGE_AB_PREVIEWS,
+  parsePosImageAbVariant,
+  posImageAbFit,
+  posImageAbPreviewUrl,
+} from '../pos/posImageAb.ts'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
 const PNG_B64 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=='
@@ -53,7 +59,9 @@ test('Products listing shows a thumb beside the name and keeps ProductMark as fa
 test('POS catalogue cards show thumbs; cart, qty, price, and sales stay unchanged', () => {
   const pos = read('features/pos/PosPage.tsx')
   const thumb = read('features/products/ProductImageThumb.tsx')
-  assert.equal(pos.includes('<ProductImageThumb product={p} size="xl" />'), true)
+  assert.equal(pos.includes('<ProductImageThumb'), true)
+  assert.equal(pos.includes('size="xl"'), true)
+  assert.equal(pos.includes('presentation={posImagePresentation}'), true)
   assert.equal(pos.includes('{p.name}'), true)
   assert.equal(pos.includes('{p.sku}'), true)
   assert.equal(pos.includes('p.sellingPrice'), true)
@@ -215,4 +223,31 @@ test('lazy thumbs observe visibility and listing/POS keep existing responsive fr
   assert.equal(pos.includes('pb-[calc(8.75rem+env(safe-area-inset-bottom))]'), true)
   assert.equal(productsPage.includes('sf-table-wrap'), true)
   assert.equal(PRODUCT_IMAGE_CACHE_MAX >= 64, true)
+})
+
+test('POS image A/B uses a 1:1 frame; default catalogue stays Phase 3C cover', () => {
+  const thumb = read('features/products/ProductImageThumb.tsx')
+  const pos = read('features/pos/PosPage.tsx')
+  assert.equal(parsePosImageAbVariant(null), null)
+  assert.equal(parsePosImageAbVariant('a'), 'a')
+  assert.equal(parsePosImageAbVariant('b'), 'b')
+  assert.equal(posImageAbFit('a'), 'contain')
+  assert.equal(posImageAbFit('b'), 'cover')
+  assert.equal(pos.includes("searchParams.get('posImage')"), true)
+  assert.equal(pos.includes('data-pos-image-ab={posImageAb || \'default\'}'), true)
+  assert.equal(thumb.includes("presentation === 'square-contain' ? 'object-contain' : 'object-cover'"), true)
+  assert.equal(thumb.includes('aspect-square w-full'), true)
+  assert.equal(thumb.includes('bg-white p-2.5'), true)
+  assert.equal(thumb.includes("data-pos-image-fit={presentation === 'square-contain' ? 'contain' : 'cover'}"), true)
+  assert.equal(thumb.includes('h-[4.75rem] w-full rounded-2xl'), true)
+  assert.equal(thumb.includes('h-full w-full object-cover'), true)
+  assert.equal(pos.includes('api.createSale({'), true)
+  assert.equal(pos.includes('api.createAgentSale({'), true)
+  assert.equal(POS_IMAGE_AB_PREVIEWS['p-mt']?.shape, 'portrait')
+  assert.equal(POS_IMAGE_AB_PREVIEWS['p-st']?.shape, 'landscape')
+  assert.equal(POS_IMAGE_AB_PREVIEWS['p-wf']?.shape, 'square')
+  assert.equal(Boolean(posImageAbPreviewUrl('p-cp')), false)
+  assert.equal(pos.includes('products.uploadImage'), false)
+  assert.equal(pos.includes('products.replaceImage'), false)
+  assert.equal(pos.includes('import.meta.env.DEV'), true)
 })
