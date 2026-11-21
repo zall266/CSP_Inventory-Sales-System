@@ -22,6 +22,17 @@ test('login and staff management screens exist and do not store passwords', () =
   assert.match(db, /if \(identityApiUrl\(\)\) return/)
   assert.match(api, /sessionToken/)
   assert.equal(login.includes('localStorage.setItem'), false)
+  assert.equal(login.includes('dangerouslySetInnerHTML'), false)
+})
+
+test('SPA does not render untrusted HTML and does not keep tokens in localStorage', () => {
+  const html = fs.readFileSync(path.join(root, 'index.html'), 'utf8')
+  const session = fs.readFileSync(path.join(root, 'src/auth/session.ts'), 'utf8')
+  const crypto = fs.readFileSync(path.join(root, 'apps-script/auth/crypto.js'), 'utf8')
+  assert.match(html, /Content-Security-Policy/)
+  assert.equal(session.includes('localStorage'), false)
+  assert.equal(crypto.includes('Math.random'), false)
+  assert.equal(/authRandomBytes[\s\S]{0,800}Date\.now\(/.test(crypto), false)
 })
 
 test('backend auth stack hashes passwords and overwrites actorUserId', () => {

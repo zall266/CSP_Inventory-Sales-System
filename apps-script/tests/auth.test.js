@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import fs from 'node:fs'
 import test from 'node:test'
 import {
   createFakeDrive,
@@ -330,6 +331,151 @@ test('expired sessions are rejected and tokens are stored hashed', () => {
   const expired = call(backend, 'auth.me', { sessionToken: owner.sessionToken })
   assert.equal(expired.ok, false)
   assert.equal(expired.error.message, 'Your session has expired. Please sign in again.')
+})
+
+test('CSPRNG salts and tokens are unique and do not use timestamps', () => {
+  const backend = app()
+  const cryptoSrc = fs.readFileSync(new URL('../auth/crypto.js', import.meta.url), 'utf8')
+  assert.equal(/authRandomBytes[\s\S]*Date\.now\(/.test(cryptoSrc), false)
+  assert.equal(/authRandomBytes[\s\S]*Math\.random/.test(cryptoSrc), false)
+  assert.equal(/authRandomToken[\s\S]*Date\.now\(/.test(cryptoSrc), false)
+  const salts = new Set()
+  const tokens = new Set()
+  for (let i = 0; i < 64; i += 1) {
+    salts.add(Buffer.from(backend.context.authRandomBytes(16)).toString('hex'))
+    tokens.add(backend.context.authRandomToken())
+  }
+  assert.equal(salts.size, 64)
+  assert.equal(tokens.size, 64)
+  for (const token of tokens) assert.match(token, /^[0-9a-f]{64}$/)
+})
+
+test('UUID CSPRNG path fills bytes when getRandomValues is absent', () => {
+  const backend = app()
+  const original = backend.context.crypto.getRandomValues
+  backend.context.crypto.getRandomValues = undefined
+  try {
+    const first = Buffer.from(backend.context.authRandomBytes(16)).toString('hex')
+    const second = Buffer.from(backend.context.authRandomBytes(16)).toString('hex')
+    assert.equal(first.length, 32)
+    assert.notEqual(first, second)
+  } finally {
+    backend.context.crypto.getRandomValues = original
+  }
+})
+
+test('missing CSPRNG sources fail closed', () => {
+  const backend = app()
+  const originalRandom = backend.context.crypto.getRandomValues
+  const originalUuid = backend.context.Utilities.getUuid
+  const originalRandomUUID = backend.context.crypto.randomUUID
+  backend.context.crypto.getRandomValues = undefined
+  backend.context.Utilities.getUuid = undefined
+  backend.context.crypto.randomUUID = undefined
+  try {
+    assert.throws(() => backend.context.authRandomBytes(16), (error) => error.code === 'INTERNAL_ERROR')
+  } finally {
+    backend.context.crypto.getRandomValues = originalRandom
+    backend.context.Utilities.getUuid = originalUuid
+    backend.context.crypto.randomUUID = originalRandomUUID
+  }
+})
+
+test('PBKDF2 work factor is below OWASP and Node timing is recorded', () => {
+  const backend = app()
+  assert.equal(backend.context.AUTH_PBKDF2_ITERATIONS, 12000)
+  assert.equal(backend.context.AUTH_PBKDF2_OWASP_SHA256_ITERATIONS, 600000)
+  const salt = Buffer.from(backend.context.authRandomBytes(16)).toString('hex')
+  const started = Date.now()
+  backend.context.authHashPassword('OwnerPass12', salt, 12000)
+  const elapsed = Date.now() - started
+  assert.ok(elapsed < 2000, `12k PBKDF2 took ${elapsed}ms on Node`)
+})
+
+test('production request routing does not mint harness sessions', () => {
+  const backend = ready()
+  backend.context.AUTH_ALLOW_TEST_SESSION = false
+  const denied = call(backend, 'users.create', {
+    actorUserId: 'u-aina',
+    name: 'Backdoor',
+    email: 'backdoor@coolslurppy.my',
+    roleId: 'role-staff',
+    departmentId: 'dept-sales',
+  })
+  assert.equal(denied.ok, false)
+  assert.equal(denied.error.code, 'UNAUTHORIZED')
+  backend.context.AUTH_ALLOW_TEST_SESSION = true
+})
+
+test('forged actorRole and permissions cannot create users as staff', () => {
+  const backend = ready()
+  const owner = ownerSession(backend)
+  call(backend, 'auth.resetPassword', {
+    sessionToken: owner.sessionToken,
+    userId: 'u-mei',
+    newPassword: 'StaffPass12',
+  })
+  const staff = call(backend, 'auth.login', { username: 'mei@coolslurppy.my', password: 'StaffPass12' })
+  const changed = call(backend, 'auth.changePassword', {
+    sessionToken: staff.data.sessionToken,
+    currentPassword: 'StaffPass12',
+    newPassword: 'StaffPass13x',
+  })
+  assert.equal(changed.ok, true)
+  const login = call(backend, 'auth.login', { username: 'mei@coolslurppy.my', password: 'StaffPass13x' })
+  const forged = call(backend, 'users.create', {
+    sessionToken: login.data.sessionToken,
+    actorUserId: 'u-aina',
+    actorRole: 'owner',
+    isOwner: true,
+    permissions: { 'users.create': true, 'roles.manage': true },
+    actorPermissions: ['users.create'],
+    name: 'Escalated Two',
+    email: 'esc2@coolslurppy.my',
+    roleId: 'role-owner',
+    departmentId: 'dept-management',
+  })
+  assert.equal(forged.ok, false)
+  assert.equal(forged.error.code, 'FORBIDDEN')
+  const supervisorReset = call(backend, 'auth.resetPassword', {
+    sessionToken: login.data.sessionToken,
+    userId: 'u-aina',
+    newPassword: 'HackedPass99',
+  })
+  assert.equal(supervisorReset.ok, false)
+})
+
+test('supervisor cannot reset passwords or bootstrap a second owner', () => {
+  const backend = ready()
+  const owner = ownerSession(backend)
+  call(backend, 'auth.resetPassword', {
+    sessionToken: owner.sessionToken,
+    userId: 'u-siti',
+    newPassword: 'TempPass12a',
+  })
+  const first = call(backend, 'auth.login', { username: 'siti@coolslurppy.my', password: 'TempPass12a' })
+  call(backend, 'auth.changePassword', {
+    sessionToken: first.data.sessionToken,
+    currentPassword: 'TempPass12a',
+    newPassword: 'SitiPass12b',
+  })
+  const supervisor = call(backend, 'auth.login', { username: 'siti@coolslurppy.my', password: 'SitiPass12b' })
+  const reset = call(backend, 'auth.resetPassword', {
+    sessionToken: supervisor.data.sessionToken,
+    userId: 'u-mei',
+    newPassword: 'NoReset12a',
+  })
+  assert.equal(reset.ok, false)
+  assert.equal(reset.error.code, 'FORBIDDEN')
+  const boot = call(backend, 'auth.bootstrapOwner', {
+    sessionToken: supervisor.data.sessionToken,
+    username: 'aina@coolslurppy.my',
+    password: 'OwnerPass99x',
+  })
+  assert.equal(boot.ok, false)
+  assert.equal(boot.error.code, 'FORBIDDEN')
+  const againIdentity = call(backend, 'identity.bootstrap', identityPayload())
+  assert.equal(againIdentity.error.code, 'CONFLICT')
 })
 
 test('auth events never include secrets and owner can list them', () => {

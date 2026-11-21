@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import fs from 'node:fs'
 import test from 'node:test'
 import { clearAuthSession, readAuthSession, sessionFromLoginData, writeAuthSession } from './session.ts'
 
@@ -41,4 +42,11 @@ test('session storage never keeps a password and can be cleared', () => {
   assert.equal(JSON.stringify(stored).includes('OwnerPass'), false)
   clearAuthSession()
   assert.equal(readAuthSession(), null)
+})
+
+test('session helper never writes localStorage or URL tokens', () => {
+  const source = fs.readFileSync(new URL('./session.ts', import.meta.url), 'utf8')
+  assert.equal(source.includes('localStorage'), false)
+  assert.equal(source.includes('searchParams'), false)
+  assert.equal(source.includes('location.hash'), false)
 })

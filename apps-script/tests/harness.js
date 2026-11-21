@@ -126,7 +126,10 @@ export function loadBackend(globals = {}) {
     Object,
     Array,
     Intl,
-    crypto,
+    crypto: {
+      getRandomValues: (value) => crypto.getRandomValues(value),
+      randomUUID: () => crypto.randomUUID(),
+    },
     Buffer,
     Uint8Array,
     Map,
@@ -141,11 +144,28 @@ export function loadBackend(globals = {}) {
     isFinite,
     ...globals,
     Utilities: utilities,
+    AUTH_ALLOW_TEST_SESSION: true,
   }
   context.globalThis = context
   vm.createContext(context)
   for (const file of files) {
     vm.runInContext(fs.readFileSync(path.join(root, file), 'utf8'), context, { filename: file })
+  }
+  context.issueHarnessSession = function issueHarnessSession(request, backend) {
+    if (!request || !request.payload || request.payload.sessionToken !== undefined) return ''
+    if (context.isPublicAuthAction(request.action)) return ''
+    try {
+      const auth = backend && backend.auth
+        ? backend.auth
+        : context.createAuthService({
+            sheetRepository: backend && backend.sheets ? backend.sheets : context.createSheetRepository(),
+            driveStorage: backend && (backend.driveStorage || backend.drive),
+          })
+      const sheets = backend && backend.sheets ? backend.sheets : context.createSheetRepository()
+      return auth.issueTestSession(sheets.openSpreadsheet(), String((request.payload && request.payload.actorUserId) || '').trim())
+    } catch {
+      return ''
+    }
   }
   const innerHandle = context.handleRequest
   const tokenCache = new WeakMap()

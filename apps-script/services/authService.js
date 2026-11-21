@@ -622,7 +622,10 @@ function createAuthService(deps) {
     var resolved = parseSession(spreadsheet, payload.sessionToken);
     requirePasswordReady(resolved, action);
     payload.actorUserId = resolved.user.id;
-    if (Object.prototype.hasOwnProperty.call(payload, 'actorRole')) delete payload.actorRole;
+    var strip = ['actorRole', 'actorPermissions', 'isOwner', 'legacyRole', 'currentUserId'];
+    for (var i = 0; i < strip.length; i += 1) {
+      if (Object.prototype.hasOwnProperty.call(payload, strip[i])) delete payload[strip[i]];
+    }
     return {
       authenticated: true,
       userId: resolved.user.id,
@@ -633,6 +636,7 @@ function createAuthService(deps) {
   }
 
   function issueTestSession(spreadsheet, userId) {
+    if (typeof AUTH_ALLOW_TEST_SESSION === 'undefined' || AUTH_ALLOW_TEST_SESSION !== true) return '';
     var usersSheet = sheets.getSheet(spreadsheet, 'Users');
     if (!usersSheet) return '';
     var records;
@@ -704,18 +708,3 @@ function resolveAuthService(backend) {
   return createAuthService({ sheetRepository: createSheetRepository() });
 }
 
-function issueHarnessSession(request, backend) {
-  if (!request || !request.payload || request.payload.sessionToken !== undefined) return '';
-  if (isPublicAuthAction(request.action)) return '';
-  try {
-    var auth = resolveAuthService(backend);
-    var sheets = backend && backend.sheets ? backend.sheets : createSheetRepository();
-    return auth.issueTestSession(sheets.openSpreadsheet(), textOrEmpty(request.payload.actorUserId));
-  } catch (error) {
-    return '';
-  }
-}
-
-function textOrEmpty(value) {
-  return value === undefined || value === null ? '' : String(value).trim();
-}

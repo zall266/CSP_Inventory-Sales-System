@@ -3,13 +3,14 @@
 // Utilities.computeHmacSha256Signature is the vetted primitive. There is no
 // bcrypt, scrypt, or native PBKDF2 in Apps Script.
 //
-// Iteration count is 12_000. OWASP currently recommends hundreds of thousands
-// of PBKDF2 iterations; that budget is not compatible with Apps Script request
-// time limits. 12_000 HMAC-SHA256 rounds is the highest cost that stays well
-// under the per-request limit in this runtime. Treat the gap as a residual
-// risk, not as "equivalent to OWASP 2023".
+// Iteration count is 12_000. OWASP Password Storage Cheat Sheet (2023+)
+// recommends 600_000 PBKDF2-HMAC-SHA256 iterations. That work factor is not
+// achievable here: each round is Utilities.computeHmacSha256Signature, a
+// Java/native bridge call with high per-call overhead on Apps Script.
+// This is NOT OWASP-compliant. Do not describe 12_000 as equivalent.
 
 var AUTH_PBKDF2_ITERATIONS = 12000;
+var AUTH_PBKDF2_OWASP_SHA256_ITERATIONS = 600000;
 var AUTH_PBKDF2_DKLEN = 32;
 var AUTH_SALT_BYTES = 16;
 var AUTH_PASSWORD_MIN = 10;
@@ -133,19 +134,49 @@ function authPbkdf2HmacSha256(password, salt, iterations, dkLen) {
   return derived.subarray(0, length);
 }
 
+function authFillFromUuidString(uuid, out, offset) {
+  var hex = String(uuid || '').replace(/-/g, '').toLowerCase();
+  if (!/^[0-9a-f]{32}$/.test(hex)) {
+    throw appError('INTERNAL_ERROR', 'Secure random source returned an invalid UUID.');
+  }
+  var i = 0;
+  while (i + 1 < hex.length && offset < out.length) {
+    out[offset] = parseInt(hex.substr(i, 2), 16);
+    offset += 1;
+    i += 2;
+  }
+  return offset;
+}
+
 function authRandomBytes(size) {
-  var material = createId() + '|' + createId() + '|' + createId() + '|' + String(Date.now());
-  var digest = authSha256(material);
-  if (size <= digest.length) return digest.subarray(0, size);
-  var extra = authSha256(createId() + '|' + authBytesToHex(digest));
-  var out = new Uint8Array(size);
-  out.set(digest, 0);
-  out.set(extra.subarray(0, size - digest.length), digest.length);
-  return out;
+  var needed = Number(size) || 0;
+  if (needed < 1 || needed > 1024) throw appError('INTERNAL_ERROR', 'Random size is invalid.');
+  var out = new Uint8Array(needed);
+  var offset = 0;
+  if (typeof crypto !== 'undefined' && typeof crypto.getRandomValues === 'function') {
+    while (offset < needed) {
+      var slice = out.subarray(offset, Math.min(offset + 65536, needed));
+      crypto.getRandomValues(slice);
+      offset += slice.length;
+    }
+    return out;
+  }
+  if (typeof Utilities !== 'undefined' && typeof Utilities.getUuid === 'function') {
+    // Google documents getUuid() as equivalent to java.util.UUID.randomUUID(),
+    // which fills 16 bytes from SecureRandom (CSPRNG) and then sets RFC 4122
+    // version/variant bits. Do not mix wall-clock time or a non-crypto PRNG.
+    while (offset < needed) offset = authFillFromUuidString(Utilities.getUuid(), out, offset);
+    return out;
+  }
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    while (offset < needed) offset = authFillFromUuidString(crypto.randomUUID(), out, offset);
+    return out;
+  }
+  throw appError('INTERNAL_ERROR', 'A cryptographically secure random source is unavailable.');
 }
 
 function authRandomToken() {
-  return authBytesToHex(authSha256(createId() + '|' + createId() + '|' + createId() + '|' + createId()));
+  return authBytesToHex(authRandomBytes(32));
 }
 
 function authTimingSafeEqual(left, right) {

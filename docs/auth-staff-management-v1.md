@@ -4,6 +4,18 @@ DEV only. Do not merge, deploy Pages, deploy Apps Script, or bootstrap productio
 
 This is not a login screen alone. Backend session validation is the security boundary.
 
+## Security review status (PR #131)
+
+| Finding | Status |
+| --- | --- |
+| CSPRNG for salts and session tokens | **Remediated.** `crypto.getRandomValues` in tests; Apps Script uses `Utilities.getUuid()` = `java.util.UUID.randomUUID()` / `SecureRandom`. Fail closed. No `Date.now` / `Math.random`. |
+| PBKDF2 work factor vs OWASP 600,000 | **BLOCKED for OWASP compliance.** 12,000 iterations is the highest parameterized PBKDF2 expected to stay inside Apps Script request time. This is **not** OWASP-compliant. Do not silently approve as production-grade password hashing. |
+| Session token in `sessionStorage` | **Residual XSS risk.** Not equivalent to HttpOnly / Secure / SameSite cookies. CSP added as defense-in-depth. |
+| Owner bootstrap / public actions | **Remediated in tests.** One-time, locked, non-Owner `FORBIDDEN`. Harness test sessions are not minted on production routing. |
+| Authorization regression | **Pass.** Forged actor/role/permissions, missing/expired/revoked sessions, Supervisor/Staff Owner-only denials. |
+
+Owner must accept the PBKDF2 architecture limit and the `sessionStorage` XSS residual before any DEV deploy. Wait for owner review. Do not merge.
+
 ## Architecture compatibility
 
 The existing SPA remains: React + Vite → `postIdentityAction` → Apps Script `/exec` → Controller → Service → Repository → Google Sheets / Drive.
@@ -25,19 +37,48 @@ Not introduced:
 
 ## Selected cryptography
 
-Verified Apps Script V8 primitives:
+### CSPRNG (remediated)
 
-- `Utilities.computeHmacSha256Signature`
-- `Utilities.computeDigest(SHA_256)`
-- `Utilities.getUuid`
+`createId()` is **not** used for salts or session tokens. It is `Utilities.getUuid()` or `crypto.randomUUID()` and exists for entity IDs only.
 
-Not available: bcrypt, scrypt, native PBKDF2, argon2.
+Previous salt/token code hashed `createId() + Date.now()` with SHA-256. That is not a CSPRNG. It was removed.
 
-Passwords are stored as **PBKDF2-HMAC-SHA256**, 12,000 iterations, 16-byte random salt, 32-byte derived key, hex encoding. Node harness hashes in about 80–120 ms; the auth test asserts under 2,000 ms. OWASP currently recommends a much higher PBKDF2 iteration count. 12,000 is the highest cost that stays inside Apps Script request time. That gap is a residual risk, not “equivalent to OWASP 2023”.
+`authRandomBytes()` / `authRandomToken()` now fail closed and use, in order:
 
-Plaintext, unsalted SHA-256, and a single fast hash are not used.
+1. `crypto.getRandomValues` when present (Web Crypto / Node tests)
+2. `Utilities.getUuid()`, which Google documents as equivalent to `java.util.UUID.randomUUID()`. OpenJDK fills 16 bytes from **`SecureRandom`** (CSPRNG) and then sets RFC 4122 version/variant bits
+3. `crypto.randomUUID()` if present
+4. Otherwise throw `INTERNAL_ERROR`. No `Date.now`, `Math.random`, or identifier concatenation
 
-Password policy: 10–128 characters, at least one letter and one number, must not equal the username.
+64 salts and 64 tokens were generated in tests; all unique. Missing sources throw.
+
+Apps Script V8 does **not** expose `crypto.getRandomValues` (Google issue 235538670, Won't Fix). Production therefore uses `Utilities.getUuid()` / `SecureRandom`. That is the strongest CSPRNG available inside the locked GAS runtime without calling an external entropy HTTP service.
+
+RFC 4122 version-4 UUIDs overwrite 6 bits (version + variant), so each 16-byte UUID contributes **122 bits** of CSPRNG entropy, not 128. A 16-byte salt therefore has 122 bits; a 32-byte token concatenates two UUIDs (~244 bits). That is still a CSPRNG, not a hash of a timestamp.
+
+### PBKDF2 work factor — not OWASP-compliant
+
+Verified primitives: `Utilities.computeHmacSha256Signature`, `Utilities.computeDigest(SHA_256)`.
+
+Not available: bcrypt, scrypt, native PBKDF2, argon2, Web Crypto `subtle`.
+
+Stored hash: **PBKDF2-HMAC-SHA256**, 12,000 iterations, 16-byte CSPRNG salt, 32-byte DK.
+
+OWASP Password Storage Cheat Sheet recommends **600,000** PBKDF2-HMAC-SHA256 iterations. **This implementation does not meet that recommendation.** Do not describe 12,000 as OWASP-compliant.
+
+Node harness timings (same JS PBKDF2, Node HMAC — **lower bound**, not Apps Script):
+
+| Iterations | Node ms (this run) |
+| --- | --- |
+| 12,000 | 127 |
+| 24,000 | 201 |
+| 48,000 | 379 |
+
+On Apps Script each round is a Java/native `computeHmacSha256Signature` bridge call. That overhead is typically tens of times a Node HMAC. 600,000 rounds would exceed web-app request time. Raising above 12,000 without a live GAS measurement risks login timeouts. Live GAS timing was **not** run because Apps Script must not be deployed from this PR.
+
+**Architecture limitation:** the locked Apps Script runtime cannot host an OWASP-current PBKDF2 work factor. Owner must accept that residual before production use. This is not a silent approval of a weak hash; it is the highest parameterized PBKDF2 that is expected to stay inside GAS request time.
+
+Password policy: 10–128 characters, letter + number, must not equal the username.
 
 ## Session transport
 
@@ -116,17 +157,39 @@ After owner-approved DEV Apps Script deploy:
 | Frontend route bypass | Backend still requires session + permission |
 | Race on permission change | Script lock on writes; session re-reads Users status |
 
+## XSS audit
+
+`sessionStorage` is **not** equivalent to HttpOnly / Secure / SameSite cookies. GAS `ContentService` cannot set those cookies for GitHub Pages.
+
+Findings:
+
+- No `dangerouslySetInnerHTML`, `innerHTML`, `document.write`, or `eval` in `src/`
+- Session token is written only to `sessionStorage` (`csp.auth.session.v1`). Not `localStorage`, not URL query, not hash
+- API body includes `sessionToken` over HTTPS to `/exec`; it is not logged in `AuthEvents`
+- User-controlled names/emails render as React text (escaped)
+- `index.html` now has a CSP: `default-src 'self'`; scripts `'self'`; connect-src includes `script.google.com` / `script.googleusercontent.com`; Google Fonts allowed; `object-src 'none'`
+- CSP is a defense-in-depth header via `<meta>`; GitHub Pages cannot set `HttpOnly` cookies either
+- Remaining XSS token-theft risk: any injected script that can read `sessionStorage` can steal the session. Treat XSS as session compromise.
+
+## Bootstrap and test-session isolation
+
+- `auth.bootstrapOwner` is public only while `AuthCredentials` is empty, Owner email matches, account is active. Second call `FORBIDDEN`. Non-Owner username `FORBIDDEN`. Script lock serializes concurrent attempts.
+- `identity.bootstrap` is public only when identity is empty; second call `CONFLICT`.
+- `auth.status` does not list users or emails.
+- `issueHarnessSession` was removed from production Apps Script. `issueTestSession` returns empty unless `AUTH_ALLOW_TEST_SESSION === true` (Node harness only).
+
 ## Residual risks
 
 - Token in JSON / `sessionStorage` (XSS). This is **not** a fully cookie-secure session.
-- PBKDF2 iteration count below current OWASP guidance.
+- **PBKDF2 12,000 is below OWASP 600,000.** Architecture-limited. Not OWASP-compliant.
 - Google Sheets is not an ACID user store; script locks serialize writes.
 - `identity.bootstrap` of a completely empty spreadsheet remains callable without a session (first writer). DEV identity is already initialized.
-- Owner bootstrap is available only while the credentials sheet is empty. Anyone who knows the Owner email could race that one-time step.
+- Owner bootstrap is available only while the credentials sheet is empty. Anyone who knows the Owner email could race that one-time step (lock serializes writers).
 - Web app access is still `ANYONE_ANONYMOUS`; authorization is the session, not Google accounts.
 - Frontend hiding of menus is not the security boundary.
-- Module `FORBIDDEN` denials are returned to the caller; they are not all copied into `AuthEvents` (login, expiry, revoke, password, account events are).
-- Live login against DEV Apps Script was **not** executed in this PR because Apps Script must not be deployed until owner approval.
+- Module `FORBIDDEN` denials are returned to the caller; they are not all copied into `AuthEvents`.
+- Live login against DEV Apps Script was **not** executed because Apps Script must not be deployed until owner approval.
+- Live GAS PBKDF2 timing was **not** measured for the same reason.
 
 ## Owner UAT checklist
 
@@ -145,12 +208,12 @@ After owner-approved DEV Apps Script deploy:
 
 | Command | Result |
 | --- | --- |
-| `npm run test:backend` | 201 pass / 0 fail |
-| `npm run test:ui` | 89 pass / 0 fail (after password-policy assertion fix) |
+| `npm run test:backend` | 208 pass / 0 fail (security review addendum) |
+| `npm run test:ui` | 91 pass / 0 fail |
 | `npx tsc --noEmit` / `npm run lint` | pass |
 | `npm run build` | pass |
 
-Auth-specific backend cases (in `apps-script/tests/auth.test.js`): hash/verify, policy, status, owner bootstrap, login (valid / unknown / wrong / disabled), lockout, forged `actorUserId`, missing session, staff cannot reset, first-login + logout, password-change / deactivate revocation, expired session + hashed tokens, events without secrets.
+Auth-specific backend cases (`apps-script/tests/auth.test.js`, 20 tests): hash/verify, policy, status, owner bootstrap, login (valid / unknown / wrong / disabled), lockout, forged `actorUserId`, missing session, staff cannot reset, first-login + logout, password-change / deactivate revocation, expired hashed tokens, CSPRNG uniqueness, UUID CSPRNG fallback, fail-closed entropy, PBKDF2 work-factor constant, harness session gated off, forged role/permissions, supervisor cannot reset/bootstrap, events without secrets.
 
 Not run: production migration, live DEV Apps Script deploy, live password bootstrap, GitHub Pages deploy, browser login against the undeployed backend.
 
