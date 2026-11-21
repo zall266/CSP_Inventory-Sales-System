@@ -31,7 +31,8 @@ function createRouter(backend) {
     var action = request.action;
     var principal = authenticate();
     if (isSetupAuthAction(action)) {
-      if (!String(payload.setupAuthorization || '').trim()) {
+      var setupField = setupAuthorizationField(action);
+      if (!setupField || !String(payload[setupField] || '').trim()) {
         return errorEnvelope('UNAUTHORIZED', 'Setup authorization is required.', { requestId: requestId });
       }
     } else if (!isPublicAuthAction(action)) {

@@ -168,7 +168,7 @@ test('owner bootstrap is single-use and mints a session', () => {
     password: 'StaffPass12',
   })
   assert.equal(denied.ok, false)
-  assert.equal(denied.error.code, 'FORBIDDEN')
+  assert.equal(denied.error.code, 'UNAUTHORIZED')
   const session = ownerSession(backend)
   assert.equal(session.user.id, 'u-aina')
   assert.equal(session.user.isOwner, true)

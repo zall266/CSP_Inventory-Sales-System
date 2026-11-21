@@ -16,12 +16,17 @@ var AUTH_PUBLIC_ACTIONS = {
   'system.ping': true,
   'auth.status': true,
   'auth.challenge': true,
-  'auth.login': true,
-  'auth.bootstrapOwner': true
+  'auth.login': true
 };
 
 var AUTH_SETUP_ACTIONS = {
-  'identity.bootstrap': true
+  'identity.bootstrap': true,
+  'auth.bootstrapOwner': true
+};
+
+var AUTH_SETUP_FIELDS = {
+  'identity.bootstrap': 'setupAuthorization',
+  'auth.bootstrapOwner': 'ownerEnrollmentAuthorization'
 };
 
 var AUTH_SESSION_TTL_MS = 12 * 60 * 60 * 1000;
@@ -39,6 +44,10 @@ function isPublicAuthAction(action) {
 
 function isSetupAuthAction(action) {
   return Boolean(AUTH_SETUP_ACTIONS[String(action || '')]);
+}
+
+function setupAuthorizationField(action) {
+  return AUTH_SETUP_FIELDS[String(action || '')] || '';
 }
 
 function createAuthService(deps) {
@@ -478,12 +487,21 @@ function createAuthService(deps) {
     if (!username || (!hasVerifier && typeof password !== 'string')) {
       throw appError('VALIDATION_ERROR', 'Username and password are required.');
     }
+    if (!authVerifyOwnerEnrollSecret(payload.ownerEnrollmentAuthorization, username, Date.now())) {
+      throw appError('UNAUTHORIZED', 'Setup authorization is required.');
+    }
+    var bound = authOwnerEnrollBinding();
     var user = findUserByUsername(snapshot, username);
-    if (!user || !isOwnerUser(snapshot, user) || user.status !== 'active') {
+    if (!user || user.id !== bound.userId || !isOwnerUser(snapshot, user) || user.status !== 'active') {
       throw appError('FORBIDDEN', 'Owner bootstrap is not available.');
     }
     var credential = createCredentialFromPayload(user, payload, password, user.id, false);
     repository.writeCredentials(spreadsheet, [credential]);
+    var stored = findCredentialByUserId(repository.readCredentials(spreadsheet), user.id);
+    if (!stored || stored.username !== username || stored.userId !== user.id || !stored.passwordHash || !stored.wrappedVerifier) {
+      throw appError('INTERNAL_ERROR', 'Owner enrollment did not complete.');
+    }
+    authConsumeOwnerEnrollSecret();
     var minted = createSessionRecord(spreadsheet, user, new Date());
     touchLastLogin(spreadsheet, snapshot, user.id, minted.session.createdAt);
     snapshot = identitySnapshot(spreadsheet);
@@ -496,7 +514,7 @@ function createAuthService(deps) {
       reason: '',
       requestId: requestId
     });
-    return sessionEnvelope(snapshot, user, credential, minted.token, minted.session);
+    return sessionEnvelope(snapshot, user, stored, minted.token, minted.session);
   }
 
   function parseSession(spreadsheet, token) {

@@ -1,8 +1,6 @@
 import { useEffect, useState, type FormEvent } from 'react'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
 import { identityApiUrl, postIdentityAction } from '@/api/identityApi'
-import { preparePasswordVerifier } from '@/auth/passwordHash'
-import { passwordPolicyMessage } from '@/auth/passwordPolicy'
 import { proofForUsername } from '@/auth/passwordRequest'
 import { sessionFromLoginData, writeAuthSession } from '@/auth/session'
 import { brand } from '@/brand'
@@ -21,7 +19,6 @@ export function LoginPage() {
   const [status, setStatus] = useState<Status | null>(null)
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
-  const [confirm, setConfirm] = useState('')
   const [showPassword, setShowPassword] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState(expired ? 'Your session has expired. Please sign in again.' : '')
@@ -40,34 +37,21 @@ export function LoginPage() {
   }, [configured])
 
   const bootstrap = Boolean(status?.needsOwnerBootstrap)
-  const blocked = configured && status && !status.identityReady && !status.needsOwnerBootstrap
+  const blocked = Boolean(configured && status && (!status.identityReady || status.needsOwnerBootstrap))
 
   const onSubmit = async (event: FormEvent) => {
     event.preventDefault()
-    if (busy) return
+    if (busy || blocked) return
     setError('')
-    if (bootstrap) {
-      const policy = passwordPolicyMessage(password, username)
-      if (policy) {
-        setError(policy)
-        return
-      }
-      if (password !== confirm) {
-        setError('Passwords do not match.')
-        return
-      }
-    }
     setBusy(true)
     try {
-      const action = bootstrap ? 'auth.bootstrapOwner' : 'auth.login'
-      const secret = bootstrap
-        ? await preparePasswordVerifier(password)
-        : await proofForUsername(username.trim(), password)
-      const result = await postIdentityAction(action, { username: username.trim(), ...secret })
+      const result = await postIdentityAction('auth.login', {
+        username: username.trim(),
+        ...(await proofForUsername(username.trim(), password)),
+      })
       if (!result.ok || !result.data) {
         setError(result.error?.message || 'Sign in failed.')
         setPassword('')
-        setConfirm('')
         return
       }
       const session = sessionFromLoginData(result.data as Parameters<typeof sessionFromLoginData>[0])
@@ -81,7 +65,6 @@ export function LoginPage() {
       const message = error instanceof Error ? error.message : ''
       setError(message.includes('hashing') || message.includes('work factor') ? message : 'Could not reach the server.')
       setPassword('')
-      setConfirm('')
     } finally {
       setBusy(false)
     }
@@ -99,14 +82,8 @@ export function LoginPage() {
             <div className="text-xs text-slate-400">{brand.subtitle}</div>
           </div>
         </div>
-        <h1 className="text-xl font-semibold text-slate-900">
-          {bootstrap ? 'Set Owner password' : 'Sign in'}
-        </h1>
-        <p className="mt-1 text-sm text-slate-500">
-          {bootstrap
-            ? 'This DEV system has staff records but no passwords yet. Set the Owner password to continue. Do not reuse a production password.'
-            : 'Use your staff username and password.'}
-        </p>
+        <h1 className="text-xl font-semibold text-slate-900">Sign in</h1>
+        <p className="mt-1 text-sm text-slate-500">Use your staff username and password.</p>
         {!configured && (
           <p className="mt-4 rounded-xl bg-amber-50 px-3 py-2 text-sm text-amber-800">
             This browser build is not connected to the DEV API. Local demo data is available without a server login.
@@ -114,7 +91,9 @@ export function LoginPage() {
         )}
         {blocked && (
           <p className="mt-4 rounded-xl bg-rose-50 px-3 py-2 text-sm text-rose-700">
-            Identity is not initialized. Ask the owner to complete identity setup before creating passwords.
+            {bootstrap
+              ? 'Owner credentials are not initialized. Complete the owner-controlled enrollment procedure before signing in.'
+              : 'Identity is not initialized. Ask the owner to complete identity setup before creating passwords.'}
           </p>
         )}
         {error && <div className="mt-4 rounded-xl bg-rose-50 px-3 py-2 text-sm text-rose-700">{error}</div>}
@@ -127,11 +106,11 @@ export function LoginPage() {
               placeholder="name@company.com"
             />
           </Field>
-          <Field label={bootstrap ? 'New password' : 'Password'}>
+          <Field label="Password">
             <div className="relative">
               <Input
                 type={showPassword ? 'text' : 'password'}
-                autoComplete={bootstrap ? 'new-password' : 'current-password'}
+                autoComplete="current-password"
                 value={password}
                 onChange={(event) => setPassword(event.target.value)}
               />
@@ -144,18 +123,8 @@ export function LoginPage() {
               </button>
             </div>
           </Field>
-          {bootstrap && (
-            <Field label="Confirm password">
-              <Input
-                type={showPassword ? 'text' : 'password'}
-                autoComplete="new-password"
-                value={confirm}
-                onChange={(event) => setConfirm(event.target.value)}
-              />
-            </Field>
-          )}
           <Button className="w-full" type="submit" disabled={busy || Boolean(blocked) || !configured}>
-            {busy ? 'Please wait…' : bootstrap ? 'Save password and continue' : 'Sign in'}
+            {busy ? 'Please wait…' : 'Sign in'}
           </Button>
         </form>
         <p className="mt-4 text-xs text-slate-400">

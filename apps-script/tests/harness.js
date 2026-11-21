@@ -116,17 +116,34 @@ function shouldMintHarnessSession(context, request) {
 }
 
 export const HARNESS_IDENTITY_BOOTSTRAP_SECRET = 'a'.repeat(64)
+export const HARNESS_OWNER_ENROLL_SECRET = 'b'.repeat(64)
+export const HARNESS_OWNER_ENROLL_USERNAME = 'aina@coolslurppy.my'
+export const HARNESS_OWNER_ENROLL_USER_ID = 'u-aina'
 
 export function harnessIdentityBootstrapHash() {
   return crypto.createHash('sha256').update(HARNESS_IDENTITY_BOOTSTRAP_SECRET).digest('hex')
 }
 
-function injectHarnessBootstrap(context, request) {
+export function harnessOwnerEnrollHash() {
+  return crypto.createHash('sha256').update(HARNESS_OWNER_ENROLL_SECRET).digest('hex')
+}
+
+function injectHarnessSetup(context, request) {
   if (!request || !request.payload || typeof request.payload !== 'object') return
-  if (typeof context.isSetupAuthAction !== 'function' || !context.isSetupAuthAction(request.action)) return
-  if (context.AUTH_INJECT_TEST_BOOTSTRAP === false) return
-  if (request.payload.setupAuthorization !== undefined) return
-  request.payload.setupAuthorization = HARNESS_IDENTITY_BOOTSTRAP_SECRET
+  if (typeof context.setupAuthorizationField !== 'function') return
+  const field = context.setupAuthorizationField(request.action)
+  if (!field) return
+  if (field === 'setupAuthorization') {
+    if (context.AUTH_INJECT_TEST_BOOTSTRAP === false) return
+    if (request.payload.setupAuthorization !== undefined) return
+    request.payload.setupAuthorization = HARNESS_IDENTITY_BOOTSTRAP_SECRET
+    return
+  }
+  if (field === 'ownerEnrollmentAuthorization') {
+    if (context.AUTH_INJECT_TEST_OWNER_ENROLL === false) return
+    if (request.payload.ownerEnrollmentAuthorization !== undefined) return
+    request.payload.ownerEnrollmentAuthorization = HARNESS_OWNER_ENROLL_SECRET
+  }
 }
 
 export function loadBackend(globals = {}) {
@@ -170,6 +187,7 @@ export function loadBackend(globals = {}) {
     Utilities: utilities,
     AUTH_ALLOW_TEST_SESSION: true,
     AUTH_INJECT_TEST_BOOTSTRAP: true,
+    AUTH_INJECT_TEST_OWNER_ENROLL: true,
   }
   context.globalThis = context
   vm.createContext(context)
@@ -196,7 +214,7 @@ export function loadBackend(globals = {}) {
   const innerHandle = context.handleRequest
   const tokenCache = new WeakMap()
   context.handleRequest = function handleRequestWithTestSession(request, backend) {
-    injectHarnessBootstrap(context, request)
+    injectHarnessSetup(context, request)
     if (shouldMintHarnessSession(context, request) && backend && backend.sheets) {
       const spreadsheet = backend.sheets.openSpreadsheet()
       const cacheKey = spreadsheet.store || spreadsheet
@@ -236,6 +254,9 @@ export function devProperties() {
     DRIVE_ROOT_ID: 'drive-id',
     TIMEZONE: 'Asia/Kuala_Lumpur',
     IDENTITY_BOOTSTRAP_HASH: harnessIdentityBootstrapHash(),
+    AUTH_OWNER_ENROLL_HASH: harnessOwnerEnrollHash(),
+    AUTH_OWNER_ENROLL_USERNAME: HARNESS_OWNER_ENROLL_USERNAME,
+    AUTH_OWNER_ENROLL_USER_ID: HARNESS_OWNER_ENROLL_USER_ID,
   })
 }
 

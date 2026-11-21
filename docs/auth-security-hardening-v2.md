@@ -9,6 +9,7 @@ This document records the bootstrap takeover fix, the password-verifier replay a
 | Finding | Decision | Meaning |
 | --- | --- | --- |
 | A. Public `identity.bootstrap` takeover | **FIXED** | Anonymous callers cannot create the initial Owner. Bootstrap requires a one-time Script Properties hash, consumed under the script lock. |
+| C. Public `auth.bootstrapOwner` takeover | **FIXED** | Knowing the Owner email is not enough. First credential enrollment requires a separate one-time Script Properties hash bound to that Owner. |
 | B. Password verifier replay | **MITIGATED** | Captured login HTTP requests cannot be replayed. A stolen PBKDF2 derived key can still prove a fresh challenge. Not FIXED. |
 | Session token in `sessionStorage` | **RESIDUAL** | GitHub Pages + Apps Script cannot issue an HttpOnly cookie for this SPA. XSS that can read `sessionStorage` steals the session. |
 | Client-enforced PBKDF2 | **RESIDUAL** | Apps Script cannot re-run 600,000 PBKDF2 rounds. A modified client can send a DK stretched with fewer iterations. |
@@ -39,13 +40,13 @@ Do this only for a new DEV spreadsheet, out of band, from an owner-controlled ma
 3. Optionally set `IDENTITY_BOOTSTRAP_EXPIRES_AT` to an ISO timestamp.
 4. Call `identity.bootstrap` once with the identity payload and `setupAuthorization` set to the secret. Use clasp / a trusted Apps Script execution, not the public login page.
 5. Confirm `IDENTITY_BOOTSTRAP_HASH` was deleted.
-6. Set the Owner password with `auth.bootstrapOwner` using the official SPA (still public only while `AuthCredentials` is empty).
+6. Provision a **separate** Owner enrollment secret (Finding C). Do not reuse this identity bootstrap secret.
 
 If the hash is never provisioned, bootstrap fails closed.
 
 ### Residual bootstrap risk
 
-Submitting the setup secret through `doPost` exposes that one value to anyone who can observe the request. The web app remains `ANYONE_ANONYMOUS`. The secret is single-use and not returned. `auth.bootstrapOwner` is still a public one-time password enrollment after identity exists; it cannot create identity.
+Submitting the setup secret through `doPost` exposes that one value to anyone who can observe the request. The web app remains `ANYONE_ANONYMOUS`. The secret is single-use and not returned. It cannot enroll an Owner password.
 
 Google Sheets writes are not ACID. Validation runs before any identity write. A crash after a partial write could leave departments/roles without users (`empty` is `users.length === 0`) and would not consume the hash. Manual sheet cleanup may be required. A crash after users are written consumes on the success path only if the Owner confirmation passes; otherwise the leftover hash must be deleted by the administrator.
 
@@ -92,6 +93,72 @@ Enrollment (`auth.bootstrapOwner`, Owner reset, staff create, password change ne
 - **Claiming FIXED because a nonce exists:** rejected. A stolen DK answers a new nonce.
 
 Finding B is **MITIGATED**: HTTP replay of login is closed; stolen-verifier login is not.
+
+## Finding C — first Owner credential enrollment (V3)
+
+### Original vulnerability
+
+After identity existed and `AuthCredentials` was empty, `auth.bootstrapOwner` was a public action. An unauthenticated caller who knew the active Owner email could register the first password and receive a session.
+
+### Chosen implementation (Option A)
+
+Keep identity bootstrap and Owner enrollment as **two independent** one-time authorizations.
+
+Option B (combine both into `identity.bootstrap`) was rejected: it would mix identity seed writes with password enrollment, enlarge the identity bootstrap payload, and leave a worse recovery case if Sheets wrote users but not credentials (or the reverse). Separate secrets also prevent the identity bootstrap secret from being reused as a password-enrollment secret.
+
+### Router-level enforcement
+
+`auth.bootstrapOwner` is not in `AUTH_PUBLIC_ACTIONS`. It is a setup action. The router rejects the request unless `payload.ownerEnrollmentAuthorization` is present. The login page does not call this action and does not collect the enrollment secret.
+
+### One-time authorization lifecycle
+
+Script Properties (never Sheets, never git, never API responses):
+
+- `AUTH_OWNER_ENROLL_HASH` = SHA-256 of the enrollment secret
+- `AUTH_OWNER_ENROLL_EXPIRES_AT` optional ISO expiry
+- `AUTH_OWNER_ENROLL_USERNAME` exact normalized Owner email
+- `AUTH_OWNER_ENROLL_USER_ID` exact Owner user ID
+
+Under `withScriptLock`:
+
+1. Reject if identity is empty or if any credential already exists (do not consume).
+2. Reject if the secret is missing, wrong, expired, reused, or bound to a different username (do not consume).
+3. Reject if the user is not that bound ID, not Owner, or not active (do not consume).
+4. Reject recoverable password-policy failures (do not consume).
+5. Write the credential, re-read it, confirm it belongs to that Owner.
+6. Delete the hash and bindings.
+7. Mint a session only after that confirmation.
+
+The official SPA sign-in form cannot perform this enrollment.
+
+### Administrator procedure
+
+Out of band, owner-controlled machine, DEV only:
+
+1. Confirm identity bootstrap already succeeded and `auth.status.needsOwnerBootstrap` is true.
+2. Generate 32 random bytes as 64 hex characters. This is the **Owner enrollment** secret, not the identity bootstrap secret.
+3. Store SHA-256(UTF-8 secret) in `AUTH_OWNER_ENROLL_HASH`.
+4. Store the existing Owner email in `AUTH_OWNER_ENROLL_USERNAME` and the Owner user ID in `AUTH_OWNER_ENROLL_USER_ID`.
+5. Optionally set `AUTH_OWNER_ENROLL_EXPIRES_AT`.
+6. Call `auth.bootstrapOwner` once with `username`, a stretched verifier or test password, and `ownerEnrollmentAuthorization`. Use clasp / a trusted Apps Script execution, not `/login`.
+7. Confirm `AUTH_OWNER_ENROLL_HASH` was deleted.
+8. Sign in at `/login` with the Owner password.
+
+### Recovery
+
+Google Sheets is not ACID.
+
+- Validation failure (wrong secret, wrong email, non-Owner, weak password): hash remains. Correct the request and retry.
+- Crash after credential write and before consume: `AuthCredentials` has the Owner row, leftover hash is inert because a second enroll is `FORBIDDEN`. Delete leftover properties. Sign in with the password that was written.
+- Crash after consume and before session mint: credential exists. Sign in normally. No session was issued from the failed request.
+- Credential write failed: no session, hash remains. Retry.
+- Need to start over after a bad credential write: Owner deletes `AuthCredentials` data rows, reprovisions a **new** enrollment hash (the old secret was consumed or must be rotated), then retries.
+
+There is no default Owner password and no hardcoded production secret.
+
+### Test evidence
+
+`apps-script/tests/authOwnerEnroll.test.js` drives `handleRequest` (the router): anonymous/missing/invalid/expired/wrong-email/non-Owner/identity-secret-reuse are rejected with no credential and no session; first authorized enroll succeeds once; reuse and a second concurrent writer fail; normal Owner login works afterward.
 
 ## Session security
 

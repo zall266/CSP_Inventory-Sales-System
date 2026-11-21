@@ -28,6 +28,10 @@ var AUTH_PASSWORD_MAX = 128;
 var AUTH_PEPPER_PROPERTY = 'AUTH_PASSWORD_PEPPER';
 var IDENTITY_BOOTSTRAP_HASH_PROPERTY = 'IDENTITY_BOOTSTRAP_HASH';
 var IDENTITY_BOOTSTRAP_EXPIRES_PROPERTY = 'IDENTITY_BOOTSTRAP_EXPIRES_AT';
+var AUTH_OWNER_ENROLL_HASH_PROPERTY = 'AUTH_OWNER_ENROLL_HASH';
+var AUTH_OWNER_ENROLL_EXPIRES_PROPERTY = 'AUTH_OWNER_ENROLL_EXPIRES_AT';
+var AUTH_OWNER_ENROLL_USERNAME_PROPERTY = 'AUTH_OWNER_ENROLL_USERNAME';
+var AUTH_OWNER_ENROLL_USER_ID_PROPERTY = 'AUTH_OWNER_ENROLL_USER_ID';
 var AUTH_SETUP_SECRET_MIN = 32;
 var AUTH_CHALLENGE_TTL_MS = 2 * 60 * 1000;
 var AUTH_LOGIN_PURPOSE = 'login';
@@ -333,15 +337,67 @@ function authVerifyIdentityBootstrapSecret(secret, nowMs) {
 }
 
 function authConsumeIdentityBootstrapSecret() {
+  authDeleteScriptProperties([
+    IDENTITY_BOOTSTRAP_HASH_PROPERTY,
+    IDENTITY_BOOTSTRAP_EXPIRES_PROPERTY
+  ]);
+}
+
+function authDeleteScriptProperties(keys) {
   if (typeof PropertiesService === 'undefined' || !PropertiesService.getScriptProperties) return;
   var props = PropertiesService.getScriptProperties();
-  if (typeof props.deleteProperty === 'function') {
-    props.deleteProperty(IDENTITY_BOOTSTRAP_HASH_PROPERTY);
-    props.deleteProperty(IDENTITY_BOOTSTRAP_EXPIRES_PROPERTY);
-    return;
+  var i;
+  for (i = 0; i < keys.length; i += 1) {
+    if (typeof props.deleteProperty === 'function') props.deleteProperty(keys[i]);
+    else props.setProperty(keys[i], '');
   }
-  props.setProperty(IDENTITY_BOOTSTRAP_HASH_PROPERTY, '');
-  props.setProperty(IDENTITY_BOOTSTRAP_EXPIRES_PROPERTY, '');
+}
+
+function authOwnerEnrollBinding() {
+  if (typeof PropertiesService === 'undefined' || !PropertiesService.getScriptProperties) {
+    return { username: '', userId: '' };
+  }
+  var props = PropertiesService.getScriptProperties();
+  return {
+    username: String(props.getProperty(AUTH_OWNER_ENROLL_USERNAME_PROPERTY) || '').trim().toLowerCase(),
+    userId: String(props.getProperty(AUTH_OWNER_ENROLL_USER_ID_PROPERTY) || '').trim()
+  };
+}
+
+function authOwnerEnrollConfigured() {
+  if (typeof PropertiesService === 'undefined' || !PropertiesService.getScriptProperties) return false;
+  var hash = String(PropertiesService.getScriptProperties().getProperty(AUTH_OWNER_ENROLL_HASH_PROPERTY) || '').trim().toLowerCase();
+  var bound = authOwnerEnrollBinding();
+  return authIsHex(hash, 32) && Boolean(bound.username) && Boolean(bound.userId);
+}
+
+function authOwnerEnrollExpired(nowMs) {
+  if (typeof PropertiesService === 'undefined' || !PropertiesService.getScriptProperties) return true;
+  var expires = String(PropertiesService.getScriptProperties().getProperty(AUTH_OWNER_ENROLL_EXPIRES_PROPERTY) || '').trim();
+  if (!expires) return false;
+  var at = Date.parse(expires);
+  return isFinite(at) && at <= Number(nowMs);
+}
+
+function authVerifyOwnerEnrollSecret(secret, username, nowMs) {
+  if (!authOwnerEnrollConfigured()) return false;
+  if (authOwnerEnrollExpired(nowMs)) return false;
+  var value = String(secret || '');
+  if (value.length < AUTH_SETUP_SECRET_MIN) return false;
+  var bound = authOwnerEnrollBinding();
+  if (bound.username !== String(username || '').trim().toLowerCase()) return false;
+  var stored = String(PropertiesService.getScriptProperties().getProperty(AUTH_OWNER_ENROLL_HASH_PROPERTY) || '').trim().toLowerCase();
+  var computed = authBytesToHex(authSha256(authUtf8Bytes(value)));
+  return authTimingSafeEqual(authHexToBytes(computed), authHexToBytes(stored));
+}
+
+function authConsumeOwnerEnrollSecret() {
+  authDeleteScriptProperties([
+    AUTH_OWNER_ENROLL_HASH_PROPERTY,
+    AUTH_OWNER_ENROLL_EXPIRES_PROPERTY,
+    AUTH_OWNER_ENROLL_USERNAME_PROPERTY,
+    AUTH_OWNER_ENROLL_USER_ID_PROPERTY
+  ]);
 }
 
 function authCredentialWorkFactorOk(record) {
