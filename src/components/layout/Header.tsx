@@ -23,7 +23,6 @@ export function Header() {
   const navigate = useNavigate()
   const { pathname } = useLocation()
   const isPos = pathname === '/pos'
-  const showReportDate = pathname === '/' || pathname.startsWith('/reports/')
   const [query, setQuery] = useState('')
   const [searchOpen, setSearchOpen] = useState(false)
   const searchRef = useRef<HTMLInputElement>(null)
@@ -299,12 +298,6 @@ export function Header() {
         ))}
       </Dropdown>
 
-      {showReportDate && (
-        <div className="hidden items-center gap-2 whitespace-nowrap rounded-xl border border-slate-200 px-3 py-2 text-sm text-slate-600 lg:flex" data-header-report-date>
-          <CalendarDays size={15} className="text-slate-400" />
-          <span>Report date · {dateLabels.reportDate}</span>
-        </div>
-      )}
       <div
         className={isPos
           ? 'flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-xl border border-slate-200 px-2.5 py-2 text-xs text-slate-600 sm:gap-2 sm:px-3 sm:text-sm'
