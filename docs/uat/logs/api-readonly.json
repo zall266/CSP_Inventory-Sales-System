@@ -1,0 +1,708 @@
+{
+  "at": "2026-11-15T06:34:38.600Z",
+  "before": {
+    "rows": 234,
+    "mov": 53,
+    "dup": 0,
+    "diffs": 0,
+    "mismatches": [],
+    "audits": 0
+  },
+  "after": {
+    "rows": 234,
+    "mov": 53,
+    "dup": 0,
+    "diffs": 0,
+    "mismatches": [],
+    "audits": 0
+  },
+  "results": [
+    {
+      "id": "API-BASE-01",
+      "module": "baseline",
+      "description": "inventory.get snapshot (live Sheets via Apps Script)",
+      "expected": "234 balances, 53 movements, 0 dup, 0 diffs",
+      "actual": {
+        "rows": 234,
+        "mov": 53,
+        "dup": 0,
+        "diffs": 0,
+        "mismatches": [],
+        "audits": 0
+      },
+      "recon": "opening+in-out=closing diffs=0",
+      "status": "PASS"
+    },
+    {
+      "id": "API-BASE-02",
+      "module": "baseline",
+      "description": "GET /exec health",
+      "expected": "DEV healthy Asia/Kuala_Lumpur",
+      "actual": {
+        "service": "CSP Inventory Backend",
+        "environment": "DEV",
+        "status": "healthy",
+        "timezone": "Asia/Kuala_Lumpur",
+        "spreadsheetAccessible": true,
+        "driveAccessible": true,
+        "foundationReady": true
+      },
+      "recon": "n/a",
+      "status": "PASS"
+    },
+    {
+      "id": "API-BASE-SHEETS",
+      "module": "baseline",
+      "description": "Direct Google Sheets export (anonymous)",
+      "expected": "BLOCKED unless the spreadsheet is public; live recon uses inventory.get",
+      "actual": {
+        "status": 400,
+        "snippet": "<!DOCTYPE html><html lang=\"en\"><head><script nonce=\"rjv3o_Z_QYjOVx3sxVFZpQ\">window['ppConfig'] = {productName: '26981ed0"
+      },
+      "recon": "n/a",
+      "status": "BLOCKED"
+    },
+    {
+      "id": "API-12-01",
+      "module": "12",
+      "description": "sessions.list locked session",
+      "expected": "PROD-20261109-001 planned unposted 2026-11-09",
+      "actual": {
+        "id": "ps_p2lblrm1i",
+        "date": "2026-11-09",
+        "status": "planned",
+        "posted": false,
+        "n": 1
+      },
+      "recon": "n/a",
+      "status": "PASS"
+    },
+    {
+      "id": "API-12-N1",
+      "module": "12",
+      "description": "owner accept past-dated session",
+      "expected": "VALIDATION_ERROR Not today's production",
+      "actual": {
+        "code": "VALIDATION_ERROR",
+        "message": "Not today's production"
+      },
+      "recon": "no session status change expected",
+      "status": "PASS"
+    },
+    {
+      "id": "API-12-N2",
+      "module": "12",
+      "description": "cashier sessions.accept",
+      "expected": "FORBIDDEN",
+      "actual": {
+        "code": "FORBIDDEN",
+        "message": "You cannot accept production."
+      },
+      "recon": "n/a",
+      "status": "PASS"
+    },
+    {
+      "id": "API-12-N3",
+      "module": "12",
+      "description": "owner start past-dated session",
+      "expected": "VALIDATION_ERROR Not today's production",
+      "actual": {
+        "code": "VALIDATION_ERROR",
+        "message": "Not today's production"
+      },
+      "recon": "n/a",
+      "status": "PASS"
+    },
+    {
+      "id": "API-12-N4",
+      "module": "12",
+      "description": "owner complete past-dated session (keyed)",
+      "expected": "error (today or status); no post",
+      "actual": {
+        "code": "VALIDATION_ERROR",
+        "message": "Not today's production"
+      },
+      "recon": "n/a",
+      "status": "PASS"
+    },
+    {
+      "id": "API-12-N5",
+      "module": "12",
+      "description": "cashier sessions.create",
+      "expected": "FORBIDDEN",
+      "actual": {
+        "code": "FORBIDDEN",
+        "message": "You cannot create a production session."
+      },
+      "recon": "n/a",
+      "status": "PASS"
+    },
+    {
+      "id": "API-12-N6",
+      "module": "12",
+      "description": "owner sessions.create with zero target qty",
+      "expected": "VALIDATION_ERROR Add products to the daily plan",
+      "actual": {
+        "code": "VALIDATION_ERROR",
+        "message": "Add products to the daily plan"
+      },
+      "recon": "n/a",
+      "status": "PASS"
+    },
+    {
+      "id": "API-13-01",
+      "module": "13",
+      "description": "sales.list",
+      "expected": "0 sales, 2 payments",
+      "actual": {
+        "n": 0,
+        "pay": 2,
+        "paymentNos": [
+          "PAY-000001",
+          "PAY-000002"
+        ],
+        "audits": 0
+      },
+      "recon": "n/a",
+      "status": "PASS"
+    },
+    {
+      "id": "API-13-N1",
+      "module": "13",
+      "description": "sales.create without idempotency key",
+      "expected": "Idempotency key is required",
+      "actual": {
+        "code": "VALIDATION_ERROR",
+        "message": "Idempotency key is required."
+      },
+      "recon": "n/a",
+      "status": "PASS"
+    },
+    {
+      "id": "API-13-N2A",
+      "module": "13",
+      "description": "cashier sales.void without key (key is checked before permission)",
+      "expected": "VALIDATION_ERROR Idempotency key is required",
+      "actual": {
+        "code": "VALIDATION_ERROR",
+        "message": "Idempotency key is required."
+      },
+      "recon": "n/a",
+      "status": "PASS"
+    },
+    {
+      "id": "API-13-N2",
+      "module": "13",
+      "description": "cashier sales.void with idempotency key",
+      "expected": "FORBIDDEN You cannot void sales",
+      "actual": {
+        "code": "FORBIDDEN",
+        "message": "You cannot void sales."
+      },
+      "recon": "n/a",
+      "status": "PASS"
+    },
+    {
+      "id": "API-13-N2B",
+      "module": "13",
+      "description": "duplicate cashier sales.void same idempotency key",
+      "expected": "replay FORBIDDEN, no document created",
+      "actual": {
+        "code": "FORBIDDEN",
+        "message": "You cannot void sales."
+      },
+      "recon": "n/a",
+      "status": "PASS"
+    },
+    {
+      "id": "API-13-N4",
+      "module": "13",
+      "description": "owner sales.void missing sale",
+      "expected": "NOT_FOUND or VALIDATION, no void posted",
+      "actual": {
+        "code": "NOT_FOUND",
+        "message": "Sale not found"
+      },
+      "recon": "n/a",
+      "status": "PASS"
+    },
+    {
+      "id": "API-13-N3",
+      "module": "9/13",
+      "description": "cashier purchases.create",
+      "expected": "FORBIDDEN",
+      "actual": {
+        "code": "FORBIDDEN",
+        "message": "You cannot create purchases."
+      },
+      "recon": "n/a",
+      "status": "PASS"
+    },
+    {
+      "id": "API-13-02",
+      "module": "13",
+      "description": "quotations.list if deployed",
+      "expected": "ok or UNKNOWN_ACTION (do not invent missing API)",
+      "actual": {
+        "ok": true,
+        "n": 0
+      },
+      "recon": "n/a",
+      "status": "PASS"
+    },
+    {
+      "id": "API-14-01",
+      "module": "14",
+      "description": "salesReturns.list",
+      "expected": "ok, 0 confirmed needed",
+      "actual": {
+        "ok": true,
+        "n": 0,
+        "sources": 10
+      },
+      "recon": "n/a",
+      "status": "PASS"
+    },
+    {
+      "id": "API-14-N1",
+      "module": "14",
+      "description": "cashier salesReturns.save",
+      "expected": "FORBIDDEN",
+      "actual": {
+        "code": "FORBIDDEN",
+        "message": "You cannot create a sales return."
+      },
+      "recon": "n/a",
+      "status": "PASS"
+    },
+    {
+      "id": "API-14-N2",
+      "module": "14",
+      "description": "salesReturns.confirm without key",
+      "expected": "Idempotency key required",
+      "actual": {
+        "code": "VALIDATION_ERROR",
+        "message": "Idempotency key is required."
+      },
+      "recon": "n/a",
+      "status": "PASS"
+    },
+    {
+      "id": "API-14-N3",
+      "module": "14",
+      "description": "owner salesReturns.save qty 0",
+      "expected": "VALIDATION_ERROR greater than 0; no RT- created",
+      "actual": {
+        "code": "VALIDATION_ERROR",
+        "message": "Returned quantity for Matcha must be greater than 0."
+      },
+      "recon": "n/a",
+      "status": "PASS"
+    },
+    {
+      "id": "API-14-N4",
+      "module": "14",
+      "description": "owner salesReturns.save invalid product",
+      "expected": "error; no RT- created",
+      "actual": {
+        "code": "VALIDATION_ERROR",
+        "message": "Choose a product for every line."
+      },
+      "recon": "n/a",
+      "status": "PASS"
+    },
+    {
+      "id": "API-14-N5",
+      "module": "14",
+      "description": "salesReturns.confirm missing id with key",
+      "expected": "NOT_FOUND; no stock movement",
+      "actual": {
+        "code": "NOT_FOUND",
+        "message": "Return not found"
+      },
+      "recon": "n/a",
+      "status": "PASS"
+    },
+    {
+      "id": "API-15-01",
+      "module": "15",
+      "description": "salesImport.list",
+      "expected": "ok; accounts on salesImportAccounts (not accounts)",
+      "actual": {
+        "ok": true,
+        "batches": 0,
+        "accounts": 3,
+        "accountNames": [
+          "should-fail",
+          "cashier-should-fail",
+          "coolslurppypowder"
+        ],
+        "orders": 0
+      },
+      "recon": "n/a",
+      "status": "PASS"
+    },
+    {
+      "id": "API-15-N1",
+      "module": "15",
+      "description": "salesImport.confirm without key / missing batch",
+      "expected": "error, no sale posted",
+      "actual": {
+        "code": "VALIDATION_ERROR",
+        "message": "Idempotency key is required."
+      },
+      "recon": "n/a",
+      "status": "PASS"
+    },
+    {
+      "id": "API-15-N2",
+      "module": "15",
+      "description": "salesImport.confirm missing batch with key",
+      "expected": "NOT_FOUND; no sale",
+      "actual": {
+        "code": "NOT_FOUND",
+        "message": "Import batch was not found."
+      },
+      "recon": "n/a",
+      "status": "PASS"
+    },
+    {
+      "id": "API-15-N3",
+      "module": "15",
+      "description": "cashier salesImport.confirm missing batch",
+      "expected": "FORBIDDEN or NOT_FOUND; cashier has sales.create so FORBIDDEN may not apply",
+      "actual": {
+        "code": "NOT_FOUND",
+        "message": "Import batch was not found."
+      },
+      "recon": "n/a",
+      "status": "PASS"
+    },
+    {
+      "id": "API-16-01",
+      "module": "16",
+      "description": "dispatch.list",
+      "expected": "ok",
+      "actual": {
+        "ok": true,
+        "n": 0,
+        "vehicles": 0
+      },
+      "recon": "n/a",
+      "status": "PASS"
+    },
+    {
+      "id": "API-16-N1",
+      "module": "16",
+      "description": "cashier vehicles.create",
+      "expected": "FORBIDDEN",
+      "actual": {
+        "code": "FORBIDDEN",
+        "message": "You cannot maintain vehicles."
+      },
+      "recon": "n/a",
+      "status": "PASS"
+    },
+    {
+      "id": "API-16-N2",
+      "module": "16",
+      "description": "cashier dispatch.create",
+      "expected": "FORBIDDEN",
+      "actual": {
+        "code": "FORBIDDEN",
+        "message": "You cannot create a dispatch."
+      },
+      "recon": "n/a",
+      "status": "PASS"
+    },
+    {
+      "id": "API-16-N3",
+      "module": "16",
+      "description": "dispatch.confirm without key / missing",
+      "expected": "error, no inventory change",
+      "actual": {
+        "code": "VALIDATION_ERROR",
+        "message": "Idempotency key is required."
+      },
+      "recon": "n/a",
+      "status": "PASS"
+    },
+    {
+      "id": "API-16-N4",
+      "module": "16",
+      "description": "dispatch.confirm missing id with key",
+      "expected": "NOT_FOUND; no stock movement",
+      "actual": {
+        "code": "NOT_FOUND",
+        "message": "Dispatch was not found."
+      },
+      "recon": "n/a",
+      "status": "PASS"
+    },
+    {
+      "id": "API-16-N5",
+      "module": "16",
+      "description": "cashier dispatch.void",
+      "expected": "FORBIDDEN",
+      "actual": {
+        "code": "FORBIDDEN",
+        "message": "You cannot void a dispatch."
+      },
+      "recon": "n/a",
+      "status": "PASS"
+    },
+    {
+      "id": "API-17-01",
+      "module": "17",
+      "description": "expenses.list",
+      "expected": "ok, 0 rows",
+      "actual": {
+        "ok": true,
+        "n": 0
+      },
+      "recon": "n/a",
+      "status": "PASS"
+    },
+    {
+      "id": "API-17-N1",
+      "module": "17",
+      "description": "cashier expenses.create",
+      "expected": "FORBIDDEN You cannot manage expenses",
+      "actual": {
+        "code": "FORBIDDEN",
+        "message": "You cannot manage expenses."
+      },
+      "recon": "n/a",
+      "status": "PASS"
+    },
+    {
+      "id": "API-17-N2",
+      "module": "17",
+      "description": "owner expenses.create amount 0",
+      "expected": "VALIDATION_ERROR; no expense row",
+      "actual": {
+        "code": "VALIDATION_ERROR",
+        "message": "Enter description and amount"
+      },
+      "recon": "n/a",
+      "status": "PASS"
+    },
+    {
+      "id": "API-17-02",
+      "module": "17",
+      "description": "halal.list",
+      "expected": "ok",
+      "actual": {
+        "ok": true,
+        "n": 0
+      },
+      "recon": "n/a",
+      "status": "PASS"
+    },
+    {
+      "id": "API-17-03",
+      "module": "17",
+      "description": "tasks.list",
+      "expected": "ok",
+      "actual": {
+        "ok": true,
+        "cats": 5,
+        "tasks": 0
+      },
+      "recon": "n/a",
+      "status": "PASS"
+    },
+    {
+      "id": "API-18-01",
+      "module": "18",
+      "description": "owner dashboard.get prototype today (PROTOTYPE_TODAY not changed)",
+      "expected": "ok, salesCount 0",
+      "actual": {
+        "ok": true,
+        "salesCount": 0,
+        "purchases": 8
+      },
+      "recon": "n/a",
+      "status": "PASS"
+    },
+    {
+      "id": "API-18-N1",
+      "module": "18",
+      "description": "cashier dashboard.get",
+      "expected": "FORBIDDEN",
+      "actual": {
+        "code": "FORBIDDEN",
+        "message": "You cannot view the dashboard."
+      },
+      "recon": "n/a",
+      "status": "PASS"
+    },
+    {
+      "id": "API-18-03",
+      "module": "18",
+      "description": "reports.sales prototype today",
+      "expected": "ok, invoices 0",
+      "actual": {
+        "ok": true,
+        "invoices": 0,
+        "revenue": 0
+      },
+      "recon": "n/a",
+      "status": "PASS"
+    },
+    {
+      "id": "API-18-N3",
+      "module": "18",
+      "description": "cashier reports.sales",
+      "expected": "FORBIDDEN",
+      "actual": {
+        "code": "FORBIDDEN",
+        "message": "You cannot view reports."
+      },
+      "recon": "n/a",
+      "status": "PASS"
+    },
+    {
+      "id": "API-18-02",
+      "module": "18",
+      "description": "bmr.list",
+      "expected": "ok",
+      "actual": {
+        "ok": true,
+        "n": 0
+      },
+      "recon": "n/a",
+      "status": "PASS"
+    },
+    {
+      "id": "API-18-04",
+      "module": "18",
+      "description": "owner pjkm.911 Nov 2026",
+      "expected": "ok",
+      "actual": {
+        "ok": true,
+        "keys": [
+          "month",
+          "bulan",
+          "tahun",
+          "columns",
+          "blocks",
+          "pages",
+          "unknown"
+        ]
+      },
+      "recon": "n/a",
+      "status": "PASS"
+    },
+    {
+      "id": "API-18-N2",
+      "module": "18",
+      "description": "cashier pjkm.911",
+      "expected": "FORBIDDEN",
+      "actual": {
+        "code": "FORBIDDEN",
+        "message": "You do not have permission to view receiving."
+      },
+      "recon": "n/a",
+      "status": "PASS"
+    },
+    {
+      "id": "API-NEG-01A",
+      "module": "5",
+      "description": "inventory.adjust invalid product without key",
+      "expected": "Idempotency key is required (checked first)",
+      "actual": {
+        "code": "VALIDATION_ERROR",
+        "message": "Idempotency key is required."
+      },
+      "recon": "n/a",
+      "status": "PASS"
+    },
+    {
+      "id": "API-NEG-01",
+      "module": "5",
+      "description": "inventory.adjust invalid product with key",
+      "expected": "NOT_FOUND Product was not found; no movement",
+      "actual": {
+        "code": "NOT_FOUND",
+        "message": "Product was not found."
+      },
+      "recon": "n/a",
+      "status": "PASS"
+    },
+    {
+      "id": "API-NEG-02",
+      "module": "5",
+      "description": "inventory.adjust invalid warehouse with key",
+      "expected": "NOT_FOUND Warehouse was not found",
+      "actual": {
+        "code": "NOT_FOUND",
+        "message": "Warehouse was not found."
+      },
+      "recon": "n/a",
+      "status": "PASS"
+    },
+    {
+      "id": "API-NEG-03",
+      "module": "5",
+      "description": "inventory.adjust qty 0 with key",
+      "expected": "VALIDATION_ERROR Enter a quantity",
+      "actual": {
+        "code": "VALIDATION_ERROR",
+        "message": "Enter a quantity"
+      },
+      "recon": "n/a",
+      "status": "PASS"
+    },
+    {
+      "id": "API-BASE-03",
+      "module": "baseline",
+      "description": "inventory unchanged after negative tests",
+      "expected": {
+        "rows": 234,
+        "mov": 53,
+        "dup": 0,
+        "diffs": 0,
+        "mismatches": [],
+        "audits": 0
+      },
+      "actual": {
+        "rows": 234,
+        "mov": 53,
+        "dup": 0,
+        "diffs": 0,
+        "mismatches": [],
+        "audits": 0
+      },
+      "recon": "opening + stock in - stock out = closing",
+      "status": "PASS"
+    },
+    {
+      "id": "API-BASE-04",
+      "module": "12",
+      "description": "PROD-20261109-001 still planned unposted",
+      "expected": "planned false",
+      "actual": {
+        "status": "planned",
+        "posted": false,
+        "n": 1
+      },
+      "recon": "n/a",
+      "status": "PASS"
+    },
+    {
+      "id": "API-BASE-05",
+      "module": "13/14/15",
+      "description": "no unintended sales, returns, or import orders",
+      "expected": "0 sales, 0 new returns, import orders unchanged",
+      "actual": {
+        "sales": 0,
+        "returns": 0,
+        "importOrders": 0,
+        "audits": 0
+      },
+      "recon": "n/a",
+      "status": "PASS"
+    }
+  ]
+}

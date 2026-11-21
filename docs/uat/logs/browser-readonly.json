@@ -1,0 +1,562 @@
+{
+  "at": "2026-11-15T06:38:29.449Z",
+  "bundle": "https://zall266.github.io/CSP_Inventory-Sales-System/assets/index-BIZo9uFM.js",
+  "results": [
+    {
+      "id": "UI-LOAD-01",
+      "module": "baseline",
+      "description": "Public DEV frontend loads with Preview mode",
+      "expected": "Preview mode badge visible",
+      "actual": "visible",
+      "screenshot": "step-18/ui-load-01.png",
+      "recon": "n/a",
+      "status": "PASS"
+    },
+    {
+      "id": "UI-LOAD-02",
+      "module": "baseline",
+      "description": "Live JS bundle filename",
+      "expected": "index-BIZo9uFM.js (pre-PR #113 Pages)",
+      "actual": "https://zall266.github.io/CSP_Inventory-Sales-System/assets/index-BIZo9uFM.js",
+      "screenshot": "step-18/ui-load-01.png",
+      "recon": "n/a",
+      "status": "PASS"
+    },
+    {
+      "id": "UI-LOAD-03",
+      "module": "18",
+      "description": "Header still shows PROTOTYPE_TODAY 10 Sept 2026 (not globally changed)",
+      "expected": "10 Sept 2026 (or 10 Sep 2026) in header; Daily Sessions uses live date separately",
+      "actual": "10 Sept 2026",
+      "screenshot": "step-18/ui-load-01.png",
+      "recon": "n/a",
+      "status": "PASS"
+    },
+    {
+      "id": "UI-18-01",
+      "module": "18",
+      "description": "Render Dashboard (/)",
+      "expected": "Page renders; no application crash; Dashboard present or substantial content",
+      "actual": "rendered (SF)",
+      "screenshot": "step-18/ui-18-01.png",
+      "recon": "display only; API recon is separate",
+      "status": "PASS"
+    },
+    {
+      "id": "UI-12-01",
+      "module": "12",
+      "description": "Render Production Planning (/manufacturing/planning)",
+      "expected": "Page renders; no application crash; Production Planning present or substantial content",
+      "actual": "rendered (SF)",
+      "screenshot": "step-12/ui-12-01.png",
+      "recon": "display only; API recon is separate",
+      "status": "PASS"
+    },
+    {
+      "id": "UI-12-02",
+      "module": "12",
+      "description": "Render Today's Production (/manufacturing/today)",
+      "expected": "Page renders; no application crash; Today's Production present or substantial content",
+      "actual": "rendered (SF)",
+      "screenshot": "step-12/ui-12-02.png",
+      "recon": "display only; API recon is separate",
+      "status": "PASS"
+    },
+    {
+      "id": "UI-12-03",
+      "module": "12",
+      "description": "Render Picking List (/manufacturing/picking)",
+      "expected": "Page renders; no application crash; Picking List present or substantial content",
+      "actual": "rendered (SF)",
+      "screenshot": "step-12/ui-12-03.png",
+      "recon": "display only; API recon is separate",
+      "status": "PASS"
+    },
+    {
+      "id": "UI-12-04",
+      "module": "12",
+      "description": "Render Complete production (/manufacturing/complete)",
+      "expected": "Page renders; no application crash; Complete production present or substantial content",
+      "actual": "rendered (SF)",
+      "screenshot": "step-12/ui-12-04.png",
+      "recon": "display only; API recon is separate",
+      "status": "PASS"
+    },
+    {
+      "id": "UI-12-05",
+      "module": "12",
+      "description": "Render Carry Forward (/manufacturing/carry-forward)",
+      "expected": "Page renders; no application crash; Carry Forward present or substantial content",
+      "actual": "rendered (SF)",
+      "screenshot": "step-12/ui-12-05.png",
+      "recon": "display only; API recon is separate",
+      "status": "PASS"
+    },
+    {
+      "id": "UI-12-06",
+      "module": "12",
+      "description": "Render Production History (/manufacturing/history)",
+      "expected": "Page renders; no application crash; Production History present or substantial content",
+      "actual": "rendered (SF)",
+      "screenshot": "step-12/ui-12-06.png",
+      "recon": "display only; API recon is separate",
+      "status": "PASS"
+    },
+    {
+      "id": "UI-13-01",
+      "module": "13",
+      "description": "Render Sales (/sales)",
+      "expected": "Page renders; no application crash; Sales present or substantial content",
+      "actual": "rendered (SF)",
+      "screenshot": "step-13/ui-13-01.png",
+      "recon": "display only; API recon is separate",
+      "status": "PASS"
+    },
+    {
+      "id": "UI-13-02",
+      "module": "13",
+      "description": "Render POS (/pos)",
+      "expected": "Page renders; no application crash; POS present or substantial content",
+      "actual": "rendered (SF)",
+      "screenshot": "step-13/ui-13-02.png",
+      "recon": "display only; API recon is separate",
+      "status": "PASS"
+    },
+    {
+      "id": "UI-13-03",
+      "module": "13",
+      "description": "Render Quotations (/sales/quotations)",
+      "expected": "Page renders; no application crash; Quotations present or substantial content",
+      "actual": "rendered (SF)",
+      "screenshot": "step-13/ui-13-03.png",
+      "recon": "display only; API recon is separate",
+      "status": "PASS"
+    },
+    {
+      "id": "UI-13-04",
+      "module": "13",
+      "description": "Render Delivery Orders (/sales/delivery-orders)",
+      "expected": "Page renders; no application crash; Delivery Orders present or substantial content",
+      "actual": "rendered (SF)",
+      "screenshot": "step-13/ui-13-04.png",
+      "recon": "display only; API recon is separate",
+      "status": "PASS"
+    },
+    {
+      "id": "UI-13-05",
+      "module": "13",
+      "description": "Render Payments (/payments)",
+      "expected": "Page renders; no application crash; Payments present or substantial content",
+      "actual": "rendered (SF)",
+      "screenshot": "step-13/ui-13-05.png",
+      "recon": "display only; API recon is separate",
+      "status": "PASS"
+    },
+    {
+      "id": "UI-14-01",
+      "module": "14",
+      "description": "Render Returns (/sales/returns)",
+      "expected": "Page renders; no application crash; Returns present or substantial content",
+      "actual": "rendered (SF)",
+      "screenshot": "step-14/ui-14-01.png",
+      "recon": "display only; API recon is separate",
+      "status": "PASS"
+    },
+    {
+      "id": "UI-14-02",
+      "module": "14",
+      "description": "Render New return (/sales/returns/new)",
+      "expected": "Page renders; no application crash; New return present or substantial content",
+      "actual": "rendered (SF)",
+      "screenshot": "step-14/ui-14-02.png",
+      "recon": "display only; API recon is separate",
+      "status": "PASS"
+    },
+    {
+      "id": "UI-15-01",
+      "module": "15",
+      "description": "Render Sales Import (/sales/import)",
+      "expected": "Page renders; no application crash; Sales Import present or substantial content",
+      "actual": "rendered (SF)",
+      "screenshot": "step-15/ui-15-01.png",
+      "recon": "display only; API recon is separate",
+      "status": "PASS"
+    },
+    {
+      "id": "UI-15-02",
+      "module": "15",
+      "description": "Render Mappings (/sales/import/mappings)",
+      "expected": "Page renders; no application crash; Mappings present or substantial content",
+      "actual": "rendered (SF)",
+      "screenshot": "step-15/ui-15-02.png",
+      "recon": "display only; API recon is separate",
+      "status": "PASS"
+    },
+    {
+      "id": "UI-16-01",
+      "module": "16",
+      "description": "Render Dispatch (/sales/dispatch)",
+      "expected": "Page renders; no application crash; Dispatch present or substantial content",
+      "actual": "rendered (SF)",
+      "screenshot": "step-16/ui-16-01.png",
+      "recon": "display only; API recon is separate",
+      "status": "PASS"
+    },
+    {
+      "id": "UI-16-02",
+      "module": "16",
+      "description": "Render Vehicles (/settings/vehicles)",
+      "expected": "Page renders; no application crash; Vehicles present or substantial content",
+      "actual": "rendered (SF)",
+      "screenshot": "step-16/ui-16-02.png",
+      "recon": "display only; API recon is separate",
+      "status": "PASS"
+    },
+    {
+      "id": "UI-17-01",
+      "module": "17",
+      "description": "Render Halal Compliance (/compliance/halal)",
+      "expected": "Page renders; no application crash; Halal Compliance present or substantial content",
+      "actual": "rendered (SF)",
+      "screenshot": "step-17/ui-17-01.png",
+      "recon": "display only; API recon is separate",
+      "status": "PASS"
+    },
+    {
+      "id": "UI-17-02",
+      "module": "17",
+      "description": "Render My Tasks (/tasks)",
+      "expected": "Page renders; no application crash; My Tasks present or substantial content",
+      "actual": "rendered (SF)",
+      "screenshot": "step-17/ui-17-02.png",
+      "recon": "display only; API recon is separate",
+      "status": "PASS"
+    },
+    {
+      "id": "UI-17-03",
+      "module": "17",
+      "description": "Render Expenses (/expenses)",
+      "expected": "Page renders; no application crash; Expenses present or substantial content",
+      "actual": "rendered (SF)",
+      "screenshot": "step-17/ui-17-03.png",
+      "recon": "display only; API recon is separate",
+      "status": "PASS"
+    },
+    {
+      "id": "UI-18-02",
+      "module": "18",
+      "description": "Render Sales Reports (/reports/sales)",
+      "expected": "Page renders; no application crash; Sales Reports present or substantial content",
+      "actual": "rendered (SF)",
+      "screenshot": "step-18/ui-18-02.png",
+      "recon": "display only; API recon is separate",
+      "status": "PASS"
+    },
+    {
+      "id": "UI-18-03",
+      "module": "18",
+      "description": "Render Purchase Reports (/reports/purchases)",
+      "expected": "Page renders; no application crash; Purchase Reports present or substantial content",
+      "actual": "rendered (SF)",
+      "screenshot": "step-18/ui-18-03.png",
+      "recon": "display only; API recon is separate",
+      "status": "PASS"
+    },
+    {
+      "id": "UI-18-04",
+      "module": "18",
+      "description": "Render Inventory Reports (/reports/inventory)",
+      "expected": "Page renders; no application crash; Inventory Reports present or substantial content",
+      "actual": "rendered (SF)",
+      "screenshot": "step-18/ui-18-04.png",
+      "recon": "display only; API recon is separate",
+      "status": "PASS"
+    },
+    {
+      "id": "UI-18-05",
+      "module": "18",
+      "description": "Render Profit Reports (/reports/profit)",
+      "expected": "Page renders; no application crash; Profit Reports present or substantial content",
+      "actual": "rendered (SF)",
+      "screenshot": "step-18/ui-18-05.png",
+      "recon": "display only; API recon is separate",
+      "status": "PASS"
+    },
+    {
+      "id": "UI-18-06",
+      "module": "18",
+      "description": "Render Manufacturing Reports (/reports/manufacturing)",
+      "expected": "Page renders; no application crash; Manufacturing Reports present or substantial content",
+      "actual": "rendered (SF)",
+      "screenshot": "step-18/ui-18-06.png",
+      "recon": "display only; API recon is separate",
+      "status": "PASS"
+    },
+    {
+      "id": "UI-18-07",
+      "module": "18",
+      "description": "Render PJKM Records (/pjkm)",
+      "expected": "Page renders; no application crash; PJKM Records present or substantial content",
+      "actual": "rendered (SF)",
+      "screenshot": "step-18/ui-18-07.png",
+      "recon": "display only; API recon is separate",
+      "status": "PASS"
+    },
+    {
+      "id": "UI-18-08",
+      "module": "18",
+      "description": "Render BMR Records (/compliance/bmr)",
+      "expected": "Page renders; no application crash; BMR Records present or substantial content",
+      "actual": "rendered (SF)",
+      "screenshot": "step-18/ui-18-08.png",
+      "recon": "display only; API recon is separate",
+      "status": "PASS"
+    },
+    {
+      "id": "UI-18-09",
+      "module": "18",
+      "description": "Render Stock Movements (/stock-movements)",
+      "expected": "Page renders; no application crash; Stock Movements present or substantial content",
+      "actual": "rendered (SF)",
+      "screenshot": "step-18/ui-18-09.png",
+      "recon": "display only; API recon is separate",
+      "status": "PASS"
+    },
+    {
+      "id": "UI-18-10",
+      "module": "18",
+      "description": "Render 9.1.1 (/pjkm/9.1.1)",
+      "expected": "Page renders; no application crash; 9.1.1 present or substantial content",
+      "actual": "rendered (PJKM 9.1.1 preview)",
+      "screenshot": "step-18/ui-18-10.png",
+      "recon": "display only; API recon is separate",
+      "status": "PASS"
+    },
+    {
+      "id": "UI-12-07",
+      "module": "12",
+      "description": "Planning list shows PROD-20261109-001 with 9 Nov 2026, not Invalid Date",
+      "expected": "PROD-20261109-001 and 09 Nov 2026",
+      "actual": {
+        "hasLocked": false,
+        "dateOk": false
+      },
+      "screenshot": "step-12/ui-12-07-planning-date.png",
+      "recon": "matches sessions.list productionDate 2026-11-09",
+      "status": "FAIL"
+    },
+    {
+      "id": "UI-12-09",
+      "module": "12",
+      "description": "Planning creation form is visible (not submitted)",
+      "expected": "New daily session form + Create session button present; not clicked",
+      "actual": "form visible; Create session not clicked",
+      "screenshot": "step-12/ui-12-01.png",
+      "recon": "n/a",
+      "status": "PASS"
+    },
+    {
+      "id": "UI-12-08",
+      "module": "12",
+      "description": "Today's Production uses live Malaysia date, not frozen 10 Sept 2026",
+      "expected": "Not frozen prototype 10 Sept 2026 as the operational day",
+      "actual": "Today's Production",
+      "screenshot": "step-12/ui-12-08-today-date.png",
+      "recon": "live Malaysia operational date",
+      "status": "PASS"
+    },
+    {
+      "id": "UI-12-10",
+      "module": "12",
+      "description": "History search filters to PROD-20261109-001",
+      "expected": "Search shows the locked session",
+      "actual": "SF\nStockFlow\nInventory & Sales Management\nHOME\nDashboard\nSALES\nPURCHASES\nCOMPLIANCE\nINVENTORY\nMANUFACTURING\nManufacturing Dashboard\nToday's Production\nPacking /",
+      "screenshot": "step-12/ui-12-10-history-search.png",
+      "recon": "same reference as API-12-01",
+      "status": "FAIL"
+    },
+    {
+      "id": "UI-12-11",
+      "module": "12",
+      "description": "Session detail for PROD-20261109-001 (read-only; Accept not clicked)",
+      "expected": "Detail renders planned session; Accept not exercised",
+      "actual": "SF\nStockFlow\nInventory & Sales Management\nHOME\nDashboard\nSALES\nPURCHASES\nCOMPLIANCE\nINVENTORY\nMANUFACTURING\nManufacturing Dashboard\nToday's Production\nPacking / Assembly\nCarry Forw",
+      "screenshot": "step-12/ui-12-11-session-detail.png",
+      "recon": "status planned unposted",
+      "status": "FAIL"
+    },
+    {
+      "id": "UI-12-12",
+      "module": "12",
+      "description": "Global header search finds the locked session",
+      "expected": "Search results include PROD-20261109-001 after hydrate",
+      "actual": "Input contained the query; results overlay: No results for PROD-20261109-001 (seed overlay, live session not in client state)",
+      "screenshot": "step-12/ui-12-12-global-search.png",
+      "recon": "API-12-01 has the session; UI search does not",
+      "status": "FAIL"
+    },
+    {
+      "id": "UI-13-06",
+      "module": "13",
+      "description": "Sales list search (no live invoices expected)",
+      "expected": "Page remains stable; empty or matching rows; no crash",
+      "actual": "SF\nStockFlow\nInventory & Sales Management\nHOME\nDashboard\nSALES\nSales\nSales Import\nQuotations\nDelivery Orders\nDispatch\nPOS\nReturns\nAgents\nCustomers\nPURCHASES\nCOMPLIANCE\nINVENTORY\nMANUFACTURING\nTASKS\nPRODUCTS\nREPORTS\nFINAN",
+      "screenshot": "step-13/ui-13-06-sales-search.png",
+      "recon": "API sales.list n=0",
+      "status": "PASS"
+    },
+    {
+      "id": "UI-13-07",
+      "module": "13",
+      "description": "Customer payments display locked closeout PAY rows",
+      "expected": "PAY-000001 and/or PAY-000002 after hydrate, or empty table if overlay not loaded",
+      "actual": "SF\nStockFlow\nInventory & Sales Management\nHOME\nDashboard\nSALES\nPURCHASES\nCOMPLIANCE\nINVENTORY\nMANUFACTURING\nTASKS\nPRODUCTS\nREPORTS\nFINANCE\nPayments\nReceivables\nPayables\nExpenses\nSETTINGS\n⌘K\nAll wareho",
+      "screenshot": "step-13/ui-13-07-payments.png",
+      "recon": "API payments length 2",
+      "status": "FAIL"
+    },
+    {
+      "id": "UI-13-08",
+      "module": "13",
+      "description": "POS catalogue renders (no checkout)",
+      "expected": "POS search / products; Charge/Pay not clicked",
+      "actual": "SF\nStockFlow\nInventory & Sales Management\nHOME\nDashboard\nSALES\nSales\nSales Import\nQuotations\nDelivery Orders\nDispatch\nPOS\nReturns\nAgents\nCustomers\nPURCHASES\nCOMPLIANCE\nINVENTORY\nMANUFACTURING\nTASKS\nPR",
+      "screenshot": "step-13/ui-13-08-pos.png",
+      "recon": "n/a",
+      "status": "PASS"
+    },
+    {
+      "id": "UI-14-03",
+      "module": "14",
+      "description": "Returns list + search; New Return not posted",
+      "expected": "List renders; no confirmed returns required",
+      "actual": "SF\nStockFlow\nInventory & Sales Management\nHOME\nDashboard\nSALES\nSales\nSales Import\nQuotations\nDelivery Orders\nDispatch\nPOS\nReturns\nAgents\nCustomers\nPURCHASES\nCOMPLIANCE\nINVENTORY\nMANUFACTURING\nTASKS\nPRODUCTS\nREPORTS\nFINAN",
+      "screenshot": "step-14/ui-14-03-search.png",
+      "recon": "API salesReturns n",
+      "status": "PASS"
+    },
+    {
+      "id": "UI-15-03",
+      "module": "15",
+      "description": "Sales import accounts / preview (no ingest, no confirm)",
+      "expected": "Import screen renders; confirm/import not clicked",
+      "actual": "SF\nStockFlow\nInventory & Sales Management\nHOME\nDashboard\nSALES\nSales\nSales Import\nQuotations\nDelivery Orders\nDispatch\nPOS\nReturns\nAgents\nCustomers\nPURCHASES\nCOMPLIANCE\nINVENTORY\nMANUFACTURING\nTASKS\nPRODUCTS\nREPORTS\nFINANCE\nSETTINGS\n⌘K\nAll w",
+      "screenshot": "step-15/ui-15-03-accounts.png",
+      "recon": "API salesImportAccounts",
+      "status": "PASS"
+    },
+    {
+      "id": "UI-16-03",
+      "module": "16",
+      "description": "Dispatch list New Dispatch button present for owner; not clicked",
+      "expected": "Page renders; New Dispatch not clicked",
+      "actual": "New Dispatch visible, not clicked",
+      "screenshot": "step-16/ui-16-01.png",
+      "recon": "API dispatches 0",
+      "status": "PASS"
+    },
+    {
+      "id": "UI-17-05",
+      "module": "17",
+      "description": "Halal listing + material search",
+      "expected": "Halal page filters without write",
+      "actual": "SF\nStockFlow\nInventory & Sales Management\nHOME\nDashboard\nSALES\nPURCHASES\nCOMPLIANCE\nHalal Compliance\nPJKM Records\nBMR Records\nINVENTORY\nMANUFACTURING\nTASKS\nPRODUCTS\nREPORTS\nFINANCE\nSETTINGS\n⌘K\nAll warehouses\nMain Warehou",
+      "screenshot": "step-17/ui-17-05-halal-search.png",
+      "recon": "API halal.list ok",
+      "status": "PASS"
+    },
+    {
+      "id": "UI-17-04",
+      "module": "17",
+      "description": "Expenses Add button on pre-PR #113 Pages bundle",
+      "expected": "BLOCKED until #113 merges; Add expense currently visible for default owner role",
+      "actual": "Add expense visible",
+      "screenshot": "step-17/ui-17-03.png",
+      "recon": "API expenses 0; UI permission not the #113 gated control",
+      "status": "BLOCKED"
+    },
+    {
+      "id": "UI-18-11",
+      "module": "18",
+      "description": "Sales report KPIs on prototype date range (PROTOTYPE_TODAY unchanged)",
+      "expected": "Sales Reports page; invoices/revenue display; do not change PROTOTYPE_TODAY",
+      "actual": "SF\nStockFlow\nInventory & Sales Management\nHOME\nDashboard\nSALES\nPURCHASES\nCOMPLIANCE\nINVENTORY\nMANUFACTURING\nTASKS\nPRODUCTS\nREPORTS\nSales Reports\nPurchase Reports\nInventory Reports\nProfit Reports\nManuf",
+      "screenshot": "step-18/ui-18-11-sales-report.png",
+      "recon": "API reports.sales invoices",
+      "status": "PASS"
+    },
+    {
+      "id": "UI-18-N1",
+      "module": "18",
+      "description": "Cashier dashboard UI (Pages pre-#113). API is FORBIDDEN; UI may still show local overlay fallback",
+      "expected": "Document actual UI. Do not claim API deny from this screenshot alone",
+      "actual": "SF\nStockFlow\nInventory & Sales Management\nHOME\nDashboard\nSALES\nPURCHASES\nINVENTORY\nMANUFACTURING\nTASKS\nPRODUCTS\nREPORTS\nFINANCE\nSETTINGS\n⌘K\nAll warehouses\nMain Warehouse\nShop\nOutlet 1\nQuick Add\n10 Sept 2026\nPREVIEW MODE\nSN\nSiti Nurhaliza\nCashier\nGood afternoon, Siti Nurhaliza\n\nHere's what's happening with your business today.\n\n7 Days\n30 Days\n90 Days\nCustom\nTOTAL SALES\nRM 42,516\n24 invoices\nGROSS P",
+      "screenshot": "step-18/ui-18-cashier-dashboard.png",
+      "recon": "API-18-N1 FORBIDDEN; UI overlay is local math",
+      "status": "PASS"
+    },
+    {
+      "id": "UI-17-N1",
+      "module": "17",
+      "description": "Cashier expenses page on pre-PR #113 bundle",
+      "expected": "Add expense still present until #113 Pages deploy — BLOCKED for UI permission PASS",
+      "actual": "Add expense visible",
+      "screenshot": "step-17/ui-17-cashier-expenses.png",
+      "recon": "API-17-N1 FORBIDDEN on create; UI not gated on live Pages",
+      "status": "BLOCKED"
+    },
+    {
+      "id": "UI-18-N2",
+      "module": "18",
+      "description": "Cashier sales reports UI vs API FORBIDDEN",
+      "expected": "Document UI. API reports.view is FORBIDDEN; page may still render local overlay",
+      "actual": "SF\nStockFlow\nInventory & Sales Management\nHOME\nDashboard\nSALES\nPURCHASES\nINVENTORY\nMANUFACTURING\nTASKS\nPRODUCTS\nREPORTS\nSales Reports\nPurchase Reports\nInventory Reports\nProfit Reports\nManufacturing Reports\nFINANCE\nSETTINGS\n⌘K\nAll warehouses\nMain Warehouse\nShop\nOutlet 1\nQuick Add\n",
+      "screenshot": "step-18/ui-18-cashier-reports.png",
+      "recon": "API-18-N3 FORBIDDEN",
+      "status": "PASS"
+    },
+    {
+      "id": "UI-16-N1",
+      "module": "16",
+      "description": "Cashier dispatch page (do not confirm)",
+      "expected": "Permission denied or list without New Dispatch depending on delivery.view",
+      "actual": "SF\nStockFlow\nInventory & Sales Management\nHOME\nDashboard\nSALES\nSales\nSales Import\nQuotations\nDelivery Orders\nPOS\nCustomers\nPURCHASES\nINVENTORY\nMANUFACTURING\nTASKS\nPRODUCTS\nREPORTS\nFINANCE\nSETTINGS\n⌘K\nAll warehouses\nMain Warehouse\nShop\nOutle",
+      "screenshot": "step-16/ui-16-cashier-dispatch.png",
+      "recon": "API-16-N2 FORBIDDEN on create",
+      "status": "PASS"
+    },
+    {
+      "id": "UI-12-N1",
+      "module": "12",
+      "description": "Cashier Today's Production (read-only screenshot; no Accept click)",
+      "expected": "Page renders; Accept not exercised",
+      "actual": "screenshot captured; Accept not clicked",
+      "screenshot": "step-12/ui-12-cashier-today.png",
+      "recon": "API-12-N2 FORBIDDEN",
+      "status": "PASS"
+    },
+    {
+      "id": "UI-14-N1",
+      "module": "14",
+      "description": "Cashier returns list",
+      "expected": "Page renders or permission denied; no save",
+      "actual": "SF\nStockFlow\nInventory & Sales Management\nHOME\nDashboard\nSALES\nSales\nSales Import\nQuotations\nDelivery Orders\nPOS\nCustomers\nPURCHASES\nINVENTORY\nMANUFACTURING\nTASKS\nPRODUCTS\nREPORTS\nFINANCE\nSETTINGS\n⌘K\n",
+      "screenshot": "step-14/ui-14-cashier-returns.png",
+      "recon": "API-14-N1 FORBIDDEN on save",
+      "status": "PASS"
+    },
+    {
+      "id": "UI-SAFE-01",
+      "module": "baseline",
+      "description": "Write-capable buttons observed but not clicked in this run",
+      "expected": "No Accept/Start/Complete/Confirm/Save/Add expense clicks",
+      "actual": {
+        "observed": [],
+        "clicked": []
+      },
+      "screenshot": "n/a",
+      "recon": "inventory snapshot compared in API runner",
+      "status": "PASS"
+    }
+  ]
+}
