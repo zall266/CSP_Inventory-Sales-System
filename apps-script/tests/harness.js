@@ -107,11 +107,26 @@ function nodeUtilities() {
 function shouldMintHarnessSession(context, request) {
   if (!request || !request.payload || request.payload.sessionToken !== undefined) return false
   if (context.isPublicAuthAction(request.action)) return false
+  if (typeof context.isSetupAuthAction === 'function' && context.isSetupAuthAction(request.action)) return false
   const actor = request.payload.actorUserId
   if (typeof actor === 'string' && actor.trim()) return true
   if (actor === '' || actor === null) return false
   const action = String(request.action || '')
   return /\.(bootstrap|get|list)$/.test(action) || action === 'settings.get'
+}
+
+export const HARNESS_IDENTITY_BOOTSTRAP_SECRET = 'a'.repeat(64)
+
+export function harnessIdentityBootstrapHash() {
+  return crypto.createHash('sha256').update(HARNESS_IDENTITY_BOOTSTRAP_SECRET).digest('hex')
+}
+
+function injectHarnessBootstrap(context, request) {
+  if (!request || !request.payload || typeof request.payload !== 'object') return
+  if (typeof context.isSetupAuthAction !== 'function' || !context.isSetupAuthAction(request.action)) return
+  if (context.AUTH_INJECT_TEST_BOOTSTRAP === false) return
+  if (request.payload.setupAuthorization !== undefined) return
+  request.payload.setupAuthorization = HARNESS_IDENTITY_BOOTSTRAP_SECRET
 }
 
 export function loadBackend(globals = {}) {
@@ -154,6 +169,7 @@ export function loadBackend(globals = {}) {
     ...globals,
     Utilities: utilities,
     AUTH_ALLOW_TEST_SESSION: true,
+    AUTH_INJECT_TEST_BOOTSTRAP: true,
   }
   context.globalThis = context
   vm.createContext(context)
@@ -163,6 +179,7 @@ export function loadBackend(globals = {}) {
   context.issueHarnessSession = function issueHarnessSession(request, backend) {
     if (!request || !request.payload || request.payload.sessionToken !== undefined) return ''
     if (context.isPublicAuthAction(request.action)) return ''
+    if (typeof context.isSetupAuthAction === 'function' && context.isSetupAuthAction(request.action)) return ''
     try {
       const auth = backend && backend.auth
         ? backend.auth
@@ -179,6 +196,7 @@ export function loadBackend(globals = {}) {
   const innerHandle = context.handleRequest
   const tokenCache = new WeakMap()
   context.handleRequest = function handleRequestWithTestSession(request, backend) {
+    injectHarnessBootstrap(context, request)
     if (shouldMintHarnessSession(context, request) && backend && backend.sheets) {
       const spreadsheet = backend.sheets.openSpreadsheet()
       const cacheKey = spreadsheet.store || spreadsheet
@@ -205,6 +223,9 @@ export function memoryProperties(initial) {
     setProperty(key, value) {
       store[key] = String(value)
     },
+    deleteProperty(key) {
+      delete store[key]
+    },
   }
 }
 
@@ -214,6 +235,7 @@ export function devProperties() {
     SPREADSHEET_ID: 'sheet-id',
     DRIVE_ROOT_ID: 'drive-id',
     TIMEZONE: 'Asia/Kuala_Lumpur',
+    IDENTITY_BOOTSTRAP_HASH: harnessIdentityBootstrapHash(),
   })
 }
 

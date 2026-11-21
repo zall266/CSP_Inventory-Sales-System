@@ -16,7 +16,7 @@ test('login and staff management screens exist and do not store passwords', () =
   assert.match(login, /Password/)
   assert.match(login, /Show/)
   assert.match(login, /auth\.login/)
-  assert.match(login, /preparePasswordVerifier|verifierForUsername/)
+  assert.match(login, /preparePasswordVerifier|proofForUsername/)
   assert.match(users, /Reset password/)
   assert.match(users, /auth\.resetPassword/)
   assert.match(header, /Sign out/)

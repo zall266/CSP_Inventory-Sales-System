@@ -226,6 +226,9 @@ function createIdentityService(deps) {
   function bootstrap(spreadsheet, payload, requestId) {
     var current = load(spreadsheet);
     if (!current.empty) throw appError('CONFLICT', 'Identity is already initialized.');
+    if (!authVerifyIdentityBootstrapSecret(payload.setupAuthorization, Date.now())) {
+      throw appError('UNAUTHORIZED', 'Setup authorization is required.');
+    }
     if (!Array.isArray(payload.users) || !payload.users.length || !Array.isArray(payload.roles) || !payload.roles.length || !Array.isArray(payload.departments) || !payload.departments.length) {
       throw appError('VALIDATION_ERROR', 'Identity bootstrap is incomplete.');
     }
@@ -310,7 +313,14 @@ function createIdentityService(deps) {
       after: String(users.length) + ' users',
       requestId: requestId
     });
-    return load(spreadsheet);
+    var loaded = load(spreadsheet);
+    if (loaded.empty) throw appError('INTERNAL_ERROR', 'Identity bootstrap did not complete.');
+    var ownerReady = loaded.users.some(function (user) {
+      return user.status === 'active' && isOwnerUser(loaded, user);
+    });
+    if (!ownerReady) throw appError('INTERNAL_ERROR', 'Identity bootstrap did not complete.');
+    authConsumeIdentityBootstrapSecret();
+    return loaded;
   }
 
   function createUser(spreadsheet, payload, requestId) {

@@ -22,7 +22,6 @@ const AUTH_PUBLIC_ACTIONS = new Set([
   'auth.challenge',
   'auth.status',
   'auth.bootstrapOwner',
-  'identity.bootstrap',
 ])
 
 export function identityApiUrl() {

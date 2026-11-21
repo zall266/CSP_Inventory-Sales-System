@@ -66,3 +66,25 @@ export async function preparePasswordVerifier(password: string) {
     passwordVerifier: await stretchPassword(password, salt, AUTH_PBKDF2_ITERATIONS),
   }
 }
+
+export async function hmacLoginProof(
+  verifierHex: string,
+  challengeId: string,
+  challenge: string,
+  username: string,
+  purpose: string,
+) {
+  if (!globalThis.crypto?.subtle) {
+    throw new Error('Secure password hashing is unavailable in this browser.')
+  }
+  const key = await globalThis.crypto.subtle.importKey(
+    'raw',
+    hexToBytes(verifierHex),
+    { name: 'HMAC', hash: 'SHA-256' },
+    false,
+    ['sign'],
+  )
+  const message = `${challengeId}\n${challenge}\n${String(username || '').trim().toLowerCase()}\n${purpose}`
+  const signature = await globalThis.crypto.subtle.sign('HMAC', key, new TextEncoder().encode(message))
+  return bytesToHex(new Uint8Array(signature))
+}

@@ -17,7 +17,10 @@ var AUTH_PUBLIC_ACTIONS = {
   'auth.status': true,
   'auth.challenge': true,
   'auth.login': true,
-  'auth.bootstrapOwner': true,
+  'auth.bootstrapOwner': true
+};
+
+var AUTH_SETUP_ACTIONS = {
   'identity.bootstrap': true
 };
 
@@ -32,6 +35,10 @@ var AUTH_REQUIRED = 'Sign in is required.';
 
 function isPublicAuthAction(action) {
   return Boolean(AUTH_PUBLIC_ACTIONS[String(action || '')]);
+}
+
+function isSetupAuthAction(action) {
+  return Boolean(AUTH_SETUP_ACTIONS[String(action || '')]);
 }
 
 function createAuthService(deps) {
@@ -167,6 +174,7 @@ function createAuthService(deps) {
     record.salt = hashed.salt;
     record.iterations = hashed.iterations;
     record.algorithm = hashed.algorithm;
+    record.wrappedVerifier = hashed.wrappedVerifier || '';
     record.mustChange = Boolean(mustChange);
     record.passwordUpdatedAt = nowIso();
     record.failedCount = 0;
@@ -310,24 +318,86 @@ function createAuthService(deps) {
     throw appError('UNAUTHORIZED', AUTH_GENERIC_LOGIN);
   }
 
-  function challenge(spreadsheet, payload) {
+  function pruneChallenges(rows, now) {
+    var cutoff = now.getTime() - 60 * 60 * 1000;
+    return rows.filter(function (row) {
+      if (row.consumedAt && Date.parse(row.consumedAt) < cutoff) return false;
+      if (Date.parse(row.expiresAt) < cutoff) return false;
+      return true;
+    });
+  }
+
+  function issueChallenge(spreadsheet, payload) {
     var username = text(payload.username).trim().toLowerCase();
+    var purpose = text(payload.purpose).trim() || AUTH_LOGIN_PURPOSE;
     if (!username) throw appError('VALIDATION_ERROR', 'Username and password are required.');
+    if (purpose !== AUTH_LOGIN_PURPOSE && purpose !== AUTH_PASSWORD_CHANGE_PURPOSE) {
+      throw appError('VALIDATION_ERROR', 'Password is invalid.');
+    }
+    var now = new Date();
+    var challenge = authBytesToHex(authRandomBytes(32));
+    var row = {
+      id: createId(),
+      username: username,
+      challengeHash: authHashToken(challenge),
+      purpose: purpose,
+      createdAt: now.toISOString(),
+      expiresAt: new Date(now.getTime() + AUTH_CHALLENGE_TTL_MS).toISOString(),
+      consumedAt: ''
+    };
+    var rows = pruneChallenges(repository.readChallenges(spreadsheet), now);
+    rows.push(row);
+    repository.writeChallenges(spreadsheet, rows);
     var credential = findCredential(repository.readCredentials(spreadsheet), username);
     return {
+      challengeId: row.id,
+      challenge: challenge,
       salt: credential && credential.salt ? credential.salt : authDummyChallengeSalt(username),
       iterations: AUTH_PBKDF2_ITERATIONS,
-      algorithm: 'pbkdf2-hmac-sha256'
+      algorithm: 'pbkdf2-hmac-sha256',
+      purpose: purpose
     };
+  }
+
+  function consumeChallenge(spreadsheet, payload, expectedPurpose, username) {
+    var challengeId = text(payload.challengeId).trim();
+    var challenge = text(payload.challenge).trim().toLowerCase();
+    var proof = text(payload.loginProof).trim().toLowerCase();
+    if (!challengeId || !authIsHex(challenge, 32) || !authIsHex(proof, 32)) {
+      throw appError('VALIDATION_ERROR', 'Username and password are required.');
+    }
+    var now = new Date();
+    var rows = repository.readChallenges(spreadsheet);
+    var found = null;
+    var index = -1;
+    var i;
+    for (i = 0; i < rows.length; i += 1) {
+      if (rows[i].id === challengeId) {
+        found = rows[i];
+        index = i;
+        break;
+      }
+    }
+    if (!found || found.consumedAt || found.username !== username || found.purpose !== expectedPurpose) {
+      throw appError('UNAUTHORIZED', AUTH_GENERIC_LOGIN);
+    }
+    if (Date.parse(found.expiresAt) <= now.getTime()) {
+      found.consumedAt = now.toISOString();
+      repository.writeChallenges(spreadsheet, rows);
+      throw appError('UNAUTHORIZED', AUTH_GENERIC_LOGIN);
+    }
+    if (found.challengeHash !== authHashToken(challenge)) {
+      throw appError('UNAUTHORIZED', AUTH_GENERIC_LOGIN);
+    }
+    found.consumedAt = now.toISOString();
+    rows[index] = found;
+    repository.writeChallenges(spreadsheet, rows);
+    return { id: found.id, challenge: challenge, purpose: found.purpose };
   }
 
   function login(spreadsheet, payload, requestId) {
     var username = text(payload.username).trim().toLowerCase();
-    var hasVerifier = Boolean(text(payload.passwordVerifier).trim());
-    var password = payload.password;
-    if (!username || (!hasVerifier && (typeof password !== 'string' || !password))) {
-      throw appError('VALIDATION_ERROR', 'Username and password are required.');
-    }
+    if (!username) throw appError('VALIDATION_ERROR', 'Username and password are required.');
     var snapshot = identitySnapshot(spreadsheet);
     var credentials = repository.readCredentials(spreadsheet);
     var credential = findCredential(credentials, username);
@@ -343,8 +413,14 @@ function createAuthService(deps) {
       });
       throw appError('FORBIDDEN', AUTH_GENERIC_LOGIN);
     }
+    var consumed;
+    try {
+      consumed = consumeChallenge(spreadsheet, payload, AUTH_LOGIN_PURPOSE, username);
+    } catch (error) {
+      return failLogin(spreadsheet, credentials, credential, username, 'invalid_challenge', requestId);
+    }
     var user = credential ? findUser(snapshot, credential.userId) : findUserByUsername(snapshot, username);
-    if (!credential || !matchesSecret(credential, payload, password)) {
+    if (!credential || !authVerifyLoginProof(credential, payload.loginProof, consumed.id, consumed.challenge, username, consumed.purpose)) {
       return failLogin(spreadsheet, credentials, credential, username, 'invalid_credentials', requestId);
     }
     if (!user || user.status !== 'active') {
@@ -553,9 +629,9 @@ function createAuthService(deps) {
   function changePassword(spreadsheet, payload, requestId, resolved) {
     var currentPassword = payload.currentPassword;
     var nextPassword = payload.newPassword;
-    var currentVerifier = text(payload.currentPasswordVerifier).trim();
     var nextVerifier = text(payload.passwordVerifier).trim();
-    if (!currentVerifier && typeof currentPassword !== 'string') {
+    var hasProof = Boolean(text(payload.loginProof).trim());
+    if (!hasProof && typeof currentPassword !== 'string') {
       throw appError('VALIDATION_ERROR', 'Current and new passwords are required.');
     }
     if (!nextVerifier && typeof nextPassword !== 'string') {
@@ -563,7 +639,18 @@ function createAuthService(deps) {
     }
     var credentials = repository.readCredentials(spreadsheet);
     var credential = findCredentialByUserId(credentials, resolved.user.id);
-    if (!credential || !matchesSecret(credential, { passwordVerifier: currentVerifier }, currentPassword)) {
+    var currentOk = false;
+    if (credential && hasProof) {
+      try {
+        var consumed = consumeChallenge(spreadsheet, payload, AUTH_PASSWORD_CHANGE_PURPOSE, text(resolved.user.email).trim().toLowerCase());
+        currentOk = authVerifyLoginProof(credential, payload.loginProof, consumed.id, consumed.challenge, resolved.user.email, consumed.purpose);
+      } catch (error) {
+        currentOk = false;
+      }
+    } else if (credential) {
+      currentOk = matchesSecret(credential, {}, currentPassword);
+    }
+    if (!credential || !currentOk) {
       recordEvent(spreadsheet, {
         actorUserId: resolved.user.id,
         targetUserId: resolved.user.id,
@@ -574,10 +661,7 @@ function createAuthService(deps) {
       });
       throw appError('FORBIDDEN', 'Current password is incorrect.');
     }
-    if (currentVerifier && nextVerifier && currentVerifier === nextVerifier) {
-      throw appError('VALIDATION_ERROR', 'New password must be different.');
-    }
-    if (!currentVerifier && !nextVerifier && currentPassword === nextPassword) {
+    if (!nextVerifier && currentPassword === nextPassword) {
       throw appError('VALIDATION_ERROR', 'New password must be different.');
     }
     setPasswordFromPayload(credential, payload, nextPassword, resolved.user.id, false);
@@ -744,7 +828,7 @@ function createAuthService(deps) {
     var requestId = request.requestId ? String(request.requestId) : '';
     return locked(function (spreadsheet) {
       if (action === 'auth.status') return okEnvelope(status(spreadsheet));
-      if (action === 'auth.challenge') return okEnvelope(challenge(spreadsheet, payload));
+      if (action === 'auth.challenge') return okEnvelope(issueChallenge(spreadsheet, payload));
       if (action === 'auth.login') return okEnvelope(login(spreadsheet, payload, requestId));
       if (action === 'auth.bootstrapOwner') return okEnvelope(bootstrapOwner(spreadsheet, payload, requestId));
       var resolved = parseSession(spreadsheet, payload.sessionToken);

@@ -88,7 +88,7 @@ Do not treat `localStorage` as a session. Prototype `switchUser` is a no-op when
 
 The router validates the session on every non-public action and **overwrites** `payload.actorUserId` from the session user. Client-supplied role, permission arrays, and `actorUserId` are not trusted.
 
-Public actions: `system.health`, `system.ping`, `auth.status`, `auth.challenge`, `auth.login`, `auth.bootstrapOwner`, `identity.bootstrap` (empty identity only; a second bootstrap still returns `CONFLICT`).
+Public actions: `system.health`, `system.ping`, `auth.status`, `auth.challenge`, `auth.login`, `auth.bootstrapOwner`. `identity.bootstrap` is a one-time setup action and requires an out-of-band setup authorization. It is not a public SPA action.
 
 Username is the existing unique email. Owner / Supervisor / Staff map onto the existing role matrix (`legacyRole` owner / manager / staff). Permission keys are unchanged. Owner-only actions remain Owner-only (`users.*` admin, `roles.manage`, `auth.resetPassword`, `auth.events`, `auth.accounts`).
 
@@ -168,16 +168,16 @@ Findings:
 ## Bootstrap and test-session isolation
 
 - `auth.bootstrapOwner` is public only while `AuthCredentials` is empty, Owner email matches, account is active. Second call `FORBIDDEN`. Non-Owner username `FORBIDDEN`. Script lock serializes concurrent attempts.
-- `identity.bootstrap` is public only when identity is empty; second call `CONFLICT`.
+- `identity.bootstrap` is not public. It requires `IDENTITY_BOOTSTRAP_HASH` in Script Properties and consumes that hash after a successful write. Second call `CONFLICT`. See `docs/auth-security-hardening-v2.md`.
 - `auth.status` does not list users or emails.
 - `issueHarnessSession` was removed from production Apps Script. `issueTestSession` returns empty unless `AUTH_ALLOW_TEST_SESSION === true` (Node harness only).
 
 ## Residual risks
 
 - Token in JSON / `sessionStorage` (XSS). This is **not** a fully cookie-secure session.
-- Password stretch is enforced by the official SPA and stored peppered hash. Apps Script does not re-run 600,000 PBKDF2 rounds. A captured verifier can be replayed like a captured password.
+- Password stretch is enforced by the official SPA and stored peppered hash. Apps Script does not re-run 600,000 PBKDF2 rounds. Login now requires a single-use challenge-bound HMAC proof, so a captured HTTP login request cannot be replayed. A captured PBKDF2 DK can still answer a fresh challenge (MITIGATED, not FIXED).
 - Google Sheets is not an ACID user store; script locks serialize writes.
-- `identity.bootstrap` of a completely empty spreadsheet remains callable without a session (first writer). DEV identity is already initialized.
+- Empty identity no longer allows anonymous `identity.bootstrap`. First-time init requires the owner-provisioned setup hash. Residual: a secret submitted through `/exec` is visible to anyone who can read that one request.
 - Owner bootstrap is available only while the credentials sheet is empty. Anyone who knows the Owner email could race that one-time step (lock serializes writers).
 - Web app access is still `ANYONE_ANONYMOUS`; authorization is the session, not Google accounts.
 - Frontend hiding of menus is not the security boundary.

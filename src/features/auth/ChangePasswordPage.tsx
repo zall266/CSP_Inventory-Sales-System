@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import { postIdentityAction } from '@/api/identityApi'
 import { preparePasswordVerifier } from '@/auth/passwordHash'
 import { passwordPolicyMessage } from '@/auth/passwordPolicy'
-import { verifierForUsername } from '@/auth/passwordRequest'
+import { proofForUsername } from '@/auth/passwordRequest'
 import { readAuthSession } from '@/auth/session'
 import { Button, Field, Input, PageHeader } from '@/components/ui'
 
@@ -34,7 +34,7 @@ export function ChangePasswordPage() {
     setError('')
     try {
       const result = await postIdentityAction('auth.changePassword', {
-        currentPasswordVerifier: await verifierForUsername(session?.username || '', currentPassword),
+        ...(await proofForUsername(session?.username || '', currentPassword, 'password-change')),
         ...(await preparePasswordVerifier(password)),
       })
       if (!result.ok) {

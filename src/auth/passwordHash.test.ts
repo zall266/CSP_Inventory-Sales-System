@@ -1,8 +1,9 @@
 import assert from 'node:assert/strict'
-import { pbkdf2Sync } from 'node:crypto'
+import { createHmac, pbkdf2Sync } from 'node:crypto'
 import test from 'node:test'
 import {
   AUTH_PBKDF2_ITERATIONS,
+  hmacLoginProof,
   newPasswordSalt,
   preparePasswordVerifier,
   stretchPassword,
@@ -27,4 +28,14 @@ test('prepared verifier uses a unique salt and refuses a weak work factor', asyn
   assert.notEqual(first.passwordVerifier, second.passwordVerifier)
   assert.equal(first.iterations, 600000)
   await assert.rejects(() => stretchPassword('OwnerPass12', first.salt, 12000))
+})
+
+test('login proof is HMAC-SHA256 of the challenge binding over the stretched verifier', async () => {
+  const salt = newPasswordSalt()
+  const verifier = await stretchPassword('OwnerPass12', salt)
+  const proof = await hmacLoginProof(verifier, 'cid-1', 'aa'.repeat(32), 'Aina@coolslurppy.my', 'login')
+  const expected = createHmac('sha256', Buffer.from(verifier, 'hex'))
+    .update('cid-1\n' + 'aa'.repeat(32) + '\naina@coolslurppy.my\nlogin')
+    .digest('hex')
+  assert.equal(proof, expected)
 })

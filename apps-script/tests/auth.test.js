@@ -54,6 +54,31 @@ function call(backend, action, payload, extra) {
   return backend.context.handleRequest(request(action, payload, extra), backend)
 }
 
+function loginWithPassword(backend, username, password, extra) {
+  const challenge = call(backend, 'auth.challenge', { username, purpose: 'login' })
+  if (!challenge.ok) return challenge
+  const verifier = pbkdf2Sync(
+    password,
+    Buffer.from(challenge.data.salt, 'hex'),
+    600000,
+    32,
+    'sha256',
+  ).toString('hex')
+  const proof = backend.context.authLoginProof(
+    verifier,
+    challenge.data.challengeId,
+    challenge.data.challenge,
+    username,
+    'login',
+  )
+  return call(backend, 'auth.login', {
+    username,
+    challengeId: challenge.data.challengeId,
+    challenge: challenge.data.challenge,
+    loginProof: proof,
+  }, extra)
+}
+
 function identityPayload() {
   return {
     departments: [
@@ -108,6 +133,7 @@ test('PBKDF2-HMAC-SHA256 hashes and verifies with a unique salt', () => {
   assert.equal(first.iterations, 600000)
   assert.equal(first.salt.length, 32)
   assert.equal(first.hash.length, 64)
+  assert.equal(first.wrappedVerifier.length, 64)
   assert.equal(backend.context.authVerifyPassword('OwnerPass12', first), true)
   assert.equal(backend.context.authVerifyPassword('wrong-password', first), false)
   const second = backend.context.authHashPassword('OwnerPass12')
@@ -158,14 +184,14 @@ test('owner bootstrap is single-use and mints a session', () => {
 test('login accepts the owner password and rejects unknown, wrong, and disabled accounts', () => {
   const backend = ready()
   ownerSession(backend)
-  const ok = call(backend, 'auth.login', { username: 'AINA@coolslurppy.my', password: 'OwnerPass12' })
+  const ok = loginWithPassword(backend, 'AINA@coolslurppy.my', 'OwnerPass12')
   assert.equal(ok.ok, true)
   assert.equal(ok.data.user.id, 'u-aina')
   assert.equal(JSON.stringify(ok.data).includes('OwnerPass12'), false)
-  const wrong = call(backend, 'auth.login', { username: 'aina@coolslurppy.my', password: 'not-the-password' })
+  const wrong = loginWithPassword(backend, 'aina@coolslurppy.my', 'not-the-password')
   assert.equal(wrong.ok, false)
   assert.equal(wrong.error.message, 'Username or password is incorrect.')
-  const unknown = call(backend, 'auth.login', { username: 'nobody@coolslurppy.my', password: 'OwnerPass12' })
+  const unknown = loginWithPassword(backend, 'nobody@coolslurppy.my', 'OwnerPass12')
   assert.equal(unknown.ok, false)
   assert.equal(unknown.error.message, 'Username or password is incorrect.')
   const missing = call(backend, 'auth.login', { username: '', password: '' })
@@ -176,7 +202,7 @@ test('login accepts the owner password and rejects unknown, wrong, and disabled 
     newPassword: 'TempPass12a',
   })
   assert.equal(reset.ok, true)
-  const disabled = call(backend, 'auth.login', { username: 'off@coolslurppy.my', password: 'TempPass12a' })
+  const disabled = loginWithPassword(backend, 'off@coolslurppy.my', 'TempPass12a')
   assert.equal(disabled.ok, false)
   assert.equal(disabled.error.message, 'This account is disabled.')
 })
@@ -186,10 +212,10 @@ test('repeated failed logins lock the username', () => {
   ownerSession(backend)
   let last
   for (let i = 0; i < 5; i += 1) {
-    last = call(backend, 'auth.login', { username: 'aina@coolslurppy.my', password: 'wrong-password' }, { requestId: `fail-${i}` })
+    last = loginWithPassword(backend, 'aina@coolslurppy.my', 'wrong-password', { requestId: `fail-${i}` })
     assert.equal(last.ok, false)
   }
-  const locked = call(backend, 'auth.login', { username: 'aina@coolslurppy.my', password: 'OwnerPass12' })
+  const locked = loginWithPassword(backend, 'aina@coolslurppy.my', 'OwnerPass12')
   assert.equal(locked.ok, false)
   assert.equal(locked.error.message, 'Username or password is incorrect.')
 })
@@ -242,7 +268,7 @@ test('staff cannot reset passwords or view security events', () => {
     newPassword: 'StaffPass12',
   })
   assert.equal(reset.ok, true)
-  const staff = call(backend, 'auth.login', { username: 'mei@coolslurppy.my', password: 'StaffPass12' })
+  const staff = loginWithPassword(backend, 'mei@coolslurppy.my', 'StaffPass12')
   assert.equal(staff.ok, true)
   assert.equal(staff.data.user.mustChange, true)
   const blocked = call(backend, 'users.create', {
@@ -273,7 +299,7 @@ test('first-login password setup then logout and expiry isolation', () => {
     userId: 'u-siti',
     newPassword: 'TempPass12a',
   })
-  const first = call(backend, 'auth.login', { username: 'siti@coolslurppy.my', password: 'TempPass12a' })
+  const first = loginWithPassword(backend, 'siti@coolslurppy.my', 'TempPass12a')
   assert.equal(first.data.user.mustChange, true)
   const changed = call(backend, 'auth.changePassword', {
     sessionToken: first.data.sessionToken,
@@ -283,7 +309,7 @@ test('first-login password setup then logout and expiry isolation', () => {
   assert.equal(changed.ok, true)
   const stale = call(backend, 'auth.me', { sessionToken: first.data.sessionToken })
   assert.equal(stale.ok, true)
-  const login = call(backend, 'auth.login', { username: 'siti@coolslurppy.my', password: 'SitiPass12b' })
+  const login = loginWithPassword(backend, 'siti@coolslurppy.my', 'SitiPass12b')
   assert.equal(login.ok, true)
   const out = call(backend, 'auth.logout', { sessionToken: login.data.sessionToken })
   assert.equal(out.ok, true)
@@ -295,7 +321,7 @@ test('first-login password setup then logout and expiry isolation', () => {
 test('password change and deactivation revoke other sessions', () => {
   const backend = ready()
   const owner = ownerSession(backend)
-  const other = call(backend, 'auth.login', { username: 'aina@coolslurppy.my', password: 'OwnerPass12' })
+  const other = loginWithPassword(backend, 'aina@coolslurppy.my', 'OwnerPass12')
   assert.equal(other.ok, true)
   const changed = call(backend, 'auth.changePassword', {
     sessionToken: owner.sessionToken,
@@ -312,7 +338,7 @@ test('password change and deactivation revoke other sessions', () => {
     userId: 'u-mei',
     newPassword: 'StaffPass12',
   })
-  const staff = call(backend, 'auth.login', { username: 'mei@coolslurppy.my', password: 'StaffPass12' })
+  const staff = loginWithPassword(backend, 'mei@coolslurppy.my', 'StaffPass12')
   const deactivated = call(backend, 'users.update', {
     sessionToken: owner.sessionToken,
     id: 'u-mei',
@@ -420,14 +446,14 @@ test('forged actorRole and permissions cannot create users as staff', () => {
     userId: 'u-mei',
     newPassword: 'StaffPass12',
   })
-  const staff = call(backend, 'auth.login', { username: 'mei@coolslurppy.my', password: 'StaffPass12' })
+  const staff = loginWithPassword(backend, 'mei@coolslurppy.my', 'StaffPass12')
   const changed = call(backend, 'auth.changePassword', {
     sessionToken: staff.data.sessionToken,
     currentPassword: 'StaffPass12',
     newPassword: 'StaffPass13x',
   })
   assert.equal(changed.ok, true)
-  const login = call(backend, 'auth.login', { username: 'mei@coolslurppy.my', password: 'StaffPass13x' })
+  const login = loginWithPassword(backend, 'mei@coolslurppy.my', 'StaffPass13x')
   const forged = call(backend, 'users.create', {
     sessionToken: login.data.sessionToken,
     actorUserId: 'u-aina',
@@ -458,13 +484,13 @@ test('supervisor cannot reset passwords or bootstrap a second owner', () => {
     userId: 'u-siti',
     newPassword: 'TempPass12a',
   })
-  const first = call(backend, 'auth.login', { username: 'siti@coolslurppy.my', password: 'TempPass12a' })
+  const first = loginWithPassword(backend, 'siti@coolslurppy.my', 'TempPass12a')
   call(backend, 'auth.changePassword', {
     sessionToken: first.data.sessionToken,
     currentPassword: 'TempPass12a',
     newPassword: 'SitiPass12b',
   })
-  const supervisor = call(backend, 'auth.login', { username: 'siti@coolslurppy.my', password: 'SitiPass12b' })
+  const supervisor = loginWithPassword(backend, 'siti@coolslurppy.my', 'SitiPass12b')
   const reset = call(backend, 'auth.resetPassword', {
     sessionToken: supervisor.data.sessionToken,
     userId: 'u-mei',
@@ -486,7 +512,7 @@ test('supervisor cannot reset passwords or bootstrap a second owner', () => {
 test('auth events never include secrets and owner can list them', () => {
   const backend = ready()
   const owner = ownerSession(backend)
-  call(backend, 'auth.login', { username: 'aina@coolslurppy.my', password: 'bad-password' })
+  loginWithPassword(backend, 'aina@coolslurppy.my', 'bad-password')
   const events = call(backend, 'auth.events', { sessionToken: owner.sessionToken, limit: 20 })
   assert.equal(events.ok, true)
   const blob = JSON.stringify(events.data)
@@ -508,7 +534,7 @@ test('owner creates a staff account with a temporary password and duplicate emai
     temporaryPassword: 'TempPass12a',
   })
   assert.equal(created.ok, true, created.error && created.error.message)
-  const first = call(backend, 'auth.login', { username: 'new@coolslurppy.my', password: 'TempPass12a' })
+  const first = loginWithPassword(backend, 'new@coolslurppy.my', 'TempPass12a')
   assert.equal(first.ok, true, first.error && first.error.message)
   assert.equal(first.data.user.mustChange, true)
   const blocked = call(backend, 'users.list', { sessionToken: first.data.sessionToken })
@@ -540,7 +566,7 @@ test('unknown user status cannot log in or keep a session', () => {
   const idIdx = header.indexOf('id')
   const mei = users.find((row, index) => index > 0 && row[idIdx] === 'u-mei')
   mei[statusIdx] = 'pending'
-  const denied = call(backend, 'auth.login', { username: 'mei@coolslurppy.my', password: 'StaffPass12' })
+  const denied = loginWithPassword(backend, 'mei@coolslurppy.my', 'StaffPass12')
   assert.equal(denied.ok, false)
   assert.equal(denied.error.message, 'This account is disabled.')
 })
@@ -558,14 +584,28 @@ test('login accepts a stretched verifier without a plaintext password', () => {
     32,
     'sha256',
   ).toString('hex')
+  const proof = backend.context.authLoginProof(
+    verifier,
+    challenge.data.challengeId,
+    challenge.data.challenge,
+    'aina@coolslurppy.my',
+    'login',
+  )
   const original = backend.context.authNativePbkdf2HmacSha256
   backend.context.authNativePbkdf2HmacSha256 = undefined
   try {
     const ok = call(backend, 'auth.login', {
       username: 'aina@coolslurppy.my',
-      passwordVerifier: verifier,
+      challengeId: challenge.data.challengeId,
+      challenge: challenge.data.challenge,
+      loginProof: proof,
     })
     assert.equal(ok.ok, true, ok.error && ok.error.message)
+    const staticVerifier = call(backend, 'auth.login', {
+      username: 'aina@coolslurppy.my',
+      passwordVerifier: verifier,
+    })
+    assert.equal(staticVerifier.ok, false)
     const plaintext = call(backend, 'auth.login', {
       username: 'aina@coolslurppy.my',
       password: 'OwnerPass12',
@@ -584,13 +624,13 @@ test('supervisor cannot create staff accounts', () => {
     userId: 'u-siti',
     newPassword: 'TempPass12a',
   })
-  const first = call(backend, 'auth.login', { username: 'siti@coolslurppy.my', password: 'TempPass12a' })
+  const first = loginWithPassword(backend, 'siti@coolslurppy.my', 'TempPass12a')
   call(backend, 'auth.changePassword', {
     sessionToken: first.data.sessionToken,
     currentPassword: 'TempPass12a',
     newPassword: 'SitiPass12b',
   })
-  const supervisor = call(backend, 'auth.login', { username: 'siti@coolslurppy.my', password: 'SitiPass12b' })
+  const supervisor = loginWithPassword(backend, 'siti@coolslurppy.my', 'SitiPass12b')
   const created = call(backend, 'users.create', {
     sessionToken: supervisor.data.sessionToken,
     actorUserId: 'u-aina',

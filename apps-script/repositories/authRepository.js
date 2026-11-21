@@ -1,7 +1,10 @@
 var AUTH_CREDENTIAL_HEADERS = [
   'id', 'userId', 'username', 'passwordHash', 'salt', 'iterations', 'algorithm',
-  'mustChange', 'passwordUpdatedAt', 'failedCount', 'lockedUntil', 'status',
+  'wrappedVerifier', 'mustChange', 'passwordUpdatedAt', 'failedCount', 'lockedUntil', 'status',
   'createdAt', 'updatedAt', 'createdBy'
+];
+var AUTH_CHALLENGE_HEADERS = [
+  'id', 'username', 'challengeHash', 'purpose', 'createdAt', 'expiresAt', 'consumedAt'
 ];
 var AUTH_SESSION_HEADERS = [
   'id', 'userId', 'tokenHash', 'createdAt', 'lastSeenAt', 'expiresAt',
@@ -11,9 +14,28 @@ var AUTH_EVENT_HEADERS = [
   'id', 'timestamp', 'actorUserId', 'targetUserId', 'eventType', 'result', 'reason', 'requestId'
 ];
 
+var AUTH_CREDENTIAL_HEADERS_LEGACY = [
+  'id', 'userId', 'username', 'passwordHash', 'salt', 'iterations', 'algorithm',
+  'mustChange', 'passwordUpdatedAt', 'failedCount', 'lockedUntil', 'status',
+  'createdAt', 'updatedAt', 'createdBy'
+];
+
+function migrateAuthCredentialHeaders(sheetRepository, spreadsheet) {
+  var existing = spreadsheet.getSheetByName('AuthCredentials');
+  if (!existing) return;
+  var current = sheetRepository.headerMap(existing).filter(Boolean);
+  if (current.join('|') === AUTH_CREDENTIAL_HEADERS.join('|')) return;
+  if (current.join('|') !== AUTH_CREDENTIAL_HEADERS_LEGACY.join('|')) return;
+  var records = sheetRepository.readObjects(existing);
+  existing.getRange(1, 1, 1, AUTH_CREDENTIAL_HEADERS.length).setValues([AUTH_CREDENTIAL_HEADERS]);
+  sheetRepository.replaceObjects(existing, records);
+}
+
 function createAuthRepository(sheetRepository) {
   function ensure(spreadsheet) {
+    migrateAuthCredentialHeaders(sheetRepository, spreadsheet);
     sheetRepository.ensureSheet(spreadsheet, 'AuthCredentials', AUTH_CREDENTIAL_HEADERS);
+    sheetRepository.ensureSheet(spreadsheet, 'AuthChallenges', AUTH_CHALLENGE_HEADERS);
     sheetRepository.ensureSheet(spreadsheet, 'AuthSessions', AUTH_SESSION_HEADERS);
     sheetRepository.ensureSheet(spreadsheet, 'AuthEvents', AUTH_EVENT_HEADERS);
   }
@@ -40,6 +62,7 @@ function createAuthRepository(sheetRepository) {
       salt: String(record.salt || ''),
       iterations: asNumber(record.iterations) || AUTH_PBKDF2_ITERATIONS,
       algorithm: String(record.algorithm || 'pbkdf2-hmac-sha256'),
+      wrappedVerifier: String(record.wrappedVerifier || ''),
       mustChange: asBool(record.mustChange),
       passwordUpdatedAt: String(record.passwordUpdatedAt || ''),
       failedCount: asNumber(record.failedCount),
@@ -78,6 +101,18 @@ function createAuthRepository(sheetRepository) {
     };
   }
 
+  function mapChallenge(record) {
+    return {
+      id: String(record.id || ''),
+      username: String(record.username || '').trim().toLowerCase(),
+      challengeHash: String(record.challengeHash || ''),
+      purpose: String(record.purpose || ''),
+      createdAt: String(record.createdAt || ''),
+      expiresAt: String(record.expiresAt || ''),
+      consumedAt: String(record.consumedAt || '')
+    };
+  }
+
   function readCredentials(spreadsheet) {
     ensure(spreadsheet);
     return sheetRepository.readObjects(sheet(spreadsheet, 'AuthCredentials')).map(mapCredential);
@@ -86,6 +121,16 @@ function createAuthRepository(sheetRepository) {
   function writeCredentials(spreadsheet, records) {
     ensure(spreadsheet);
     sheetRepository.replaceObjects(sheet(spreadsheet, 'AuthCredentials'), records);
+  }
+
+  function readChallenges(spreadsheet) {
+    ensure(spreadsheet);
+    return sheetRepository.readObjects(sheet(spreadsheet, 'AuthChallenges')).map(mapChallenge);
+  }
+
+  function writeChallenges(spreadsheet, records) {
+    ensure(spreadsheet);
+    sheetRepository.replaceObjects(sheet(spreadsheet, 'AuthChallenges'), records);
   }
 
   function readSessions(spreadsheet) {
@@ -111,12 +156,15 @@ function createAuthRepository(sheetRepository) {
   return {
     headers: {
       credentials: AUTH_CREDENTIAL_HEADERS,
+      challenges: AUTH_CHALLENGE_HEADERS,
       sessions: AUTH_SESSION_HEADERS,
       events: AUTH_EVENT_HEADERS
     },
     ensure: ensure,
     readCredentials: readCredentials,
     writeCredentials: writeCredentials,
+    readChallenges: readChallenges,
+    writeChallenges: writeChallenges,
     readSessions: readSessions,
     writeSessions: writeSessions,
     readEvents: readEvents,

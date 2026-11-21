@@ -3,7 +3,7 @@ import { Link, useLocation, useNavigate } from 'react-router-dom'
 import { identityApiUrl, postIdentityAction } from '@/api/identityApi'
 import { preparePasswordVerifier } from '@/auth/passwordHash'
 import { passwordPolicyMessage } from '@/auth/passwordPolicy'
-import { verifierForUsername } from '@/auth/passwordRequest'
+import { proofForUsername } from '@/auth/passwordRequest'
 import { sessionFromLoginData, writeAuthSession } from '@/auth/session'
 import { brand } from '@/brand'
 import { Button, Field, Input } from '@/components/ui'
@@ -62,7 +62,7 @@ export function LoginPage() {
       const action = bootstrap ? 'auth.bootstrapOwner' : 'auth.login'
       const secret = bootstrap
         ? await preparePasswordVerifier(password)
-        : { passwordVerifier: await verifierForUsername(username.trim(), password) }
+        : await proofForUsername(username.trim(), password)
       const result = await postIdentityAction(action, { username: username.trim(), ...secret })
       if (!result.ok || !result.data) {
         setError(result.error?.message || 'Sign in failed.')

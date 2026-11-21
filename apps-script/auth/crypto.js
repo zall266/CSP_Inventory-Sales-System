@@ -9,6 +9,10 @@
 //   2. PBKDF2-HMAC-SHA256, 600,000 iterations, 32-byte DK (official SPA Web
 //      Crypto, or the Node test harness native stretcher)
 //   3. HMAC-SHA256(server pepper, DK) stored in Sheets
+//   4. wrappedVerifier = DK XOR HMAC(pepper, "wrap|" + salt) so login proofs
+//      can be checked without accepting a reusable DK on the wire
+// Login proof: HMAC-SHA256(DK, challengeId + "\n" + challenge + "\n" +
+// username + "\n" + purpose). A stolen DK can still answer a fresh challenge.
 //
 // The pepper lives in Script Properties, not in the spreadsheet. A Sheets leak
 // without the script does not yield an offline-guessable password hash.
@@ -22,6 +26,12 @@ var AUTH_SALT_BYTES = 16;
 var AUTH_PASSWORD_MIN = 10;
 var AUTH_PASSWORD_MAX = 128;
 var AUTH_PEPPER_PROPERTY = 'AUTH_PASSWORD_PEPPER';
+var IDENTITY_BOOTSTRAP_HASH_PROPERTY = 'IDENTITY_BOOTSTRAP_HASH';
+var IDENTITY_BOOTSTRAP_EXPIRES_PROPERTY = 'IDENTITY_BOOTSTRAP_EXPIRES_AT';
+var AUTH_SETUP_SECRET_MIN = 32;
+var AUTH_CHALLENGE_TTL_MS = 2 * 60 * 1000;
+var AUTH_LOGIN_PURPOSE = 'login';
+var AUTH_PASSWORD_CHANGE_PURPOSE = 'password-change';
 
 function authUtf8Bytes(value) {
   var text = String(value || '');
@@ -235,26 +245,103 @@ function authStretchPassword(password, saltBytes, iterations) {
   ));
 }
 
+function authWrapVerifier(verifierHex, saltHex) {
+  var dk = authHexToBytes(authNormalizeVerifier(verifierHex));
+  var salt = authNormalizeSalt(saltHex);
+  var pad = authHmacSha256(authHexToBytes(authPasswordPepperHex()), authUtf8Bytes('wrap|' + salt));
+  var out = new Uint8Array(AUTH_PBKDF2_DKLEN);
+  var i;
+  for (i = 0; i < AUTH_PBKDF2_DKLEN; i += 1) out[i] = dk[i] ^ pad[i];
+  return authBytesToHex(out);
+}
+
+function authUnwrapVerifier(wrappedHex, saltHex) {
+  return authWrapVerifier(wrappedHex, saltHex);
+}
+
+function authProofMessage(challengeId, challenge, username, purpose) {
+  return String(challengeId || '') + '\n' + String(challenge || '') + '\n' + String(username || '').trim().toLowerCase() + '\n' + String(purpose || '');
+}
+
+function authLoginProof(verifierHex, challengeId, challenge, username, purpose) {
+  var dk = authHexToBytes(authNormalizeVerifier(verifierHex));
+  return authBytesToHex(authHmacSha256(dk, authUtf8Bytes(authProofMessage(challengeId, challenge, username, purpose))));
+}
+
 function authHashPassword(password, saltHex, iterations) {
   var salt = saltHex ? authHexToBytes(authNormalizeSalt(saltHex)) : authRandomBytes(AUTH_SALT_BYTES);
   var rounds = authRequireIterations(iterations || AUTH_PBKDF2_ITERATIONS);
   var stretched = authStretchPassword(password, salt, rounds);
+  var saltHexOut = authBytesToHex(salt);
+  var dkHex = authBytesToHex(stretched);
   return {
     algorithm: 'pbkdf2-hmac-sha256',
     iterations: rounds,
-    salt: authBytesToHex(salt),
-    hash: authSealVerifier(authBytesToHex(stretched))
+    salt: saltHexOut,
+    hash: authSealVerifier(dkHex),
+    wrappedVerifier: authWrapVerifier(dkHex, saltHexOut)
   };
 }
 
 function authHashFromVerifier(verifierHex, saltHex, iterations) {
   var rounds = authRequireIterations(iterations || AUTH_PBKDF2_ITERATIONS);
+  var salt = authNormalizeSalt(saltHex);
+  var dkHex = authNormalizeVerifier(verifierHex);
   return {
     algorithm: 'pbkdf2-hmac-sha256',
     iterations: rounds,
-    salt: authNormalizeSalt(saltHex),
-    hash: authSealVerifier(verifierHex)
+    salt: salt,
+    hash: authSealVerifier(dkHex),
+    wrappedVerifier: authWrapVerifier(dkHex, salt)
   };
+}
+
+function authVerifyLoginProof(record, proofHex, challengeId, challenge, username, purpose) {
+  if (!authCredentialWorkFactorOk(record) || !record.wrappedVerifier) return false;
+  try {
+    var dkHex = authUnwrapVerifier(record.wrappedVerifier, record.salt);
+    if (!authVerifyVerifier(dkHex, record)) return false;
+    var expected = authLoginProof(dkHex, challengeId, challenge, username, purpose);
+    return authTimingSafeEqual(authHexToBytes(authNormalizeVerifier(proofHex)), authHexToBytes(expected));
+  } catch (error) {
+    return false;
+  }
+}
+
+function authIdentityBootstrapConfigured() {
+  if (typeof PropertiesService === 'undefined' || !PropertiesService.getScriptProperties) return false;
+  var hash = String(PropertiesService.getScriptProperties().getProperty(IDENTITY_BOOTSTRAP_HASH_PROPERTY) || '').trim().toLowerCase();
+  return authIsHex(hash, 32);
+}
+
+function authIdentityBootstrapExpired(nowMs) {
+  if (typeof PropertiesService === 'undefined' || !PropertiesService.getScriptProperties) return true;
+  var expires = String(PropertiesService.getScriptProperties().getProperty(IDENTITY_BOOTSTRAP_EXPIRES_PROPERTY) || '').trim();
+  if (!expires) return false;
+  var at = Date.parse(expires);
+  return isFinite(at) && at <= Number(nowMs);
+}
+
+function authVerifyIdentityBootstrapSecret(secret, nowMs) {
+  if (!authIdentityBootstrapConfigured()) return false;
+  if (authIdentityBootstrapExpired(nowMs)) return false;
+  var value = String(secret || '');
+  if (value.length < AUTH_SETUP_SECRET_MIN) return false;
+  var stored = String(PropertiesService.getScriptProperties().getProperty(IDENTITY_BOOTSTRAP_HASH_PROPERTY) || '').trim().toLowerCase();
+  var computed = authBytesToHex(authSha256(authUtf8Bytes(value)));
+  return authTimingSafeEqual(authHexToBytes(computed), authHexToBytes(stored));
+}
+
+function authConsumeIdentityBootstrapSecret() {
+  if (typeof PropertiesService === 'undefined' || !PropertiesService.getScriptProperties) return;
+  var props = PropertiesService.getScriptProperties();
+  if (typeof props.deleteProperty === 'function') {
+    props.deleteProperty(IDENTITY_BOOTSTRAP_HASH_PROPERTY);
+    props.deleteProperty(IDENTITY_BOOTSTRAP_EXPIRES_PROPERTY);
+    return;
+  }
+  props.setProperty(IDENTITY_BOOTSTRAP_HASH_PROPERTY, '');
+  props.setProperty(IDENTITY_BOOTSTRAP_EXPIRES_PROPERTY, '');
 }
 
 function authCredentialWorkFactorOk(record) {
