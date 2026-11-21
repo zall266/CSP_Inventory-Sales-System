@@ -147,8 +147,7 @@ test('product sheets stay unread until the module is called and Sheet1 stays res
 test('product create stores the catalogue, conversion cost, category, and zero company balances', () => {
   const backend = ready()
   const denied = call(backend, 'products.create', productInput({ actorUserId: '' }))
-  assert.equal(denied.error.code, 'FORBIDDEN')
-  assert.equal(denied.error.message, 'You cannot add products.')
+  assert.equal(denied.error.code, 'UNAUTHORIZED')
   const inactive = call(backend, 'products.create', productInput({ actorUserId: 'u-off' }))
   assert.equal(inactive.error.code, 'FORBIDDEN')
   assert.equal(auditActions(backend).includes('products.create'), false)

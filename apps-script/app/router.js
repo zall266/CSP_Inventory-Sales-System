@@ -1,5 +1,6 @@
 function createRouter(backend) {
   var system = backend && typeof backend.health === 'function' ? backend : backend.system;
+  var auth = resolveAuthService(backend);
   var identity = backend && backend.identity ? backend.identity : null;
   var masters = backend && backend.masters ? backend.masters : null;
   var products = backend && backend.products ? backend.products : null;
@@ -27,12 +28,16 @@ function createRouter(backend) {
     if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
       return errorEnvelope('INVALID_REQUEST', 'Request envelope is invalid.', { requestId: requestId });
     }
-    // Phase 1 boundary stays in place. authenticate() is still not a session.
+    var action = request.action;
     var principal = authenticate();
+    if (!isPublicAuthAction(action)) {
+      principal = auth.authenticateRequest(request);
+    }
     authorize(principal, '');
-    if (request.action === 'system.health') return system.health(request);
-    if (request.action === 'system.ping') return system.ping(request);
-    if (identity && identity.canHandle(request.action)) return identity.dispatch(request);
+    if (action === 'system.health') return system.health(request);
+    if (action === 'system.ping') return system.ping(request);
+    if (auth.canHandle(action)) return auth.dispatch(request);
+    if (identity && identity.canHandle(action)) return identity.dispatch(request);
     if (masters && masters.canHandle(request.action)) return masters.dispatch(request);
     if (products && products.canHandle(request.action)) return products.dispatch(request);
     if (parties && parties.canHandle(request.action)) return parties.dispatch(request);

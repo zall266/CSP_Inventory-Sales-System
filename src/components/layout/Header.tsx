@@ -12,6 +12,8 @@ import {
 import { useApi, useStore } from '@/store/hooks'
 import { formatDate, initials } from '@/utils/format'
 import { headerDateLabels } from '@/utils/headerDates'
+import { identityApiUrl, postIdentityAction } from '@/api/identityApi'
+import { clearAuthSession } from '@/auth/session'
 import { Dropdown, MenuItem } from '@/components/ui'
 import { currentUser } from '@/features/manufacturing/sessionPlan'
 import { displayRoleName, hasPermission } from '@/features/settings/permissions'
@@ -309,13 +311,47 @@ export function Header() {
       </div>
 
       <div className="flex shrink-0 items-center gap-2 rounded-xl py-1 pl-1 pr-2" data-header-user>
-        <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-indigo-600 text-xs font-semibold text-white">
-          {initials(user.name)}
-        </div>
-        <div className={isPos ? 'hidden text-left sm:block' : 'hidden text-left min-[1440px]:block'}>
-          <div className="truncate text-sm font-medium leading-4 text-slate-800">{user.name}</div>
-          <div className="truncate text-[11px] text-slate-400">{displayRoleName(state, user)}</div>
-        </div>
+        {identityApiUrl() ? (
+          <Dropdown
+            align="right"
+            trigger={
+              <button type="button" className="flex items-center gap-2 rounded-xl py-1 pr-1 text-left">
+                <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-indigo-600 text-xs font-semibold text-white">
+                  {initials(user.name)}
+                </div>
+                <div className={isPos ? 'hidden text-left sm:block' : 'hidden text-left min-[1440px]:block'}>
+                  <div className="truncate text-sm font-medium leading-4 text-slate-800">{user.name}</div>
+                  <div className="truncate text-[11px] text-slate-400">{displayRoleName(state, user)}</div>
+                </div>
+              </button>
+            }
+          >
+            <MenuItem onClick={() => navigate('/settings/password')}>Change password</MenuItem>
+            <MenuItem
+              onClick={async () => {
+                try {
+                  await postIdentityAction('auth.logout', {})
+                } catch {
+                  /* session is cleared locally either way */
+                }
+                clearAuthSession()
+                navigate('/login', { replace: true })
+              }}
+            >
+              Sign out
+            </MenuItem>
+          </Dropdown>
+        ) : (
+          <>
+            <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-indigo-600 text-xs font-semibold text-white">
+              {initials(user.name)}
+            </div>
+            <div className={isPos ? 'hidden text-left sm:block' : 'hidden text-left min-[1440px]:block'}>
+              <div className="truncate text-sm font-medium leading-4 text-slate-800">{user.name}</div>
+              <div className="truncate text-[11px] text-slate-400">{displayRoleName(state, user)}</div>
+            </div>
+          </>
+        )}
       </div>
     </header>
   )

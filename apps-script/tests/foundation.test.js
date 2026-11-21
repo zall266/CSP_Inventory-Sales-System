@@ -144,7 +144,7 @@ test('health and ping stay read-only and unknown actions are rejected', () => {
   assert.equal(ping.data.environment, 'DEV')
   assert.equal(typeof ping.data.serverTimestamp, 'string')
   const unknown = app.context.handleRequest({ v: 1, requestId: 'x', action: 'salesImport.confirm', payload: {} }, app)
-  assert.equal(unknown.error.code, 'UNKNOWN_ACTION')
+  assert.equal(unknown.error.code, 'UNAUTHORIZED')
   const invalid = app.context.handleRequest({ action: 'system.ping' }, app)
   assert.equal(invalid.error.code, 'INVALID_REQUEST')
 })

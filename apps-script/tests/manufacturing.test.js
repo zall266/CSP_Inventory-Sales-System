@@ -939,7 +939,7 @@ test('sessions.getRecipePhoto authorizes view or history.view and ignores client
 
   const noActor = call(backend, 'sessions.getRecipePhoto', { id: session.id })
   assert.equal(noActor.ok, false)
-  assert.equal(noActor.error.code, 'FORBIDDEN')
+  assert.equal(noActor.error.code, 'UNAUTHORIZED')
 
   grantRole(backend, 'role-staff', 'manufacturing.start')
   const startOnly = call(backend, 'sessions.getRecipePhoto', { actorUserId: 'u-mei', id: session.id })

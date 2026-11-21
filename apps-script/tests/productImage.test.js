@@ -448,7 +448,7 @@ test('warehouse without POS or products.edit cannot get or mutate images', () =>
   })
   assert.equal(deniedUpload.error.code, 'FORBIDDEN')
   const noActor = call(backend, 'products.getImage', { productId: 'prd-sugar' })
-  assert.equal(noActor.error.code, 'FORBIDDEN')
+  assert.equal(noActor.error.code, 'UNAUTHORIZED')
   const inactive = call(backend, 'products.getImage', { actorUserId: 'u-off', productId: 'prd-sugar' })
   assert.equal(inactive.error.code, 'FORBIDDEN')
 })

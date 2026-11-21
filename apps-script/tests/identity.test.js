@@ -125,7 +125,7 @@ test('identity reads do not run before the module is called and Sheet1 stays res
   assert.equal(backend.spreadsheet.store.Users, undefined)
   assert.deepEqual(backend.spreadsheet.store.Sheet1, [['']])
   const unknown = backend.context.handleRequest(request('salesImport.confirm', {}), backend)
-  assert.equal(unknown.error.code, 'UNKNOWN_ACTION')
+  assert.equal(unknown.error.code, 'UNAUTHORIZED')
 })
 
 test('bootstrap persists identity once and rejects a second copy', () => {
@@ -336,7 +336,7 @@ test('a mismatched identity header is a conflict and does not overwrite Sheet1',
   const backend = app()
   backend.spreadsheet.store.Users = [['not-id']]
   const loaded = backend.context.handleRequest(request('identity.get', {}), backend)
-  assert.equal(loaded.error.code, 'CONFLICT')
+  assert.equal(loaded.error.code, 'UNAUTHORIZED')
   assert.deepEqual(backend.spreadsheet.store.Sheet1, [['']])
   assert.deepEqual(backend.spreadsheet.store.Users, [['not-id']])
 })

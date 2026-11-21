@@ -45,6 +45,10 @@ import { Pjkm1011PreviewPage, Pjkm511PreviewPage, PjkmRecordsPage } from '@/feat
 import { Pjkm911PreviewPage } from '@/features/pjkm/Pjkm911Page'
 import { OpeningBalancePage } from '@/features/openingBalance/OpeningBalancePages'
 import { HalalCompliancePage } from '@/features/halal/HalalCompliancePage'
+import { LoginPage } from '@/features/auth/LoginPage'
+import { FirstPasswordPage } from '@/features/auth/FirstPasswordPage'
+import { ChangePasswordPage } from '@/features/auth/ChangePasswordPage'
+import { RequireAuth, RequireGuest } from '@/features/auth/RequireAuth'
 
 const routerBasename = import.meta.env.BASE_URL.replace(/\/$/, '') || undefined
 
@@ -52,14 +56,19 @@ export default function App() {
   return (
     <BrowserRouter basename={routerBasename}>
       <Routes>
-        <Route path="/print/quotation/:id" element={<QuotationPrintPage />} />
-        <Route path="/print/invoice/:id" element={<InvoicePrintPage />} />
-        <Route path="/print/delivery/:id" element={<DeliveryPrintPage />} />
-        <Route path="/pjkm/5.1.1" element={<Pjkm511PreviewPage />} />
-        <Route path="/pjkm/10.1.1" element={<Pjkm1011PreviewPage />} />
-        <Route path="/pjkm/9.1.1" element={<Pjkm911PreviewPage />} />
-        <Route path="/manufacturing/bmr/:sessionId" element={<BmrPrintPage />} />
-        <Route element={<AppLayout />}>
+        <Route element={<RequireGuest />}>
+          <Route path="/login" element={<LoginPage />} />
+        </Route>
+        <Route element={<RequireAuth />}>
+          <Route path="/login/first-password" element={<FirstPasswordPage />} />
+          <Route path="/print/quotation/:id" element={<QuotationPrintPage />} />
+          <Route path="/print/invoice/:id" element={<InvoicePrintPage />} />
+          <Route path="/print/delivery/:id" element={<DeliveryPrintPage />} />
+          <Route path="/pjkm/5.1.1" element={<Pjkm511PreviewPage />} />
+          <Route path="/pjkm/10.1.1" element={<Pjkm1011PreviewPage />} />
+          <Route path="/pjkm/9.1.1" element={<Pjkm911PreviewPage />} />
+          <Route path="/manufacturing/bmr/:sessionId" element={<BmrPrintPage />} />
+          <Route element={<AppLayout />}>
           <Route path="/" element={<DashboardPage />} />
           <Route path="/sales" element={<SalesPage />} />
           <Route path="/sales/import" element={<SalesImportPage />} />
@@ -139,6 +148,7 @@ export default function App() {
           <Route path="/payables" element={<PayablesPage />} />
           <Route path="/expenses" element={<ExpensesPage />} />
           <Route path="/settings/users" element={<UsersSettingsPage />} />
+          <Route path="/settings/password" element={<ChangePasswordPage />} />
           <Route path="/settings/business" element={<BusinessSettingsPage />} />
           <Route path="/settings/inventory" element={<InventorySettingsPage />} />
           <Route path="/settings/sales" element={<SalesSettingsPage />} />
@@ -151,6 +161,7 @@ export default function App() {
           <Route path="/tasks/categories" element={<TaskCategoriesPage />} />
           <Route path="/tasks/:occurrenceId" element={<TaskDetailPage />} />
           <Route path="*" element={<Navigate to="/" replace />} />
+        </Route>
         </Route>
       </Routes>
     </BrowserRouter>

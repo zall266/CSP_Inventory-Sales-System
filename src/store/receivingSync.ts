@@ -1,4 +1,4 @@
-import { identityApiUrl, postIdentityAction } from '@/api/identityApi'
+import { canHydrateFromServer, identityApiUrl, postIdentityAction } from '@/api/identityApi'
 import { enqueueHydrate, hydrateRead, reportLoadError } from '@/store/hydrateQueue'
 import type { InventoryRow, Purchase, Receiving, StockMovement, StockOrder } from '@/types'
 
@@ -44,8 +44,8 @@ function sliceFrom(data: Partial<ReceivingSlice> | null): ReceivingSlice | null 
 const IDEMPOTENT_ACTIONS = new Set(['receivings.create', 'receivings.linkPurchase'])
 
 export function startReceivingHydration(next: SyncOptions) {
-  if (!identityApiUrl()) return
   options = next
+  if (!canHydrateFromServer()) return
   const seen = epoch
   void enqueueHydrate(async () => {
     try {
