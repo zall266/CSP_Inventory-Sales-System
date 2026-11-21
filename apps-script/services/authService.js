@@ -1,0 +1,884 @@
+var AUTH_ACTIONS = {
+  'auth.status': true,
+  'auth.challenge': true,
+  'auth.login': true,
+  'auth.logout': true,
+  'auth.me': true,
+  'auth.changePassword': true,
+  'auth.resetPassword': true,
+  'auth.bootstrapOwner': true,
+  'auth.events': true,
+  'auth.accounts': true
+};
+
+var AUTH_PUBLIC_ACTIONS = {
+  'system.health': true,
+  'system.ping': true,
+  'auth.status': true,
+  'auth.challenge': true,
+  'auth.login': true
+};
+
+var AUTH_SETUP_ACTIONS = {
+  'identity.bootstrap': true,
+  'auth.bootstrapOwner': true
+};
+
+var AUTH_SETUP_FIELDS = {
+  'identity.bootstrap': 'setupAuthorization',
+  'auth.bootstrapOwner': 'ownerEnrollmentAuthorization'
+};
+
+var AUTH_SESSION_TTL_MS = 12 * 60 * 60 * 1000;
+var AUTH_IDLE_TTL_MS = 2 * 60 * 60 * 1000;
+var AUTH_LOCK_THRESHOLD = 5;
+var AUTH_LOCK_MS = 15 * 60 * 1000;
+var AUTH_GENERIC_LOGIN = 'Username or password is incorrect.';
+var AUTH_DISABLED = 'This account is disabled.';
+var AUTH_EXPIRED = 'Your session has expired. Please sign in again.';
+var AUTH_REQUIRED = 'Sign in is required.';
+
+function isPublicAuthAction(action) {
+  return Boolean(AUTH_PUBLIC_ACTIONS[String(action || '')]);
+}
+
+function isSetupAuthAction(action) {
+  return Boolean(AUTH_SETUP_ACTIONS[String(action || '')]);
+}
+
+function setupAuthorizationField(action) {
+  return AUTH_SETUP_FIELDS[String(action || '')] || '';
+}
+
+function createAuthService(deps) {
+  var sheets = deps.sheetRepository;
+  var repository = createAuthRepository(sheets);
+  var identityRepository = createIdentityRepository(sheets, deps.driveStorage);
+  var audit = deps.audit || createAuditService(sheets);
+
+  function canHandle(action) {
+    return Boolean(AUTH_ACTIONS[action]);
+  }
+
+  function text(value) {
+    return value === undefined || value === null ? '' : String(value);
+  }
+
+  function locked(fn) {
+    return withScriptLock(function () {
+      return fn(sheets.openSpreadsheet());
+    });
+  }
+
+  function identitySnapshot(spreadsheet) {
+    return identityRepository.load(spreadsheet);
+  }
+
+  function findUser(snapshot, id) {
+    for (var i = 0; i < snapshot.users.length; i += 1) {
+      if (snapshot.users[i].id === id) return snapshot.users[i];
+    }
+    return null;
+  }
+
+  function findUserByUsername(snapshot, username) {
+    var needle = text(username).trim().toLowerCase();
+    if (!needle) return null;
+    for (var i = 0; i < snapshot.users.length; i += 1) {
+      if (String(snapshot.users[i].email || '').trim().toLowerCase() === needle) return snapshot.users[i];
+    }
+    return null;
+  }
+
+  function findOwner(snapshot) {
+    for (var i = 0; i < snapshot.users.length; i += 1) {
+      var user = snapshot.users[i];
+      if (user.status === 'active' && isOwnerUser(snapshot, user)) return user;
+    }
+    return null;
+  }
+
+  function findCredential(records, username) {
+    var needle = text(username).trim().toLowerCase();
+    for (var i = 0; i < records.length; i += 1) {
+      if (records[i].username === needle) return records[i];
+    }
+    return null;
+  }
+
+  function findCredentialByUserId(records, userId) {
+    for (var i = 0; i < records.length; i += 1) {
+      if (records[i].userId === userId) return records[i];
+    }
+    return null;
+  }
+
+  function recordEvent(spreadsheet, entry) {
+    try {
+      repository.appendEvent(spreadsheet, {
+        id: createId(),
+        timestamp: nowIso(),
+        actorUserId: text(entry.actorUserId),
+        targetUserId: text(entry.targetUserId),
+        eventType: text(entry.eventType),
+        result: text(entry.result),
+        reason: text(entry.reason).slice(0, 180),
+        requestId: text(entry.requestId)
+      });
+    } catch (error) {
+      console.log(JSON.stringify({ status: 'error', errorCode: 'AUTH_EVENT_WRITE_FAILED' }));
+    }
+    try {
+      sheets.ensureSheet(spreadsheet, 'AuditLogs', AUDIT_HEADERS);
+      audit.append({
+        userId: text(entry.actorUserId),
+        action: 'auth.' + text(entry.eventType),
+        entityType: 'user',
+        entityId: text(entry.targetUserId || entry.actorUserId),
+        reference: text(entry.result),
+        before: '',
+        after: text(entry.reason).slice(0, 180),
+        requestId: text(entry.requestId)
+      });
+    } catch (error) {
+      console.log(JSON.stringify({ status: 'error', errorCode: 'AUTH_AUDIT_WRITE_FAILED' }));
+    }
+  }
+
+  function publicUser(snapshot, user, credential) {
+    var role = roleById(snapshot, user.roleId);
+    return {
+      id: user.id,
+      name: user.name,
+      username: user.email,
+      email: user.email,
+      roleId: user.roleId,
+      role: user.role,
+      roleName: role ? role.name : user.role,
+      departmentId: user.departmentId,
+      status: user.status,
+      lastLogin: user.lastLogin,
+      mustChange: Boolean(credential && credential.mustChange),
+      isOwner: isOwnerUser(snapshot, user)
+    };
+  }
+
+  function sessionEnvelope(snapshot, user, credential, token, session) {
+    return {
+      sessionToken: token,
+      expiresAt: session.expiresAt,
+      idleExpiresAt: session.idleExpiresAt,
+      user: publicUser(snapshot, user, credential)
+    };
+  }
+
+  function persistCredentials(spreadsheet, records, next) {
+    var written = records.filter(function (item) { return item.id !== next.id; });
+    written.push(next);
+    repository.writeCredentials(spreadsheet, written);
+  }
+
+  function applySecret(record, hashed, actorId, mustChange) {
+    record.passwordHash = hashed.hash;
+    record.salt = hashed.salt;
+    record.iterations = hashed.iterations;
+    record.algorithm = hashed.algorithm;
+    record.wrappedVerifier = hashed.wrappedVerifier || '';
+    record.mustChange = Boolean(mustChange);
+    record.passwordUpdatedAt = nowIso();
+    record.failedCount = 0;
+    record.lockedUntil = '';
+    record.status = 'active';
+    record.updatedAt = nowIso();
+    if (!record.createdAt) record.createdAt = record.updatedAt;
+    if (!record.createdBy) record.createdBy = actorId || '';
+    return record;
+  }
+
+  function hashFromPayload(payload, passwordValue, username) {
+    var verifier = text(payload && payload.passwordVerifier).trim().toLowerCase();
+    var salt = text(payload && payload.salt).trim().toLowerCase();
+    if (verifier) {
+      return authHashFromVerifier(verifier, salt, payload.iterations);
+    }
+    if (typeof passwordValue === 'string' && passwordValue) {
+      authValidatePasswordPolicy(passwordValue, username);
+      return authHashPassword(passwordValue);
+    }
+    throw appError('VALIDATION_ERROR', 'Username and password are required.');
+  }
+
+  function matchesSecret(record, payload, passwordValue) {
+    var verifier = text(payload && payload.passwordVerifier).trim().toLowerCase();
+    if (verifier) return authVerifyVerifier(verifier, record);
+    if (typeof passwordValue === 'string' && passwordValue) return authVerifyPassword(passwordValue, record);
+    return false;
+  }
+
+  function setPassword(record, password, actorId, mustChange) {
+    return applySecret(record, hashFromPayload({}, password, record.username), actorId, mustChange);
+  }
+
+  function setPasswordFromPayload(record, payload, passwordValue, actorId, mustChange) {
+    return applySecret(record, hashFromPayload(payload, passwordValue, record.username), actorId, mustChange);
+  }
+
+  function createCredential(user, password, actorId, mustChange) {
+    return setPassword({
+      id: createId(),
+      userId: user.id,
+      username: String(user.email || '').trim().toLowerCase()
+    }, password, actorId, mustChange);
+  }
+
+  function createCredentialFromPayload(user, payload, passwordValue, actorId, mustChange) {
+    return setPasswordFromPayload({
+      id: createId(),
+      userId: user.id,
+      username: String(user.email || '').trim().toLowerCase()
+    }, payload, passwordValue, actorId, mustChange);
+  }
+
+  function revokeSessions(spreadsheet, userId, reason, exceptId) {
+    var now = nowIso();
+    var sessions = repository.readSessions(spreadsheet).map(function (session) {
+      if (session.userId !== userId) return session;
+      if (exceptId && session.id === exceptId) return session;
+      if (session.revokedAt) return session;
+      return {
+        id: session.id,
+        userId: session.userId,
+        tokenHash: session.tokenHash,
+        createdAt: session.createdAt,
+        lastSeenAt: session.lastSeenAt,
+        expiresAt: session.expiresAt,
+        idleExpiresAt: session.idleExpiresAt,
+        revokedAt: now,
+        revokedReason: reason || 'revoked'
+      };
+    });
+    repository.writeSessions(spreadsheet, sessions);
+  }
+
+  function createSessionRecord(spreadsheet, user, now) {
+    var token = authRandomToken();
+    var created = now.toISOString();
+    var session = {
+      id: createId(),
+      userId: user.id,
+      tokenHash: authHashToken(token),
+      createdAt: created,
+      lastSeenAt: created,
+      expiresAt: new Date(now.getTime() + AUTH_SESSION_TTL_MS).toISOString(),
+      idleExpiresAt: new Date(now.getTime() + AUTH_IDLE_TTL_MS).toISOString(),
+      revokedAt: '',
+      revokedReason: ''
+    };
+    repository.writeSessions(spreadsheet, repository.readSessions(spreadsheet).concat([session]));
+    return { token: token, session: session };
+  }
+
+  function touchLastLogin(spreadsheet, snapshot, userId, stamp) {
+    var users = snapshot.users.map(function (item) {
+      if (item.id !== userId) return item;
+      return {
+        id: item.id,
+        name: item.name,
+        email: item.email,
+        roleId: item.roleId,
+        role: item.role,
+        departmentId: item.departmentId,
+        status: item.status,
+        lastLogin: stamp,
+        createdAt: item.createdAt,
+        updatedAt: item.updatedAt
+      };
+    });
+    identityRepository.writeUsers(spreadsheet, users);
+  }
+
+  function isLocked(credential, now) {
+    if (!credential || !credential.lockedUntil) return false;
+    var until = Date.parse(credential.lockedUntil);
+    return isFinite(until) && until > now.getTime();
+  }
+
+  function failLogin(spreadsheet, credentials, credential, username, reason, requestId) {
+    if (credential) {
+      credential.failedCount = Number(credential.failedCount || 0) + 1;
+      credential.updatedAt = nowIso();
+      if (credential.failedCount >= AUTH_LOCK_THRESHOLD) {
+        credential.lockedUntil = new Date(Date.now() + AUTH_LOCK_MS).toISOString();
+        credential.failedCount = 0;
+      }
+      persistCredentials(spreadsheet, credentials, credential);
+    }
+    recordEvent(spreadsheet, {
+      actorUserId: '',
+      targetUserId: credential ? credential.userId : '',
+      eventType: 'login_failed',
+      result: 'denied',
+      reason: reason,
+      requestId: requestId
+    });
+    if (credential && isLocked(credential, new Date())) {
+      throw appError('FORBIDDEN', AUTH_GENERIC_LOGIN);
+    }
+    throw appError('UNAUTHORIZED', AUTH_GENERIC_LOGIN);
+  }
+
+  function pruneChallenges(rows, now) {
+    var cutoff = now.getTime() - 60 * 60 * 1000;
+    return rows.filter(function (row) {
+      if (row.consumedAt && Date.parse(row.consumedAt) < cutoff) return false;
+      if (Date.parse(row.expiresAt) < cutoff) return false;
+      return true;
+    });
+  }
+
+  function issueChallenge(spreadsheet, payload) {
+    var username = text(payload.username).trim().toLowerCase();
+    var purpose = text(payload.purpose).trim() || AUTH_LOGIN_PURPOSE;
+    if (!username) throw appError('VALIDATION_ERROR', 'Username and password are required.');
+    if (purpose !== AUTH_LOGIN_PURPOSE && purpose !== AUTH_PASSWORD_CHANGE_PURPOSE) {
+      throw appError('VALIDATION_ERROR', 'Password is invalid.');
+    }
+    var now = new Date();
+    var challenge = authBytesToHex(authRandomBytes(32));
+    var row = {
+      id: createId(),
+      username: username,
+      challengeHash: authHashToken(challenge),
+      purpose: purpose,
+      createdAt: now.toISOString(),
+      expiresAt: new Date(now.getTime() + AUTH_CHALLENGE_TTL_MS).toISOString(),
+      consumedAt: ''
+    };
+    var rows = pruneChallenges(repository.readChallenges(spreadsheet), now);
+    rows.push(row);
+    repository.writeChallenges(spreadsheet, rows);
+    var credential = findCredential(repository.readCredentials(spreadsheet), username);
+    return {
+      challengeId: row.id,
+      challenge: challenge,
+      salt: credential && credential.salt ? credential.salt : authDummyChallengeSalt(username),
+      iterations: AUTH_PBKDF2_ITERATIONS,
+      algorithm: 'pbkdf2-hmac-sha256',
+      purpose: purpose
+    };
+  }
+
+  function consumeChallenge(spreadsheet, payload, expectedPurpose, username) {
+    var challengeId = text(payload.challengeId).trim();
+    var challenge = text(payload.challenge).trim().toLowerCase();
+    var proof = text(payload.loginProof).trim().toLowerCase();
+    if (!challengeId || !authIsHex(challenge, 32) || !authIsHex(proof, 32)) {
+      throw appError('VALIDATION_ERROR', 'Username and password are required.');
+    }
+    var now = new Date();
+    var rows = repository.readChallenges(spreadsheet);
+    var found = null;
+    var index = -1;
+    var i;
+    for (i = 0; i < rows.length; i += 1) {
+      if (rows[i].id === challengeId) {
+        found = rows[i];
+        index = i;
+        break;
+      }
+    }
+    if (!found || found.consumedAt || found.username !== username || found.purpose !== expectedPurpose) {
+      throw appError('UNAUTHORIZED', AUTH_GENERIC_LOGIN);
+    }
+    if (Date.parse(found.expiresAt) <= now.getTime()) {
+      found.consumedAt = now.toISOString();
+      repository.writeChallenges(spreadsheet, rows);
+      throw appError('UNAUTHORIZED', AUTH_GENERIC_LOGIN);
+    }
+    if (found.challengeHash !== authHashToken(challenge)) {
+      throw appError('UNAUTHORIZED', AUTH_GENERIC_LOGIN);
+    }
+    found.consumedAt = now.toISOString();
+    rows[index] = found;
+    repository.writeChallenges(spreadsheet, rows);
+    return { id: found.id, challenge: challenge, purpose: found.purpose };
+  }
+
+  function login(spreadsheet, payload, requestId) {
+    var username = text(payload.username).trim().toLowerCase();
+    if (!username) throw appError('VALIDATION_ERROR', 'Username and password are required.');
+    var snapshot = identitySnapshot(spreadsheet);
+    var credentials = repository.readCredentials(spreadsheet);
+    var credential = findCredential(credentials, username);
+    var now = new Date();
+    if (credential && isLocked(credential, now)) {
+      recordEvent(spreadsheet, {
+        actorUserId: '',
+        targetUserId: credential.userId,
+        eventType: 'login_failed',
+        result: 'denied',
+        reason: 'locked',
+        requestId: requestId
+      });
+      throw appError('FORBIDDEN', AUTH_GENERIC_LOGIN);
+    }
+    var consumed;
+    try {
+      consumed = consumeChallenge(spreadsheet, payload, AUTH_LOGIN_PURPOSE, username);
+    } catch (error) {
+      return failLogin(spreadsheet, credentials, credential, username, 'invalid_challenge', requestId);
+    }
+    var user = credential ? findUser(snapshot, credential.userId) : findUserByUsername(snapshot, username);
+    if (!credential || !authVerifyLoginProof(credential, payload.loginProof, consumed.id, consumed.challenge, username, consumed.purpose)) {
+      return failLogin(spreadsheet, credentials, credential, username, 'invalid_credentials', requestId);
+    }
+    if (!user || user.status !== 'active') {
+      recordEvent(spreadsheet, {
+        actorUserId: user ? user.id : credential.userId,
+        targetUserId: credential.userId,
+        eventType: 'login_failed',
+        result: 'denied',
+        reason: 'disabled',
+        requestId: requestId
+      });
+      throw appError('FORBIDDEN', AUTH_DISABLED);
+    }
+    credential.failedCount = 0;
+    credential.lockedUntil = '';
+    credential.updatedAt = nowIso();
+    persistCredentials(spreadsheet, credentials, credential);
+    var minted = createSessionRecord(spreadsheet, user, now);
+    touchLastLogin(spreadsheet, snapshot, user.id, minted.session.createdAt);
+    snapshot = identitySnapshot(spreadsheet);
+    user = findUser(snapshot, user.id);
+    recordEvent(spreadsheet, {
+      actorUserId: user.id,
+      targetUserId: user.id,
+      eventType: 'login',
+      result: 'ok',
+      reason: '',
+      requestId: requestId
+    });
+    return sessionEnvelope(snapshot, user, credential, minted.token, minted.session);
+  }
+
+  function status(spreadsheet) {
+    var snapshot = identitySnapshot(spreadsheet);
+    var credentials = repository.readCredentials(spreadsheet);
+    var owner = snapshot.empty ? null : findOwner(snapshot);
+    return {
+      identityReady: !snapshot.empty,
+      needsOwnerBootstrap: Boolean(owner && credentials.length === 0),
+      sessionHours: AUTH_SESSION_TTL_MS / (60 * 60 * 1000),
+      idleMinutes: AUTH_IDLE_TTL_MS / (60 * 1000),
+      algorithm: 'pbkdf2-hmac-sha256',
+      iterations: AUTH_PBKDF2_ITERATIONS
+    };
+  }
+
+  function bootstrapOwner(spreadsheet, payload, requestId) {
+    var snapshot = identitySnapshot(spreadsheet);
+    if (snapshot.empty) throw appError('CONFLICT', 'Identity is not initialized.');
+    var credentials = repository.readCredentials(spreadsheet);
+    if (credentials.length) throw appError('FORBIDDEN', 'Owner bootstrap is not available.');
+    var username = text(payload.username).trim().toLowerCase();
+    var hasVerifier = Boolean(text(payload.passwordVerifier).trim());
+    var password = payload.password;
+    if (!username || (!hasVerifier && typeof password !== 'string')) {
+      throw appError('VALIDATION_ERROR', 'Username and password are required.');
+    }
+    if (!authVerifyOwnerEnrollSecret(payload.ownerEnrollmentAuthorization, username, Date.now())) {
+      throw appError('UNAUTHORIZED', 'Setup authorization is required.');
+    }
+    var bound = authOwnerEnrollBinding();
+    var user = findUserByUsername(snapshot, username);
+    if (!user || user.id !== bound.userId || !isOwnerUser(snapshot, user) || user.status !== 'active') {
+      throw appError('FORBIDDEN', 'Owner bootstrap is not available.');
+    }
+    var credential = createCredentialFromPayload(user, payload, password, user.id, false);
+    repository.writeCredentials(spreadsheet, [credential]);
+    var stored = findCredentialByUserId(repository.readCredentials(spreadsheet), user.id);
+    if (!stored || stored.username !== username || stored.userId !== user.id || !stored.passwordHash || !stored.wrappedVerifier) {
+      throw appError('INTERNAL_ERROR', 'Owner enrollment did not complete.');
+    }
+    authConsumeOwnerEnrollSecret();
+    var minted = createSessionRecord(spreadsheet, user, new Date());
+    touchLastLogin(spreadsheet, snapshot, user.id, minted.session.createdAt);
+    snapshot = identitySnapshot(spreadsheet);
+    user = findUser(snapshot, user.id);
+    recordEvent(spreadsheet, {
+      actorUserId: user.id,
+      targetUserId: user.id,
+      eventType: 'owner_bootstrap',
+      result: 'ok',
+      reason: '',
+      requestId: requestId
+    });
+    return sessionEnvelope(snapshot, user, stored, minted.token, minted.session);
+  }
+
+  function parseSession(spreadsheet, token) {
+    var value = text(token).trim();
+    if (!value) throw appError('UNAUTHORIZED', AUTH_REQUIRED);
+    var tokenHash = authHashToken(value);
+    var sessions = repository.readSessions(spreadsheet);
+    var now = Date.now();
+    var found = null;
+    for (var i = 0; i < sessions.length; i += 1) {
+      if (sessions[i].tokenHash === tokenHash) {
+        found = sessions[i];
+        break;
+      }
+    }
+    if (!found) throw appError('UNAUTHORIZED', AUTH_REQUIRED);
+    if (found.revokedAt) {
+      recordEvent(spreadsheet, {
+        actorUserId: found.userId,
+        targetUserId: found.userId,
+        eventType: 'session_revoked_access',
+        result: 'denied',
+        reason: found.revokedReason || 'revoked',
+        requestId: ''
+      });
+      throw appError('UNAUTHORIZED', AUTH_EXPIRED);
+    }
+    if (Date.parse(found.expiresAt) <= now || Date.parse(found.idleExpiresAt) <= now) {
+      found.revokedAt = nowIso();
+      found.revokedReason = Date.parse(found.expiresAt) <= now ? 'expired' : 'idle';
+      repository.writeSessions(spreadsheet, sessions);
+      recordEvent(spreadsheet, {
+        actorUserId: found.userId,
+        targetUserId: found.userId,
+        eventType: 'session_expired',
+        result: 'denied',
+        reason: found.revokedReason,
+        requestId: ''
+      });
+      throw appError('UNAUTHORIZED', AUTH_EXPIRED);
+    }
+    var user = readUserRow(spreadsheet, found.userId);
+    if (!user || user.status !== 'active') {
+      found.revokedAt = nowIso();
+      found.revokedReason = 'disabled';
+      repository.writeSessions(spreadsheet, sessions);
+      throw appError('FORBIDDEN', AUTH_DISABLED);
+    }
+    var lastSeen = Date.parse(found.lastSeenAt);
+    if (!isFinite(lastSeen) || now - lastSeen > 60000) {
+      found.lastSeenAt = nowIso();
+      found.idleExpiresAt = new Date(now + AUTH_IDLE_TTL_MS).toISOString();
+      repository.writeSessions(spreadsheet, sessions);
+    }
+    var credential = findCredentialByUserId(repository.readCredentials(spreadsheet), user.id);
+    return {
+      session: found,
+      user: user,
+      credential: credential,
+      snapshot: null
+    };
+  }
+
+  function readUserRow(spreadsheet, userId) {
+    var usersSheet = sheets.getSheet(spreadsheet, 'Users');
+    if (!usersSheet) return null;
+    var records;
+    try {
+      records = sheets.readObjects(usersSheet);
+    } catch (error) {
+      return null;
+    }
+    for (var i = 0; i < records.length; i += 1) {
+      if (text(records[i].id) === userId) {
+        return {
+          id: text(records[i].id),
+          name: text(records[i].name),
+          email: text(records[i].email),
+          roleId: text(records[i].roleId),
+          role: text(records[i].role),
+          departmentId: text(records[i].departmentId),
+          status: text(records[i].status) === 'active' ? 'active' : 'inactive',
+          lastLogin: text(records[i].lastLogin)
+        };
+      }
+    }
+    return null;
+  }
+
+  function withIdentitySnapshot(spreadsheet, resolved) {
+    if (!resolved.snapshot) resolved.snapshot = identitySnapshot(spreadsheet);
+    return resolved;
+  }
+
+  function logout(spreadsheet, payload, requestId, resolved) {
+    var sessions = repository.readSessions(spreadsheet).map(function (session) {
+      if (session.id !== resolved.session.id) return session;
+      return {
+        id: session.id,
+        userId: session.userId,
+        tokenHash: session.tokenHash,
+        createdAt: session.createdAt,
+        lastSeenAt: session.lastSeenAt,
+        expiresAt: session.expiresAt,
+        idleExpiresAt: session.idleExpiresAt,
+        revokedAt: nowIso(),
+        revokedReason: 'logout'
+      };
+    });
+    repository.writeSessions(spreadsheet, sessions);
+    recordEvent(spreadsheet, {
+      actorUserId: resolved.user.id,
+      targetUserId: resolved.user.id,
+      eventType: 'logout',
+      result: 'ok',
+      reason: '',
+      requestId: requestId
+    });
+    return { loggedOut: true };
+  }
+
+  function me(spreadsheet, resolved) {
+    return {
+      user: publicUser(resolved.snapshot, resolved.user, resolved.credential),
+      expiresAt: resolved.session.expiresAt,
+      idleExpiresAt: resolved.session.idleExpiresAt
+    };
+  }
+
+  function changePassword(spreadsheet, payload, requestId, resolved) {
+    var currentPassword = payload.currentPassword;
+    var nextPassword = payload.newPassword;
+    var nextVerifier = text(payload.passwordVerifier).trim();
+    var hasProof = Boolean(text(payload.loginProof).trim());
+    if (!hasProof && typeof currentPassword !== 'string') {
+      throw appError('VALIDATION_ERROR', 'Current and new passwords are required.');
+    }
+    if (!nextVerifier && typeof nextPassword !== 'string') {
+      throw appError('VALIDATION_ERROR', 'Current and new passwords are required.');
+    }
+    var credentials = repository.readCredentials(spreadsheet);
+    var credential = findCredentialByUserId(credentials, resolved.user.id);
+    var currentOk = false;
+    if (credential && hasProof) {
+      try {
+        var consumed = consumeChallenge(spreadsheet, payload, AUTH_PASSWORD_CHANGE_PURPOSE, text(resolved.user.email).trim().toLowerCase());
+        currentOk = authVerifyLoginProof(credential, payload.loginProof, consumed.id, consumed.challenge, resolved.user.email, consumed.purpose);
+      } catch (error) {
+        currentOk = false;
+      }
+    } else if (credential) {
+      currentOk = matchesSecret(credential, {}, currentPassword);
+    }
+    if (!credential || !currentOk) {
+      recordEvent(spreadsheet, {
+        actorUserId: resolved.user.id,
+        targetUserId: resolved.user.id,
+        eventType: 'password_change',
+        result: 'denied',
+        reason: 'invalid_current',
+        requestId: requestId
+      });
+      throw appError('FORBIDDEN', 'Current password is incorrect.');
+    }
+    if (!nextVerifier && currentPassword === nextPassword) {
+      throw appError('VALIDATION_ERROR', 'New password must be different.');
+    }
+    setPasswordFromPayload(credential, payload, nextPassword, resolved.user.id, false);
+    persistCredentials(spreadsheet, credentials, credential);
+    revokeSessions(spreadsheet, resolved.user.id, 'password_change', resolved.session.id);
+    recordEvent(spreadsheet, {
+      actorUserId: resolved.user.id,
+      targetUserId: resolved.user.id,
+      eventType: 'password_change',
+      result: 'ok',
+      reason: '',
+      requestId: requestId
+    });
+    return { changed: true, mustChange: false };
+  }
+
+  function resetPassword(spreadsheet, payload, requestId, resolved) {
+    if (!isOwnerUser(resolved.snapshot, resolved.user)) {
+      recordEvent(spreadsheet, {
+        actorUserId: resolved.user.id,
+        targetUserId: text(payload.userId),
+        eventType: 'password_reset',
+        result: 'denied',
+        reason: 'not_owner',
+        requestId: requestId
+      });
+      throw appError('FORBIDDEN', 'Only Owner can reset passwords.');
+    }
+    var target = findUser(resolved.snapshot, text(payload.userId));
+    if (!target) throw appError('NOT_FOUND', 'User was not found.');
+    var nextPassword = payload.newPassword;
+    var hasVerifier = Boolean(text(payload.passwordVerifier).trim());
+    if (!hasVerifier && typeof nextPassword !== 'string') throw appError('VALIDATION_ERROR', 'A new password is required.');
+    var credentials = repository.readCredentials(spreadsheet);
+    var credential = findCredentialByUserId(credentials, target.id);
+    if (!credential) credential = createCredentialFromPayload(target, payload, nextPassword, resolved.user.id, true);
+    else setPasswordFromPayload(credential, payload, nextPassword, resolved.user.id, true);
+    persistCredentials(spreadsheet, credentials, credential);
+    revokeSessions(spreadsheet, target.id, 'password_reset');
+    recordEvent(spreadsheet, {
+      actorUserId: resolved.user.id,
+      targetUserId: target.id,
+      eventType: 'password_reset',
+      result: 'ok',
+      reason: 'must_change',
+      requestId: requestId
+    });
+    return { reset: true, userId: target.id, mustChange: true };
+  }
+
+  function events(spreadsheet, payload, resolved) {
+    if (!isOwnerUser(resolved.snapshot, resolved.user)) {
+      throw appError('FORBIDDEN', 'Only Owner can view security events.');
+    }
+    var rows = repository.readEvents(spreadsheet).slice().reverse();
+    var limit = Math.min(200, Math.max(1, Number(payload.limit) || 50));
+    return { events: rows.slice(0, limit) };
+  }
+
+  function accounts(spreadsheet, resolved) {
+    if (!isOwnerUser(resolved.snapshot, resolved.user)) {
+      throw appError('FORBIDDEN', 'Only Owner can view staff security status.');
+    }
+    var summaries = {};
+    repository.readCredentials(spreadsheet).forEach(function (credential) {
+      summaries[credential.userId] = {
+        userId: credential.userId,
+        username: credential.username,
+        hasPassword: Boolean(credential.passwordHash),
+        mustChange: Boolean(credential.mustChange),
+        passwordUpdatedAt: credential.passwordUpdatedAt,
+        lockedUntil: credential.lockedUntil
+      };
+    });
+    return { accounts: summaries };
+  }
+
+  function syncCredentialUsername(spreadsheet, userId, username) {
+    var credentials = repository.readCredentials(spreadsheet);
+    var credential = findCredentialByUserId(credentials, userId);
+    if (!credential) return;
+    credential.username = text(username).trim().toLowerCase();
+    credential.updatedAt = nowIso();
+    persistCredentials(spreadsheet, credentials, credential);
+  }
+
+  function requirePasswordReady(resolved, action) {
+    if (action === 'auth.changePassword' || action === 'auth.logout' || action === 'auth.me') return;
+    if (resolved.credential && resolved.credential.mustChange) {
+      throw appError('FORBIDDEN', 'Password change is required.');
+    }
+  }
+
+  function authenticateRequest(request) {
+    var action = request && request.action ? String(request.action) : '';
+    if (isPublicAuthAction(action)) {
+      return { authenticated: false, userId: '', sessionId: '', public: true };
+    }
+    var payload = request && request.payload ? request.payload : {};
+    var spreadsheet = sheets.openSpreadsheet();
+    var resolved = parseSession(spreadsheet, payload.sessionToken);
+    requirePasswordReady(resolved, action);
+    payload.actorUserId = resolved.user.id;
+    var strip = ['actorRole', 'actorPermissions', 'isOwner', 'legacyRole', 'currentUserId'];
+    for (var i = 0; i < strip.length; i += 1) {
+      if (Object.prototype.hasOwnProperty.call(payload, strip[i])) delete payload[strip[i]];
+    }
+    return {
+      authenticated: true,
+      userId: resolved.user.id,
+      sessionId: resolved.session.id,
+      mustChange: Boolean(resolved.credential && resolved.credential.mustChange),
+      user: resolved.user
+    };
+  }
+
+  function issueTestSession(spreadsheet, userId) {
+    if (typeof AUTH_ALLOW_TEST_SESSION === 'undefined' || AUTH_ALLOW_TEST_SESSION !== true) return '';
+    var usersSheet = sheets.getSheet(spreadsheet, 'Users');
+    if (!usersSheet) return '';
+    var records;
+    try {
+      records = sheets.readObjects(usersSheet);
+    } catch (error) {
+      return '';
+    }
+    var wanted = text(userId).trim();
+    var user = null;
+    for (var i = 0; i < records.length; i += 1) {
+      var id = text(records[i].id).trim();
+      if (!id) continue;
+      if (wanted && id === wanted) {
+        user = { id: id };
+        break;
+      }
+      if (!wanted && !user) user = { id: id };
+      if (!wanted && text(records[i].role) === 'owner') {
+        user = { id: id };
+        break;
+      }
+    }
+    if (!user) return '';
+    return createSessionRecord(spreadsheet, user, new Date()).token;
+  }
+
+  function revokeUserSessions(spreadsheet, userId, reason) {
+    revokeSessions(spreadsheet, userId, reason || 'revoked');
+  }
+
+  function provisionStaffPassword(spreadsheet, user, payload, actorId) {
+    if (!user || !user.id) return;
+    var credentials = repository.readCredentials(spreadsheet);
+    var credential = findCredentialByUserId(credentials, user.id);
+    var secret = payload.newPassword || payload.password || payload.temporaryPassword;
+    if (!credential) credential = createCredentialFromPayload(user, payload, secret, actorId, true);
+    else setPasswordFromPayload(credential, payload, secret, actorId, true);
+    persistCredentials(spreadsheet, credentials, credential);
+    revokeSessions(spreadsheet, user.id, 'password_reset');
+  }
+
+  function dispatch(request) {
+    var action = request.action;
+    var payload = request.payload;
+    var requestId = request.requestId ? String(request.requestId) : '';
+    return locked(function (spreadsheet) {
+      if (action === 'auth.status') return okEnvelope(status(spreadsheet));
+      if (action === 'auth.challenge') return okEnvelope(issueChallenge(spreadsheet, payload));
+      if (action === 'auth.login') return okEnvelope(login(spreadsheet, payload, requestId));
+      if (action === 'auth.bootstrapOwner') return okEnvelope(bootstrapOwner(spreadsheet, payload, requestId));
+      var resolved = parseSession(spreadsheet, payload.sessionToken);
+      if (action === 'auth.logout') return okEnvelope(logout(spreadsheet, payload, requestId, resolved));
+      if (action === 'auth.me') return okEnvelope(me(spreadsheet, withIdentitySnapshot(spreadsheet, resolved)));
+      if (action === 'auth.changePassword') return okEnvelope(changePassword(spreadsheet, payload, requestId, resolved));
+      if (action === 'auth.resetPassword') return okEnvelope(resetPassword(spreadsheet, payload, requestId, withIdentitySnapshot(spreadsheet, resolved)));
+      if (action === 'auth.events') return okEnvelope(events(spreadsheet, payload, withIdentitySnapshot(spreadsheet, resolved)));
+      if (action === 'auth.accounts') return okEnvelope(accounts(spreadsheet, withIdentitySnapshot(spreadsheet, resolved)));
+      return errorEnvelope('UNKNOWN_ACTION', 'The action is not available.', { requestId: requestId });
+    });
+  }
+
+  return {
+    canHandle: canHandle,
+    dispatch: dispatch,
+    authenticateRequest: authenticateRequest,
+    issueTestSession: issueTestSession,
+    revokeUserSessions: revokeUserSessions,
+    syncCredentialUsername: syncCredentialUsername,
+    provisionStaffPassword: provisionStaffPassword
+  };
+}
+
+function resolveAuthService(backend) {
+  if (backend && backend.auth) return backend.auth;
+  if (backend && backend.sheets) {
+    return createAuthService({
+      sheetRepository: backend.sheets,
+      driveStorage: backend.driveStorage || backend.drive
+    });
+  }
+  return createAuthService({ sheetRepository: createSheetRepository() });
+}
+

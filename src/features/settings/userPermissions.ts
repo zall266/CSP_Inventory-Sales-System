@@ -19,7 +19,7 @@ export function canManageUsers(state: AppState, user = actorUser(state)) {
 }
 
 export function canCreateUser(state: AppState, user = actorUser(state)) {
-  return hasPermission(state, 'users.create', user)
+  return isOwnerUser(state, user) && hasPermission(state, 'users.create', user)
 }
 
 export function canEditUserRecord(state: AppState, user = actorUser(state)) {
@@ -27,11 +27,11 @@ export function canEditUserRecord(state: AppState, user = actorUser(state)) {
 }
 
 export function canChangeRoles(state: AppState, user = actorUser(state)) {
-  return hasPermission(state, 'users.role.change', user)
+  return isOwnerUser(state, user) && hasPermission(state, 'users.role.change', user)
 }
 
 export function canDeactivateUsers(state: AppState, user = actorUser(state)) {
-  return hasPermission(state, 'users.deactivate', user)
+  return isOwnerUser(state, user) && hasPermission(state, 'users.deactivate', user)
 }
 
 export function canCreateRole(state: AppState, user = actorUser(state)) {
@@ -47,7 +47,7 @@ export function canDeactivateRoles(state: AppState, user = actorUser(state)) {
 }
 
 export function canManagePermissions(state: AppState, user = actorUser(state)) {
-  return hasPermission(state, 'roles.permissions.manage', user)
+  return isOwnerUser(state, user) && hasPermission(state, 'roles.permissions.manage', user)
 }
 
 export function canAssignRole(state: AppState, actor: User, role: Role | undefined, currentRoleId?: string) {
@@ -68,12 +68,12 @@ export function canChangeUserRole(state: AppState, actor: User, target: User, ne
   if (isOwnerUser(state, target) && !isOwnerUser(state, actor)) return false
   if (isOwnerUser(state, target) && nextRole.id !== target.roleId) return false
   if (target.roleId === nextRole.id) return true
-  if (!hasPermission(state, 'users.role.change', actor)) return false
+  if (!isOwnerUser(state, actor) || !hasPermission(state, 'users.role.change', actor)) return false
   return canAssignRole(state, actor, nextRole, target.roleId)
 }
 
 export function canDeactivateUser(state: AppState, actor: User, target: User) {
-  if (!hasPermission(state, 'users.deactivate', actor)) return false
+  if (!isOwnerUser(state, actor) || !hasPermission(state, 'users.deactivate', actor)) return false
   if (target.id === actor.id) return false
   if (isOwnerUser(state, target) && !isOwnerUser(state, actor)) return false
   if (isOwnerUser(state, target)) {

@@ -1,4 +1,5 @@
 import { identityApiUrl, postIdentityAction } from '@/api/identityApi'
+import { readAuthSession, subscribeAuthSession } from '@/auth/session'
 import { createSeedData, CURRENT_USER } from '@/data/seed'
 import { queueIdentityWrite, queueSettingsPatch, startIdentityHydration } from '@/store/identitySync'
 import { queueMasterWrite, startMasterHydration } from '@/store/masterSync'
@@ -460,9 +461,13 @@ let state: AppState = {
   ...hydrateData(loaded?.data ?? cloneData(seed)),
   ui: {
     ...defaultUi(),
-    currentUserId: loaded?.currentUserId && (loaded.data.users ?? seed.users).some((user) => user.id === loaded.currentUserId)
-      ? loaded.currentUserId
-      : 'u-admin',
+    currentUserId: (() => {
+      const session = readAuthSession()
+      if (identityApiUrl() && session?.userId) return session.userId
+      return loaded?.currentUserId && (loaded.data.users ?? seed.users).some((user) => user.id === loaded.currentUserId)
+        ? loaded.currentUserId
+        : 'u-admin'
+    })(),
   },
 }
 
@@ -2239,6 +2244,7 @@ export const db = {
     setUi({ mobileNavOpen })
   },
   switchUser(currentUserId: string) {
+    if (identityApiUrl()) return
     const user = state.users.find((item) => item.id === currentUserId)
     if (!user) return
     if (user.status !== 'active') {
@@ -3156,7 +3162,16 @@ export const db = {
     return true
   },
 
-  createUser(input: { name: string; email: string; roleId: string; departmentId: string; status?: UserStatus }) {
+  createUser(input: {
+    name: string
+    email: string
+    roleId: string
+    departmentId: string
+    status?: UserStatus
+    passwordVerifier?: string
+    salt?: string
+    iterations?: number
+  }) {
     const actor = currentUser(state)
     if (!canCreateUser(state, actor)) {
       toast('Permission denied', 'You cannot add users.', 'danger')
@@ -3211,6 +3226,9 @@ export const db = {
       roleId: user.roleId,
       departmentId: user.departmentId,
       status: user.status,
+      ...(input.passwordVerifier && input.salt
+        ? { passwordVerifier: input.passwordVerifier, salt: input.salt, iterations: input.iterations }
+        : {}),
     })
     toast('User created', user.name)
     return user
@@ -10194,614 +10212,626 @@ export const db = {
   },
 }
 
-startIdentityHydration({
-  apply(slice) {
-    setData({
-      users: slice.users,
-      roles: slice.roles,
-      departments: slice.departments,
-      settings: slice.settings,
-      userAuditLogs: slice.userAuditLogs,
-    })
-  },
-  actorId: () => currentUser(state).id,
-  settings: () => state.settings,
-  onError(message) {
-    toast('Could not save to the server', message, 'danger')
-  },
-  onLoadError(message) {
-    toast('Could not load from the server', message, 'danger')
-  },
-})
+function bootServerHydration() {
+  startIdentityHydration({
+    apply(slice) {
+      setData({
+        users: slice.users,
+        roles: slice.roles,
+        departments: slice.departments,
+        settings: slice.settings,
+        userAuditLogs: slice.userAuditLogs,
+      })
+    },
+    actorId: () => currentUser(state).id,
+    settings: () => state.settings,
+    onError(message) {
+      toast('Could not save to the server', message, 'danger')
+    },
+    onLoadError(message) {
+      toast('Could not load from the server', message, 'danger')
+    },
+  })
 
-startMasterHydration({
-  apply(slice) {
-    setData({ warehouses: slice.warehouses, categories: slice.categories })
-  },
-  actorId: () => currentUser(state).id,
-  onError(message) {
-    toast('Could not save to the server', message, 'danger')
-  },
-  onLoadError(message) {
-    toast('Could not load from the server', message, 'danger')
-  },
-  onSaved(action, payload) {
-    if (action === 'categories.create') toast('Category added', String(payload.name ?? ''))
-    if (action === 'categories.rename') toast('Category renamed')
-  },
-})
+  startMasterHydration({
+    apply(slice) {
+      setData({ warehouses: slice.warehouses, categories: slice.categories })
+    },
+    actorId: () => currentUser(state).id,
+    onError(message) {
+      toast('Could not save to the server', message, 'danger')
+    },
+    onLoadError(message) {
+      toast('Could not load from the server', message, 'danger')
+    },
+    onSaved(action, payload) {
+      if (action === 'categories.create') toast('Category added', String(payload.name ?? ''))
+      if (action === 'categories.rename') toast('Category renamed')
+    },
+  })
 
-startPartyHydration({
-  apply(slice) {
-    setData(slice)
-  },
-  actorId: () => currentUser(state).id,
-  onError(message) {
-    toast('Could not save to the server', message, 'danger')
-  },
-  onLoadError(message) {
-    toast('Could not load from the server', message, 'danger')
-  },
-  onSaved(action, payload) {
-    if (action === 'customers.create') toast('Customer added', String(payload.name ?? ''))
-    if (action === 'suppliers.create') toast('Supplier added', String(payload.name ?? ''))
-    if (action === 'agents.create') toast('Agent added', String(payload.name ?? ''))
-    if (action === 'agents.update') toast('Agent updated', String(payload.name ?? ''))
-    if (action === 'agents.setStatus') {
-      toast(payload.status === 'inactive' ? 'Agent deactivated' : 'Agent activated', String(payload.name ?? ''))
-    }
-    if (action === 'customers.saveWholesalePrice') {
-      const label = `${payload.customerName ?? 'Customer'} · ${payload.productName ?? 'Product'}`
-      toast(payload.active === false ? 'Custom price removed' : 'Custom price saved', label)
-    }
-    if (action === 'customers.deactivateWholesalePrice') {
-      toast('Custom price removed', `${payload.customerName ?? 'Customer'} · ${payload.productName ?? 'Product'}`)
-    }
-  },
-})
+  startPartyHydration({
+    apply(slice) {
+      setData(slice)
+    },
+    actorId: () => currentUser(state).id,
+    onError(message) {
+      toast('Could not save to the server', message, 'danger')
+    },
+    onLoadError(message) {
+      toast('Could not load from the server', message, 'danger')
+    },
+    onSaved(action, payload) {
+      if (action === 'customers.create') toast('Customer added', String(payload.name ?? ''))
+      if (action === 'suppliers.create') toast('Supplier added', String(payload.name ?? ''))
+      if (action === 'agents.create') toast('Agent added', String(payload.name ?? ''))
+      if (action === 'agents.update') toast('Agent updated', String(payload.name ?? ''))
+      if (action === 'agents.setStatus') {
+        toast(payload.status === 'inactive' ? 'Agent deactivated' : 'Agent activated', String(payload.name ?? ''))
+      }
+      if (action === 'customers.saveWholesalePrice') {
+        const label = `${payload.customerName ?? 'Customer'} · ${payload.productName ?? 'Product'}`
+        toast(payload.active === false ? 'Custom price removed' : 'Custom price saved', label)
+      }
+      if (action === 'customers.deactivateWholesalePrice') {
+        toast('Custom price removed', `${payload.customerName ?? 'Customer'} · ${payload.productName ?? 'Product'}`)
+      }
+    },
+  })
 
-startProductHydration({
-  apply(slice) {
-    const products = bomCostsReady()
-      ? slice.products.map((product) => {
-          const current = state.products.find((row) => row.id === product.id)
-          if (!current) return product
-          return { ...product, costPrice: current.costPrice, costSource: current.costSource }
-        })
-      : slice.products
-    setData({ products })
-  },
-  actorId: () => currentUser(state).id,
-  onError(message) {
-    toast('Could not save to the server', message, 'danger')
-  },
-  onLoadError(message) {
-    toast('Could not load from the server', message, 'danger')
-  },
-  onSaved(action, payload, products) {
-    if (action === 'products.create') {
-      const saved = products.find((product) => product.id === payload.id)
-      const name = saved?.name || String(payload.name ?? '')
-      const sku = saved?.sku || String(payload.sku ?? '')
-      toast('Product added', payload.skuGenerated ? `${name} · SKU ${sku}` : `${name} is now in the catalogue.`)
-    }
-    if (action === 'products.update') toast('Product updated')
-    if (action === 'products.setStatus') toast(payload.status === 'inactive' ? 'Product deactivated' : 'Product activated')
-    if (action === 'products.saveAgentPrices') {
-      const count = Array.isArray(payload.rows) ? payload.rows.length : 0
-      toast('Prices saved', `${count} product(s) updated.`)
-    }
-    if (action === 'products.create') refreshInventory()
-  },
-})
+  startProductHydration({
+    apply(slice) {
+      const products = bomCostsReady()
+        ? slice.products.map((product) => {
+            const current = state.products.find((row) => row.id === product.id)
+            if (!current) return product
+            return { ...product, costPrice: current.costPrice, costSource: current.costSource }
+          })
+        : slice.products
+      setData({ products })
+    },
+    actorId: () => currentUser(state).id,
+    onError(message) {
+      toast('Could not save to the server', message, 'danger')
+    },
+    onLoadError(message) {
+      toast('Could not load from the server', message, 'danger')
+    },
+    onSaved(action, payload, products) {
+      if (action === 'products.create') {
+        const saved = products.find((product) => product.id === payload.id)
+        const name = saved?.name || String(payload.name ?? '')
+        const sku = saved?.sku || String(payload.sku ?? '')
+        toast('Product added', payload.skuGenerated ? `${name} · SKU ${sku}` : `${name} is now in the catalogue.`)
+      }
+      if (action === 'products.update') toast('Product updated')
+      if (action === 'products.setStatus') toast(payload.status === 'inactive' ? 'Product deactivated' : 'Product activated')
+      if (action === 'products.saveAgentPrices') {
+        const count = Array.isArray(payload.rows) ? payload.rows.length : 0
+        toast('Prices saved', `${count} product(s) updated.`)
+      }
+      if (action === 'products.create') refreshInventory()
+    },
+  })
 
-startInventoryHydration({
-  apply(slice) {
-    setData({
-      inventory: slice.inventory,
-      stockMovements: slice.stockMovements,
-      ...(slice.stockOrders ? { stockOrders: slice.stockOrders } : {}),
-    })
-  },
-  actorId: () => currentUser(state).id,
-  onError(message) {
-    toast('Could not save to the server', message, 'danger')
-  },
-  onLoadError(message) {
-    toast('Could not load from the server', message, 'danger')
-  },
-  onSaved(action, payload, data) {
-    if (action === 'inventory.adjust') {
-      toast('Stock adjusted', `${productById(String(payload.productId ?? ''))?.name ?? 'Product'} updated.`)
-    }
-    if (action === 'inventory.transfer') toast('Transfer complete', `${payload.qty ?? ''} moved.`)
-    if (action === 'inventory.usage') {
-      const product = productById(String(payload.productId ?? ''))
-      toast('Stock usage recorded', `${product?.name ?? 'Product'} −${formatQty(Number(payload.qty ?? 0))} ${product?.unit ?? ''}`.trim())
-    }
-    if (action === 'inventory.count') {
-      const changes = Number(data.changes ?? 0)
-      toast('Stock count complete', changes ? `${changes} SKUs adjusted.` : 'No differences found.', changes ? 'success' : 'info')
-    }
-    if (action === 'inventory.markOrdered') toast('Marked as ordered', String(payload.productId ?? ''))
-    if (action === 'inventory.cancelOrder') toast('Order cancelled', String(payload.reason ?? ''))
-  },
-  onSettled() {
-    inventoryPostInFlight = false
-  },
-})
+  startInventoryHydration({
+    apply(slice) {
+      setData({
+        inventory: slice.inventory,
+        stockMovements: slice.stockMovements,
+        ...(slice.stockOrders ? { stockOrders: slice.stockOrders } : {}),
+      })
+    },
+    actorId: () => currentUser(state).id,
+    onError(message) {
+      toast('Could not save to the server', message, 'danger')
+    },
+    onLoadError(message) {
+      toast('Could not load from the server', message, 'danger')
+    },
+    onSaved(action, payload, data) {
+      if (action === 'inventory.adjust') {
+        toast('Stock adjusted', `${productById(String(payload.productId ?? ''))?.name ?? 'Product'} updated.`)
+      }
+      if (action === 'inventory.transfer') toast('Transfer complete', `${payload.qty ?? ''} moved.`)
+      if (action === 'inventory.usage') {
+        const product = productById(String(payload.productId ?? ''))
+        toast('Stock usage recorded', `${product?.name ?? 'Product'} −${formatQty(Number(payload.qty ?? 0))} ${product?.unit ?? ''}`.trim())
+      }
+      if (action === 'inventory.count') {
+        const changes = Number(data.changes ?? 0)
+        toast('Stock count complete', changes ? `${changes} SKUs adjusted.` : 'No differences found.', changes ? 'success' : 'info')
+      }
+      if (action === 'inventory.markOrdered') toast('Marked as ordered', String(payload.productId ?? ''))
+      if (action === 'inventory.cancelOrder') toast('Order cancelled', String(payload.reason ?? ''))
+    },
+    onSettled() {
+      inventoryPostInFlight = false
+    },
+  })
 
-startReceivingHydration({
-  apply(slice) {
-    setData({
-      receivings: slice.receivings,
-      stockOrders: slice.stockOrders,
-      ...(slice.inventory ? { inventory: slice.inventory } : {}),
-      ...(slice.stockMovements ? { stockMovements: slice.stockMovements } : {}),
-      ...(slice.purchases ? { purchases: slice.purchases } : {}),
-    })
-  },
-  actorId: () => currentUser(state).id,
-  onError(message) {
-    toast('Could not save to the server', message, 'danger')
-  },
-  onLoadError(message) {
-    toast('Could not load from the server', message, 'danger')
-  },
-  onSaved(action, _payload, data) {
-    if (action === 'receivings.create') {
-      const doc = data.receiving as Receiving | undefined
-      toast('Receiving completed', doc ? `${doc.receivingNo} — stock increased.` : 'Stock increased.')
-    }
-    if (action === 'receivings.linkPurchase') {
-      const doc = data.receiving as Receiving | undefined
-      toast('Receiving linked', doc?.purchaseNo ? `${doc.receivingNo} → ${doc.purchaseNo}` : 'Purchase linked.')
-    }
-  },
-  onSettled() {
-    receivingPostInFlight = false
-  },
-})
+  startReceivingHydration({
+    apply(slice) {
+      setData({
+        receivings: slice.receivings,
+        stockOrders: slice.stockOrders,
+        ...(slice.inventory ? { inventory: slice.inventory } : {}),
+        ...(slice.stockMovements ? { stockMovements: slice.stockMovements } : {}),
+        ...(slice.purchases ? { purchases: slice.purchases } : {}),
+      })
+    },
+    actorId: () => currentUser(state).id,
+    onError(message) {
+      toast('Could not save to the server', message, 'danger')
+    },
+    onLoadError(message) {
+      toast('Could not load from the server', message, 'danger')
+    },
+    onSaved(action, _payload, data) {
+      if (action === 'receivings.create') {
+        const doc = data.receiving as Receiving | undefined
+        toast('Receiving completed', doc ? `${doc.receivingNo} — stock increased.` : 'Stock increased.')
+      }
+      if (action === 'receivings.linkPurchase') {
+        const doc = data.receiving as Receiving | undefined
+        toast('Receiving linked', doc?.purchaseNo ? `${doc.receivingNo} → ${doc.purchaseNo}` : 'Purchase linked.')
+      }
+    },
+    onSettled() {
+      receivingPostInFlight = false
+    },
+  })
 
-startWarehouseHydration({
-  apply(slice) {
-    setData(slice)
-  },
-  actorId: () => currentUser(state).id,
-  onError(message) {
-    toast('Could not save to the server', message, 'danger')
-  },
-  onLoadError(message) {
-    toast('Could not load from the server', message, 'danger')
-  },
-  onSaved(action, payload) {
-    const qty = payload.qty ?? ''
-    if (action === 'warehouse.place') toast('Stock placed', `${qty} pack(s) placed.`)
-    if (action === 'warehouse.move') toast('Stock moved', `${qty} pack(s) moved.`)
-    if (action === 'warehouse.topUp') toast('Display topped up', `${qty} pack(s) moved to Display. Inventory total unchanged.`)
-    if (action === 'warehouse.empty') toast('Position emptied', 'Packs returned to Ready to Place.')
-    if (action === 'warehouse.createTemporary') toast('Temporary location added', String(payload.name ?? ''))
-    if (action === 'warehouse.createRack') toast('Rack added', String(payload.name ?? ''))
-    if (action === 'warehouse.rename') toast('Location renamed', String(payload.name ?? ''))
-    if (action === 'warehouse.deactivate') toast('Location deactivated', String(payload.name ?? ''))
-    if (action === 'warehouse.useBalance') toast('Balance used', `${qty}${payload.unit ?? ''} recorded. Inventory packs unchanged.`)
-  },
-  onSettled() {
-    warehousePostInFlight = false
-  },
-})
+  startWarehouseHydration({
+    apply(slice) {
+      setData(slice)
+    },
+    actorId: () => currentUser(state).id,
+    onError(message) {
+      toast('Could not save to the server', message, 'danger')
+    },
+    onLoadError(message) {
+      toast('Could not load from the server', message, 'danger')
+    },
+    onSaved(action, payload) {
+      const qty = payload.qty ?? ''
+      if (action === 'warehouse.place') toast('Stock placed', `${qty} pack(s) placed.`)
+      if (action === 'warehouse.move') toast('Stock moved', `${qty} pack(s) moved.`)
+      if (action === 'warehouse.topUp') toast('Display topped up', `${qty} pack(s) moved to Display. Inventory total unchanged.`)
+      if (action === 'warehouse.empty') toast('Position emptied', 'Packs returned to Ready to Place.')
+      if (action === 'warehouse.createTemporary') toast('Temporary location added', String(payload.name ?? ''))
+      if (action === 'warehouse.createRack') toast('Rack added', String(payload.name ?? ''))
+      if (action === 'warehouse.rename') toast('Location renamed', String(payload.name ?? ''))
+      if (action === 'warehouse.deactivate') toast('Location deactivated', String(payload.name ?? ''))
+      if (action === 'warehouse.useBalance') toast('Balance used', `${qty}${payload.unit ?? ''} recorded. Inventory packs unchanged.`)
+    },
+    onSettled() {
+      warehousePostInFlight = false
+    },
+  })
 
-startOpeningBalanceHydration({
-  apply(slice) {
-    setData({
-      openingBalances: slice.openingBalances,
-      ...(slice.inventory ? { inventory: slice.inventory } : {}),
-      ...(slice.stockMovements ? { stockMovements: slice.stockMovements } : {}),
-      ...(slice.displayStocks ? { displayStocks: slice.displayStocks } : {}),
-      ...(slice.productionBalances ? { productionBalances: slice.productionBalances } : {}),
-      ...(slice.storageSlots ? { storageSlots: slice.storageSlots } : {}),
-      ...(slice.slotOccupancies ? { slotOccupancies: slice.slotOccupancies } : {}),
-      ...(slice.placementLogs ? { placementLogs: slice.placementLogs } : {}),
-    })
-  },
-  actorId: () => currentUser(state).id,
-  onError(message) {
-    toast('Could not save to the server', message, 'danger')
-  },
-  onLoadError(message) {
-    toast('Could not load from the server', message, 'danger')
-  },
-  onSaved(action, _payload, data) {
-    if (action === 'openingBalances.save') toast('Opening balance saved', String((data.openingBalance as OpeningBalance | undefined)?.documentNo ?? ''))
-    if (action === 'openingBalances.update') toast('Opening balance updated', String((data.openingBalance as OpeningBalance | undefined)?.documentNo ?? ''))
-    if (action === 'openingBalances.confirm') {
-      const doc = data.openingBalance as OpeningBalance | undefined
-      toast('Opening balance confirmed', doc?.documentNo ?? '')
-    }
-  },
-  onSettled() {
-    openingBalanceInFlight = false
-  },
-})
+  startOpeningBalanceHydration({
+    apply(slice) {
+      setData({
+        openingBalances: slice.openingBalances,
+        ...(slice.inventory ? { inventory: slice.inventory } : {}),
+        ...(slice.stockMovements ? { stockMovements: slice.stockMovements } : {}),
+        ...(slice.displayStocks ? { displayStocks: slice.displayStocks } : {}),
+        ...(slice.productionBalances ? { productionBalances: slice.productionBalances } : {}),
+        ...(slice.storageSlots ? { storageSlots: slice.storageSlots } : {}),
+        ...(slice.slotOccupancies ? { slotOccupancies: slice.slotOccupancies } : {}),
+        ...(slice.placementLogs ? { placementLogs: slice.placementLogs } : {}),
+      })
+    },
+    actorId: () => currentUser(state).id,
+    onError(message) {
+      toast('Could not save to the server', message, 'danger')
+    },
+    onLoadError(message) {
+      toast('Could not load from the server', message, 'danger')
+    },
+    onSaved(action, _payload, data) {
+      if (action === 'openingBalances.save') toast('Opening balance saved', String((data.openingBalance as OpeningBalance | undefined)?.documentNo ?? ''))
+      if (action === 'openingBalances.update') toast('Opening balance updated', String((data.openingBalance as OpeningBalance | undefined)?.documentNo ?? ''))
+      if (action === 'openingBalances.confirm') {
+        const doc = data.openingBalance as OpeningBalance | undefined
+        toast('Opening balance confirmed', doc?.documentNo ?? '')
+      }
+    },
+    onSettled() {
+      openingBalanceInFlight = false
+    },
+  })
 
-startHalalHydration({
-  apply(slice) {
-    setData({
-      manufacturers: slice.manufacturers,
-      halalCertificates: slice.halalCertificates,
-      halalCompliances: slice.halalCompliances,
-      ...(slice.documentAuditLogs ? { documentAuditLogs: slice.documentAuditLogs } : {}),
-    })
-  },
-  actorId: () => currentUser(state).id,
-  onError(message) {
-    toast('Could not save to the server', message, 'danger')
-  },
-  onLoadError(message) {
-    toast('Could not load from the server', message, 'danger')
-  },
-  onSaved(action, _payload, data) {
-    const manufacturer = data.manufacturer as Manufacturer | undefined
-    if (action === 'halal.saveManufacturer') {
-      toast(_payload.id ? 'Manufacturer updated' : 'Manufacturer saved', manufacturer?.name ?? '')
-    }
-    if (action === 'halal.saveCompliance') {
-      toast('Halal compliance saved')
-    }
-  },
-  onSettled() {},
-})
+  startHalalHydration({
+    apply(slice) {
+      setData({
+        manufacturers: slice.manufacturers,
+        halalCertificates: slice.halalCertificates,
+        halalCompliances: slice.halalCompliances,
+        ...(slice.documentAuditLogs ? { documentAuditLogs: slice.documentAuditLogs } : {}),
+      })
+    },
+    actorId: () => currentUser(state).id,
+    onError(message) {
+      toast('Could not save to the server', message, 'danger')
+    },
+    onLoadError(message) {
+      toast('Could not load from the server', message, 'danger')
+    },
+    onSaved(action, _payload, data) {
+      const manufacturer = data.manufacturer as Manufacturer | undefined
+      if (action === 'halal.saveManufacturer') {
+        toast(_payload.id ? 'Manufacturer updated' : 'Manufacturer saved', manufacturer?.name ?? '')
+      }
+      if (action === 'halal.saveCompliance') {
+        toast('Halal compliance saved')
+      }
+    },
+    onSettled() {},
+  })
 
-startTaskHydration({
-  apply(slice) {
-    setData({
-      staffTaskCategories: slice.staffTaskCategories,
-      staffTasks: slice.staffTasks,
-      staffTaskOccurrences: slice.staffTaskOccurrences,
-      ...(slice.documentAuditLogs ? { documentAuditLogs: slice.documentAuditLogs } : {}),
-    })
-  },
-  actorId: () => currentUser(state).id,
-  onError(message) {
-    toast('Could not save to the server', message, 'danger')
-  },
-  onLoadError(message) {
-    toast('Could not load from the server', message, 'danger')
-  },
-  onSaved(action, _payload, data) {
-    const category = data.category as { name?: string } | undefined
-    const task = data.task as StaffTask | undefined
-    const occurrence = data.occurrence as { taskId?: string } | undefined
-    const occurrenceTask = (data.staffTasks as StaffTask[] | undefined)?.find((row) => row.id === occurrence?.taskId)
-    if (action === 'tasks.createCategory') toast('Category added', category?.name ?? '')
-    if (action === 'tasks.updateCategory') toast('Category updated', category?.name ?? '')
-    if (action === 'tasks.deactivateCategory') toast('Category deactivated', category?.name ?? '')
-    if (action === 'tasks.create') toast('Task created', task?.title ?? '')
-    if (action === 'tasks.update') toast('Task updated', task?.title ?? '')
-    if (action === 'tasks.deactivate') toast('Task deactivated', task?.title ?? '')
-    if (action === 'tasks.start') toast('Task started', occurrenceTask?.title ?? '')
-    if (action === 'tasks.attachPhoto') toast('Photo uploaded')
-    if (action === 'tasks.complete') toast('Task completed', occurrenceTask?.title ?? '')
-  },
-  onSettled() {},
-})
+  startTaskHydration({
+    apply(slice) {
+      setData({
+        staffTaskCategories: slice.staffTaskCategories,
+        staffTasks: slice.staffTasks,
+        staffTaskOccurrences: slice.staffTaskOccurrences,
+        ...(slice.documentAuditLogs ? { documentAuditLogs: slice.documentAuditLogs } : {}),
+      })
+    },
+    actorId: () => currentUser(state).id,
+    onError(message) {
+      toast('Could not save to the server', message, 'danger')
+    },
+    onLoadError(message) {
+      toast('Could not load from the server', message, 'danger')
+    },
+    onSaved(action, _payload, data) {
+      const category = data.category as { name?: string } | undefined
+      const task = data.task as StaffTask | undefined
+      const occurrence = data.occurrence as { taskId?: string } | undefined
+      const occurrenceTask = (data.staffTasks as StaffTask[] | undefined)?.find((row) => row.id === occurrence?.taskId)
+      if (action === 'tasks.createCategory') toast('Category added', category?.name ?? '')
+      if (action === 'tasks.updateCategory') toast('Category updated', category?.name ?? '')
+      if (action === 'tasks.deactivateCategory') toast('Category deactivated', category?.name ?? '')
+      if (action === 'tasks.create') toast('Task created', task?.title ?? '')
+      if (action === 'tasks.update') toast('Task updated', task?.title ?? '')
+      if (action === 'tasks.deactivate') toast('Task deactivated', task?.title ?? '')
+      if (action === 'tasks.start') toast('Task started', occurrenceTask?.title ?? '')
+      if (action === 'tasks.attachPhoto') toast('Photo uploaded')
+      if (action === 'tasks.complete') toast('Task completed', occurrenceTask?.title ?? '')
+    },
+    onSettled() {},
+  })
 
-startExpenseHydration({
-  apply(slice) {
-    setData({ expenses: slice.expenses })
-  },
-  actorId: () => currentUser(state).id,
-  onError(message) {
-    toast('Could not save to the server', message, 'danger')
-  },
-  onLoadError(message) {
-    toast('Could not load from the server', message, 'danger')
-  },
-  onSaved(action, _payload, data) {
-    const expense = data.expense as Expense | undefined
-    if (action === 'expenses.create') toast('Expense added', expense?.description ?? '')
-  },
-  onSettled() {},
-})
+  startExpenseHydration({
+    apply(slice) {
+      setData({ expenses: slice.expenses })
+    },
+    actorId: () => currentUser(state).id,
+    onError(message) {
+      toast('Could not save to the server', message, 'danger')
+    },
+    onLoadError(message) {
+      toast('Could not load from the server', message, 'danger')
+    },
+    onSaved(action, _payload, data) {
+      const expense = data.expense as Expense | undefined
+      if (action === 'expenses.create') toast('Expense added', expense?.description ?? '')
+    },
+    onSettled() {},
+  })
 
-startDispatchHydration({
-  apply(slice) {
-    setData({
-      vehicles: slice.vehicles,
-      dispatches: slice.dispatches,
-      inspectionGroups: slice.inspectionGroups,
-      ...(slice.documentAuditLogs ? { documentAuditLogs: slice.documentAuditLogs } : {}),
-      ...(slice.inventory ? { inventory: slice.inventory } : {}),
-      ...(slice.stockMovements ? { stockMovements: slice.stockMovements } : {}),
-    })
-  },
-  actorId: () => currentUser(state).id,
-  onError(message) {
-    toast('Could not save to the server', message, 'danger')
-  },
-  onLoadError(message) {
-    toast('Could not load from the server', message, 'danger')
-  },
-  onSaved(action, _payload, data) {
-    const vehicle = data.vehicle as Vehicle | undefined
-    const dispatch = data.dispatch as DispatchRecord | undefined
-    const group = data.group as InspectionGroup | undefined
-    if (action === 'vehicles.create') toast('Vehicle saved', vehicle?.code ?? '')
-    if (action === 'vehicles.update') toast('Vehicle updated', vehicle?.code ?? '')
-    if (action === 'vehicles.setActive') {
-      toast(vehicle?.active === false ? 'Vehicle deactivated' : 'Vehicle activated', vehicle?.code ?? '')
-    }
-    if (action === 'dispatch.confirm') {
-      toast('Dispatch confirmed', dispatch ? `${dispatch.vehicleCode} · ${dispatch.dispatchDate}` : '')
-    }
-    if (action === 'dispatch.void') toast('Dispatch voided', dispatch?.vehicleCode ?? '')
-    if (action === 'dispatch.createInspectionGroup') toast('Inspection group confirmed', group?.groupNo ?? '')
-    if (action === 'dispatch.release') toast('Inspection group released', group?.groupNo ?? '')
-  },
-  onSettled() {},
-})
+  startDispatchHydration({
+    apply(slice) {
+      setData({
+        vehicles: slice.vehicles,
+        dispatches: slice.dispatches,
+        inspectionGroups: slice.inspectionGroups,
+        ...(slice.documentAuditLogs ? { documentAuditLogs: slice.documentAuditLogs } : {}),
+        ...(slice.inventory ? { inventory: slice.inventory } : {}),
+        ...(slice.stockMovements ? { stockMovements: slice.stockMovements } : {}),
+      })
+    },
+    actorId: () => currentUser(state).id,
+    onError(message) {
+      toast('Could not save to the server', message, 'danger')
+    },
+    onLoadError(message) {
+      toast('Could not load from the server', message, 'danger')
+    },
+    onSaved(action, _payload, data) {
+      const vehicle = data.vehicle as Vehicle | undefined
+      const dispatch = data.dispatch as DispatchRecord | undefined
+      const group = data.group as InspectionGroup | undefined
+      if (action === 'vehicles.create') toast('Vehicle saved', vehicle?.code ?? '')
+      if (action === 'vehicles.update') toast('Vehicle updated', vehicle?.code ?? '')
+      if (action === 'vehicles.setActive') {
+        toast(vehicle?.active === false ? 'Vehicle deactivated' : 'Vehicle activated', vehicle?.code ?? '')
+      }
+      if (action === 'dispatch.confirm') {
+        toast('Dispatch confirmed', dispatch ? `${dispatch.vehicleCode} · ${dispatch.dispatchDate}` : '')
+      }
+      if (action === 'dispatch.void') toast('Dispatch voided', dispatch?.vehicleCode ?? '')
+      if (action === 'dispatch.createInspectionGroup') toast('Inspection group confirmed', group?.groupNo ?? '')
+      if (action === 'dispatch.release') toast('Inspection group released', group?.groupNo ?? '')
+    },
+    onSettled() {},
+  })
 
-startSalesImportHydration({
-  apply(slice) {
-    setData({
-      salesImportAccounts: slice.salesImportAccounts,
-      salesImportBatches: slice.salesImportBatches,
-      salesImportFiles: slice.salesImportFiles,
-      salesImportOrders: slice.salesImportOrders,
-      salesImportLines: slice.salesImportLines,
-      salesImportMappings: slice.salesImportMappings,
-      salesImportShipments: slice.salesImportShipments,
-      ...(slice.sales ? { sales: slice.sales } : {}),
-      ...(slice.documentAuditLogs ? { documentAuditLogs: slice.documentAuditLogs } : {}),
-      ...(slice.inventory ? { inventory: slice.inventory } : {}),
-      ...(slice.stockMovements ? { stockMovements: slice.stockMovements } : {}),
-    })
-  },
-  actorId: () => currentUser(state).id,
-  onError(message) {
-    toast('Could not save to the server', message, 'danger')
-  },
-  onLoadError(message) {
-    toast('Could not load from the server', message, 'danger')
-  },
-  onSaved(action, _payload, data) {
-    const batch = data.batch as ImportBatch | undefined
-    const account = data.account as SalesImportAccount | undefined
-    const file = data.file as ImportFile | undefined
-    if (action === 'salesImport.createAccount') toast('Import account saved', account?.name ?? '')
-    if (action === 'salesImport.createBatch') toast('Import batch created', batch ? `${batch.platform}` : '')
-    if (action === 'salesImport.ingestPicking') {
-      const error = file?.parseError
-      toast(error ? 'Parse error' : 'Picking list processed', error ?? file?.fileName ?? '', error ? 'danger' : 'success')
-    }
-    if (action === 'salesImport.ingestAwb') {
-      toast(file?.parseError ? 'Parse error' : 'AWB processed', file?.parseError ?? file?.fileName ?? '', file?.parseError ? 'danger' : 'success')
-    }
-    if (action === 'salesImport.acknowledge') toast('Account acknowledged', batch ? `${batch.platform}` : '')
-    if (action === 'salesImport.saveMapping') toast('Mapping saved')
-    if (action === 'salesImport.updateMapping') toast('Mapping updated.')
-    if (action === 'salesImport.setMappingActive') {
-      const mapping = data.mapping as SalesImportMapping | undefined
-      toast(mapping?.active === false ? 'Mapping deactivated.' : 'Mapping activated.')
-    }
-    if (action === 'salesImport.confirm') {
-      const posted = Number(data.posted || 0)
-      if (posted) toast('Sales import confirmed', `${posted} sale${posted === 1 ? '' : 's'} posted`)
-    }
-  },
-  onSettled() {},
-})
+  startSalesImportHydration({
+    apply(slice) {
+      setData({
+        salesImportAccounts: slice.salesImportAccounts,
+        salesImportBatches: slice.salesImportBatches,
+        salesImportFiles: slice.salesImportFiles,
+        salesImportOrders: slice.salesImportOrders,
+        salesImportLines: slice.salesImportLines,
+        salesImportMappings: slice.salesImportMappings,
+        salesImportShipments: slice.salesImportShipments,
+        ...(slice.sales ? { sales: slice.sales } : {}),
+        ...(slice.documentAuditLogs ? { documentAuditLogs: slice.documentAuditLogs } : {}),
+        ...(slice.inventory ? { inventory: slice.inventory } : {}),
+        ...(slice.stockMovements ? { stockMovements: slice.stockMovements } : {}),
+      })
+    },
+    actorId: () => currentUser(state).id,
+    onError(message) {
+      toast('Could not save to the server', message, 'danger')
+    },
+    onLoadError(message) {
+      toast('Could not load from the server', message, 'danger')
+    },
+    onSaved(action, _payload, data) {
+      const batch = data.batch as ImportBatch | undefined
+      const account = data.account as SalesImportAccount | undefined
+      const file = data.file as ImportFile | undefined
+      if (action === 'salesImport.createAccount') toast('Import account saved', account?.name ?? '')
+      if (action === 'salesImport.createBatch') toast('Import batch created', batch ? `${batch.platform}` : '')
+      if (action === 'salesImport.ingestPicking') {
+        const error = file?.parseError
+        toast(error ? 'Parse error' : 'Picking list processed', error ?? file?.fileName ?? '', error ? 'danger' : 'success')
+      }
+      if (action === 'salesImport.ingestAwb') {
+        toast(file?.parseError ? 'Parse error' : 'AWB processed', file?.parseError ?? file?.fileName ?? '', file?.parseError ? 'danger' : 'success')
+      }
+      if (action === 'salesImport.acknowledge') toast('Account acknowledged', batch ? `${batch.platform}` : '')
+      if (action === 'salesImport.saveMapping') toast('Mapping saved')
+      if (action === 'salesImport.updateMapping') toast('Mapping updated.')
+      if (action === 'salesImport.setMappingActive') {
+        const mapping = data.mapping as SalesImportMapping | undefined
+        toast(mapping?.active === false ? 'Mapping deactivated.' : 'Mapping activated.')
+      }
+      if (action === 'salesImport.confirm') {
+        const posted = Number(data.posted || 0)
+        if (posted) toast('Sales import confirmed', `${posted} sale${posted === 1 ? '' : 's'} posted`)
+      }
+    },
+    onSettled() {},
+  })
 
-startSalesReturnHydration({
-  apply(slice) {
-    setData({
-      salesReturns: hydrateSalesReturns(slice.salesReturns),
-      returnSources: slice.returnSources,
-      returnReasons: slice.returnReasons,
-      ...(slice.sales ? { sales: slice.sales } : {}),
-      ...(slice.documentAuditLogs ? { documentAuditLogs: slice.documentAuditLogs } : {}),
-      ...(slice.inventory ? { inventory: slice.inventory } : {}),
-      ...(slice.stockMovements ? { stockMovements: slice.stockMovements } : {}),
-      ...(slice.productionBalances ? { productionBalances: slice.productionBalances } : {}),
-    })
-  },
-  actorId: () => currentUser(state).id,
-  onError(message) {
-    toast('Could not save to the server', message, 'danger')
-  },
-  onLoadError(message) {
-    toast('Could not load from the server', message, 'danger')
-  },
-  onSaved(action, _payload, data) {
-    if (action === 'salesReturns.save') toast('Return saved', String((data.salesReturn as SalesReturn | undefined)?.returnNo ?? ''))
-    if (action === 'salesReturns.update') toast('Return updated', String((data.salesReturn as SalesReturn | undefined)?.returnNo ?? ''))
-    if (action === 'salesReturns.confirm') toast('Return confirmed', String((data.salesReturn as SalesReturn | undefined)?.returnNo ?? ''))
-    if (action === 'salesReturns.cancel') toast('Return cancelled', String((data.salesReturn as SalesReturn | undefined)?.returnNo ?? ''))
-    if (action === 'returnSources.upsert') toast('Return Source saved', String((data.returnSource as { name?: string } | undefined)?.name ?? ''))
-    if (action === 'returnSources.setActive') {
-      const source = data.returnSource as { name?: string; active?: boolean } | undefined
-      toast(source?.active ? 'Return Source activated' : 'Return Source deactivated', source?.name ?? '')
-    }
-    if (action === 'returnReasons.upsert') toast('Return Reason saved', String((data.returnReason as { name?: string } | undefined)?.name ?? ''))
-    if (action === 'returnReasons.setActive') {
-      const reason = data.returnReason as { name?: string; active?: boolean } | undefined
-      toast(reason?.active ? 'Return Reason activated' : 'Return Reason deactivated', reason?.name ?? '')
-    }
-  },
-  onSettled() {
-    salesReturnInFlight = false
-  },
-})
+  startSalesReturnHydration({
+    apply(slice) {
+      setData({
+        salesReturns: hydrateSalesReturns(slice.salesReturns),
+        returnSources: slice.returnSources,
+        returnReasons: slice.returnReasons,
+        ...(slice.sales ? { sales: slice.sales } : {}),
+        ...(slice.documentAuditLogs ? { documentAuditLogs: slice.documentAuditLogs } : {}),
+        ...(slice.inventory ? { inventory: slice.inventory } : {}),
+        ...(slice.stockMovements ? { stockMovements: slice.stockMovements } : {}),
+        ...(slice.productionBalances ? { productionBalances: slice.productionBalances } : {}),
+      })
+    },
+    actorId: () => currentUser(state).id,
+    onError(message) {
+      toast('Could not save to the server', message, 'danger')
+    },
+    onLoadError(message) {
+      toast('Could not load from the server', message, 'danger')
+    },
+    onSaved(action, _payload, data) {
+      if (action === 'salesReturns.save') toast('Return saved', String((data.salesReturn as SalesReturn | undefined)?.returnNo ?? ''))
+      if (action === 'salesReturns.update') toast('Return updated', String((data.salesReturn as SalesReturn | undefined)?.returnNo ?? ''))
+      if (action === 'salesReturns.confirm') toast('Return confirmed', String((data.salesReturn as SalesReturn | undefined)?.returnNo ?? ''))
+      if (action === 'salesReturns.cancel') toast('Return cancelled', String((data.salesReturn as SalesReturn | undefined)?.returnNo ?? ''))
+      if (action === 'returnSources.upsert') toast('Return Source saved', String((data.returnSource as { name?: string } | undefined)?.name ?? ''))
+      if (action === 'returnSources.setActive') {
+        const source = data.returnSource as { name?: string; active?: boolean } | undefined
+        toast(source?.active ? 'Return Source activated' : 'Return Source deactivated', source?.name ?? '')
+      }
+      if (action === 'returnReasons.upsert') toast('Return Reason saved', String((data.returnReason as { name?: string } | undefined)?.name ?? ''))
+      if (action === 'returnReasons.setActive') {
+        const reason = data.returnReason as { name?: string; active?: boolean } | undefined
+        toast(reason?.active ? 'Return Reason activated' : 'Return Reason deactivated', reason?.name ?? '')
+      }
+    },
+    onSettled() {
+      salesReturnInFlight = false
+    },
+  })
 
-startSalesHydration({
-  apply(slice) {
-    setData({
-      sales: slice.sales,
-      quotations: slice.quotations,
-      deliveryOrders: slice.deliveryOrders,
-      documentAuditLogs: slice.documentAuditLogs,
-      payments: slice.payments,
-      ...(slice.inventory ? { inventory: slice.inventory } : {}),
-      ...(slice.stockMovements ? { stockMovements: slice.stockMovements } : {}),
-    })
-  },
-  actorId: () => currentUser(state).id,
-  onError(message) {
-    toast('Could not save to the server', message, 'danger')
-  },
-  onLoadError(message) {
-    toast('Could not load from the server', message, 'danger')
-  },
-  onSaved(action, _payload, data) {
-    if (action === 'sales.create' || action === 'sales.createWholesale') {
-      const doc = data.sale as Sale | undefined
-      toast('Sale completed', doc ? `${doc.invoiceNo} · ${doc.status === 'paid' ? 'Paid' : 'Recorded'}` : '')
-    }
-    if (action === 'sales.void') {
-      toast('Sale voided', String((data.sale as Sale | undefined)?.invoiceNo ?? ''), 'warning')
-    }
-    if (action === 'sales.recordPayment') {
-      const payment = data.payment as Payment | undefined
-      const doc = data.sale as Sale | undefined
-      toast('Payment recorded', payment && doc ? `${payment.paymentNo} · ${doc.invoiceNo}` : '')
-    }
-    if (action === 'quotations.create') toast('Quotation created', String((data.quotation as Quotation | undefined)?.quotationNo ?? ''))
-    if (action === 'quotations.update') toast('Quotation updated', String((data.quotation as Quotation | undefined)?.quotationNo ?? ''))
-    if (action === 'quotations.setStatus') {
-      const quotation = data.quotation as Quotation | undefined
-      toast('Quotation updated', quotation ? `${quotation.quotationNo} · ${quotation.status}` : '')
-    }
-    if (action === 'quotations.convert') toast('Converted to invoice', String((data.sale as Sale | undefined)?.invoiceNo ?? ''))
-    if (action === 'deliveries.create') toast('Delivery order created', String((data.deliveryOrder as DeliveryOrder | undefined)?.doNo ?? ''))
-    if (action === 'deliveries.update') toast('Delivery order updated', String((data.deliveryOrder as DeliveryOrder | undefined)?.doNo ?? ''))
-    if (action === 'deliveries.setStatus') {
-      const order = data.deliveryOrder as DeliveryOrder | undefined
-      toast('Delivery order updated', order ? `${order.doNo} · ${order.status}` : '')
-    }
-  },
-  onSettled() {
-    salesPostInFlight = false
-  },
-})
+  startSalesHydration({
+    apply(slice) {
+      setData({
+        sales: slice.sales,
+        quotations: slice.quotations,
+        deliveryOrders: slice.deliveryOrders,
+        documentAuditLogs: slice.documentAuditLogs,
+        payments: slice.payments,
+        ...(slice.inventory ? { inventory: slice.inventory } : {}),
+        ...(slice.stockMovements ? { stockMovements: slice.stockMovements } : {}),
+      })
+    },
+    actorId: () => currentUser(state).id,
+    onError(message) {
+      toast('Could not save to the server', message, 'danger')
+    },
+    onLoadError(message) {
+      toast('Could not load from the server', message, 'danger')
+    },
+    onSaved(action, _payload, data) {
+      if (action === 'sales.create' || action === 'sales.createWholesale') {
+        const doc = data.sale as Sale | undefined
+        toast('Sale completed', doc ? `${doc.invoiceNo} · ${doc.status === 'paid' ? 'Paid' : 'Recorded'}` : '')
+      }
+      if (action === 'sales.void') {
+        toast('Sale voided', String((data.sale as Sale | undefined)?.invoiceNo ?? ''), 'warning')
+      }
+      if (action === 'sales.recordPayment') {
+        const payment = data.payment as Payment | undefined
+        const doc = data.sale as Sale | undefined
+        toast('Payment recorded', payment && doc ? `${payment.paymentNo} · ${doc.invoiceNo}` : '')
+      }
+      if (action === 'quotations.create') toast('Quotation created', String((data.quotation as Quotation | undefined)?.quotationNo ?? ''))
+      if (action === 'quotations.update') toast('Quotation updated', String((data.quotation as Quotation | undefined)?.quotationNo ?? ''))
+      if (action === 'quotations.setStatus') {
+        const quotation = data.quotation as Quotation | undefined
+        toast('Quotation updated', quotation ? `${quotation.quotationNo} · ${quotation.status}` : '')
+      }
+      if (action === 'quotations.convert') toast('Converted to invoice', String((data.sale as Sale | undefined)?.invoiceNo ?? ''))
+      if (action === 'deliveries.create') toast('Delivery order created', String((data.deliveryOrder as DeliveryOrder | undefined)?.doNo ?? ''))
+      if (action === 'deliveries.update') toast('Delivery order updated', String((data.deliveryOrder as DeliveryOrder | undefined)?.doNo ?? ''))
+      if (action === 'deliveries.setStatus') {
+        const order = data.deliveryOrder as DeliveryOrder | undefined
+        toast('Delivery order updated', order ? `${order.doNo} · ${order.status}` : '')
+      }
+    },
+    onSettled() {
+      salesPostInFlight = false
+    },
+  })
 
-startPurchaseHydration({
-  apply(slice) {
-    setData({
-      purchases: slice.purchases,
-      purchaseReturns: slice.purchaseReturns,
-      payments: slice.payments,
-      ...(slice.inventory ? { inventory: slice.inventory } : {}),
-      ...(slice.stockMovements ? { stockMovements: slice.stockMovements } : {}),
-    })
-  },
-  actorId: () => currentUser(state).id,
-  onError(message) {
-    toast('Could not save to the server', message, 'danger')
-  },
-  onLoadError(message) {
-    toast('Could not load from the server', message, 'danger')
-  },
-  onSaved(action, _payload, data) {
-    if (action === 'purchases.create') {
-      const doc = data.purchase as Purchase | undefined
-      toast(
-        doc?.receivingId ? 'Purchase saved — stock already received' : _payload.receive ? 'Purchase received' : 'Draft saved',
-        doc?.purchaseNo ?? '',
-      )
-    }
-    if (action === 'purchases.receive') {
-      const doc = data.purchase as Purchase | undefined
-      toast(doc?.receivingId ? 'Purchase marked received — stock already in' : 'Purchase received', doc?.purchaseNo ?? '')
-    }
-    if (action === 'purchases.recordPayment') {
-      toast('Supplier payment recorded', String((data.payment as Payment | undefined)?.paymentNo ?? ''))
-    }
-    if (action === 'purchaseReturns.create') {
-      toast('Purchase return processed', String((data.purchaseReturn as PurchaseReturn | undefined)?.returnNo ?? ''))
-    }
-  },
-  onSettled() {
-    purchasePostInFlight = false
-  },
-})
+  startPurchaseHydration({
+    apply(slice) {
+      setData({
+        purchases: slice.purchases,
+        purchaseReturns: slice.purchaseReturns,
+        payments: slice.payments,
+        ...(slice.inventory ? { inventory: slice.inventory } : {}),
+        ...(slice.stockMovements ? { stockMovements: slice.stockMovements } : {}),
+      })
+    },
+    actorId: () => currentUser(state).id,
+    onError(message) {
+      toast('Could not save to the server', message, 'danger')
+    },
+    onLoadError(message) {
+      toast('Could not load from the server', message, 'danger')
+    },
+    onSaved(action, _payload, data) {
+      if (action === 'purchases.create') {
+        const doc = data.purchase as Purchase | undefined
+        toast(
+          doc?.receivingId ? 'Purchase saved — stock already received' : _payload.receive ? 'Purchase received' : 'Draft saved',
+          doc?.purchaseNo ?? '',
+        )
+      }
+      if (action === 'purchases.receive') {
+        const doc = data.purchase as Purchase | undefined
+        toast(doc?.receivingId ? 'Purchase marked received — stock already in' : 'Purchase received', doc?.purchaseNo ?? '')
+      }
+      if (action === 'purchases.recordPayment') {
+        toast('Supplier payment recorded', String((data.payment as Payment | undefined)?.paymentNo ?? ''))
+      }
+      if (action === 'purchaseReturns.create') {
+        toast('Purchase return processed', String((data.purchaseReturn as PurchaseReturn | undefined)?.returnNo ?? ''))
+      }
+    },
+    onSettled() {
+      purchasePostInFlight = false
+    },
+  })
 
-startManufacturingHydration({
-  apply(slice) {
-    setData({
-      packingAssemblies: slice.packingAssemblies,
-      productionOrders: slice.productionOrders,
-      batches: slice.batches,
-      ...(slice.inventory ? { inventory: slice.inventory } : {}),
-      ...(slice.stockMovements ? { stockMovements: slice.stockMovements } : {}),
-      ...(slice.productionSessions ? { productionSessions: slice.productionSessions } : {}),
-      ...(slice.displayStocks ? { displayStocks: slice.displayStocks } : {}),
-      ...(slice.productionBalances ? { productionBalances: slice.productionBalances } : {}),
-    })
-  },
-  actorId: () => currentUser(state).id,
-  onError(message) {
-    toast('Could not save to the server', message, 'danger')
-  },
-  onLoadError(message) {
-    toast('Could not load from the server', message, 'danger')
-  },
-  onSaved(action, _payload, data) {
-    if (action === 'packing.create') toast('Packing saved', String((data.packing as PackingAssembly | undefined)?.packingNo ?? ''))
-    if (action === 'packing.update' || action === 'packing.refresh') {
-      toast('Packing updated', String((data.packing as PackingAssembly | undefined)?.packingNo ?? ''))
-    }
-    if (action === 'packing.cancel') toast('Packing cancelled', String((data.packing as PackingAssembly | undefined)?.packingNo ?? ''), 'warning')
-    if (action === 'packing.confirm') {
-      const packing = data.packing as PackingAssembly | undefined
-      toast('Packing confirmed', packing ? `${packing.packingNo} · ${formatQty(packing.actualQty)} ${packing.unit}` : '')
-    }
-    if (action === 'productionOrders.create') toast('Production order created', String((data.productionOrder as ProductionOrder | undefined)?.orderNo ?? ''))
-    if (action === 'productionOrders.update') toast('Production order updated')
-    if (action === 'productionOrders.start') toast('Production started', String((data.productionOrder as ProductionOrder | undefined)?.orderNo ?? ''))
-    if (action === 'productionOrders.pause') toast('Production paused', String((data.productionOrder as ProductionOrder | undefined)?.orderNo ?? ''), 'info')
-    if (action === 'productionOrders.resume') toast('Production resumed', String((data.productionOrder as ProductionOrder | undefined)?.orderNo ?? ''))
-    if (action === 'productionOrders.cancel') toast('Production cancelled', String((data.productionOrder as ProductionOrder | undefined)?.orderNo ?? ''), 'warning')
-    if (action === 'productionOrders.complete') {
-      const order = data.productionOrder as ProductionOrder | undefined
-      toast('Production completed', order ? `${order.orderNo} · ${order.batchNo}` : '')
-    }
-  },
-  onSettled() {
-    manufacturingPostInFlight = false
-    packingConfirmInFlight = false
-  },
-})
+  startManufacturingHydration({
+    apply(slice) {
+      setData({
+        packingAssemblies: slice.packingAssemblies,
+        productionOrders: slice.productionOrders,
+        batches: slice.batches,
+        ...(slice.inventory ? { inventory: slice.inventory } : {}),
+        ...(slice.stockMovements ? { stockMovements: slice.stockMovements } : {}),
+        ...(slice.productionSessions ? { productionSessions: slice.productionSessions } : {}),
+        ...(slice.displayStocks ? { displayStocks: slice.displayStocks } : {}),
+        ...(slice.productionBalances ? { productionBalances: slice.productionBalances } : {}),
+      })
+    },
+    actorId: () => currentUser(state).id,
+    onError(message) {
+      toast('Could not save to the server', message, 'danger')
+    },
+    onLoadError(message) {
+      toast('Could not load from the server', message, 'danger')
+    },
+    onSaved(action, _payload, data) {
+      if (action === 'packing.create') toast('Packing saved', String((data.packing as PackingAssembly | undefined)?.packingNo ?? ''))
+      if (action === 'packing.update' || action === 'packing.refresh') {
+        toast('Packing updated', String((data.packing as PackingAssembly | undefined)?.packingNo ?? ''))
+      }
+      if (action === 'packing.cancel') toast('Packing cancelled', String((data.packing as PackingAssembly | undefined)?.packingNo ?? ''), 'warning')
+      if (action === 'packing.confirm') {
+        const packing = data.packing as PackingAssembly | undefined
+        toast('Packing confirmed', packing ? `${packing.packingNo} · ${formatQty(packing.actualQty)} ${packing.unit}` : '')
+      }
+      if (action === 'productionOrders.create') toast('Production order created', String((data.productionOrder as ProductionOrder | undefined)?.orderNo ?? ''))
+      if (action === 'productionOrders.update') toast('Production order updated')
+      if (action === 'productionOrders.start') toast('Production started', String((data.productionOrder as ProductionOrder | undefined)?.orderNo ?? ''))
+      if (action === 'productionOrders.pause') toast('Production paused', String((data.productionOrder as ProductionOrder | undefined)?.orderNo ?? ''), 'info')
+      if (action === 'productionOrders.resume') toast('Production resumed', String((data.productionOrder as ProductionOrder | undefined)?.orderNo ?? ''))
+      if (action === 'productionOrders.cancel') toast('Production cancelled', String((data.productionOrder as ProductionOrder | undefined)?.orderNo ?? ''), 'warning')
+      if (action === 'productionOrders.complete') {
+        const order = data.productionOrder as ProductionOrder | undefined
+        toast('Production completed', order ? `${order.orderNo} · ${order.batchNo}` : '')
+      }
+    },
+    onSettled() {
+      manufacturingPostInFlight = false
+      packingConfirmInFlight = false
+    },
+  })
 
-startBomHydration({
-  apply(slice) {
-    markBomCostsReady()
-    const costs = new Map(slice.productCosts.map((row) => [row.id, row]))
-    setData({
-      boms: hydrateBoms(slice.boms),
-      products: state.products.map((product) => {
-        const cost = costs.get(product.id)
-        if (!cost) return product
-        const costSource = cost.costSource === 'bom' ? 'bom' as const : 'manual' as const
-        if (product.costPrice === cost.costPrice && product.costSource === costSource) return product
-        return { ...product, costPrice: cost.costPrice, costSource }
-      }),
-    })
-  },
-  actorId: () => currentUser(state).id,
-  onError(message) {
-    toast('Could not save to the server', message, 'danger')
-  },
-  onLoadError(message) {
-    toast('Could not load from the server', message, 'danger')
-  },
-  onSaved(action, payload) {
-    if (action === 'boms.create') toast('BOM created', String(payload.name || ''))
-    if (action === 'boms.update') toast('BOM updated')
-    if (action === 'boms.setStatus') toast(payload.status === 'inactive' ? 'BOM deactivated' : 'BOM activated')
-  },
-  onSettled() {
-    bomPostInFlight = false
-  },
+  startBomHydration({
+    apply(slice) {
+      markBomCostsReady()
+      const costs = new Map(slice.productCosts.map((row) => [row.id, row]))
+      setData({
+        boms: hydrateBoms(slice.boms),
+        products: state.products.map((product) => {
+          const cost = costs.get(product.id)
+          if (!cost) return product
+          const costSource = cost.costSource === 'bom' ? 'bom' as const : 'manual' as const
+          if (product.costPrice === cost.costPrice && product.costSource === costSource) return product
+          return { ...product, costPrice: cost.costPrice, costSource }
+        }),
+      })
+    },
+    actorId: () => currentUser(state).id,
+    onError(message) {
+      toast('Could not save to the server', message, 'danger')
+    },
+    onLoadError(message) {
+      toast('Could not load from the server', message, 'danger')
+    },
+    onSaved(action, payload) {
+      if (action === 'boms.create') toast('BOM created', String(payload.name || ''))
+      if (action === 'boms.update') toast('BOM updated')
+      if (action === 'boms.setStatus') toast(payload.status === 'inactive' ? 'BOM deactivated' : 'BOM activated')
+    },
+    onSettled() {
+      bomPostInFlight = false
+    },
+  })
+}
+
+bootServerHydration()
+
+subscribeAuthSession(() => {
+  const session = readAuthSession()
+  if (session?.userId && state.users.some((user) => user.id === session.userId) && state.ui.currentUserId !== session.userId) {
+    setUi({ currentUserId: session.userId })
+  }
+  if (session && !session.mustChange) bootServerHydration()
 })
 
 void db.purgeExpiredSalesReturnEvidence()

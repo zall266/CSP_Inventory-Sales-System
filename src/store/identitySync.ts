@@ -1,5 +1,4 @@
-import { identityApiUrl, postIdentityAction, type IdentitySlice } from '@/api/identityApi'
-import { createSeedData } from '@/data/seed'
+import { canHydrateFromServer, identityApiUrl, postIdentityAction, type IdentitySlice } from '@/api/identityApi'
 import { canBootstrapFromRead, enqueueHydrate, hydrateRead, reportLoadError } from '@/store/hydrateQueue'
 import type { Settings } from '@/types'
 
@@ -35,8 +34,8 @@ function applyServerSlice(slice: IdentitySlice) {
 }
 
 export function startIdentityHydration(next: SyncOptions) {
-  if (!identityApiUrl()) return
   options = next
+  if (!canHydrateFromServer()) return
   const seen = epoch
   void enqueueHydrate(async () => {
     try {
@@ -48,17 +47,7 @@ export function startIdentityHydration(next: SyncOptions) {
       }
       const payload = loaded.data as { empty?: boolean } | null
       if (payload?.empty) {
-        const seed = createSeedData()
-        const boot = await postIdentityAction('identity.bootstrap', {
-          users: seed.users,
-          roles: seed.roles,
-          departments: seed.departments,
-          settings: seed.settings,
-          userAuditLogs: seed.userAuditLogs ?? [],
-        })
-        if (epoch !== seen || !boot.ok) return
-        const slice = sliceFrom(boot.data)
-        if (slice) applyServerSlice(slice)
+        reportLoadError(next, 'Identity is not initialized. Complete the owner-controlled setup procedure.')
         return
       }
       const slice = sliceFrom(loaded.data as Parameters<typeof sliceFrom>[0])

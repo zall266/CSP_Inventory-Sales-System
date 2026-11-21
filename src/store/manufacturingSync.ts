@@ -1,4 +1,4 @@
-import { identityApiUrl, postIdentityAction } from '@/api/identityApi'
+import { canHydrateFromServer, identityApiUrl, postIdentityAction } from '@/api/identityApi'
 import { enqueueHydrate, hydrateRead, reportLoadError } from '@/store/hydrateQueue'
 import type {
   Batch,
@@ -101,8 +101,8 @@ function pump() {
 }
 
 export function startManufacturingHydration(next: SyncOptions) {
-  if (!identityApiUrl()) return
   options = next
+  if (!canHydrateFromServer()) return
   void enqueueHydrate(async () => {
     try {
       const loaded = await hydrateRead(postIdentityAction, 'packing.list', { actorUserId: options?.actorId() })

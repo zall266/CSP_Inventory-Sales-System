@@ -153,7 +153,7 @@ function listedUsers(backend) {
 test('category create, duplicate, and rename persist one audit each', () => {
   const backend = ready()
   const denied = call(backend, 'categories.create', { name: 'Syrup' })
-  assert.equal(denied.error.code, 'FORBIDDEN')
+  assert.equal(denied.error.code, 'UNAUTHORIZED')
   const inactive = call(backend, 'categories.create', { actorUserId: 'u-off', id: 'cat-syrup', name: 'Syrup' })
   assert.equal(inactive.error.code, 'FORBIDDEN')
   const created = call(backend, 'categories.create', { actorUserId: 'u-mei', id: 'cat-syrup', name: 'Syrup' })

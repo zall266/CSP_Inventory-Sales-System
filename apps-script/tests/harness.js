@@ -1,3 +1,4 @@
+import crypto from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
 import vm from 'node:vm'
@@ -15,6 +16,7 @@ const files = [
   'utils/envelope.js',
   'utils/log.js',
   'config/config.js',
+  'auth/crypto.js',
   'auth/boundary.js',
   'repositories/sheetRepository.js',
   'repositories/auditRepository.js',
@@ -23,6 +25,7 @@ const files = [
   'storage/driveStorage.js',
   'identity/permissionCatalog.js',
   'repositories/identityRepository.js',
+  'repositories/authRepository.js',
   'repositories/masterRepository.js',
   'repositories/productRepository.js',
   'repositories/partyRepository.js',
@@ -53,6 +56,7 @@ const files = [
   'services/systemService.js',
   'services/foundationService.js',
   'services/identityService.js',
+  'services/authService.js',
   'services/masterService.js',
   'services/productService.js',
   'services/partyService.js',
@@ -73,7 +77,81 @@ const files = [
   'app/main.js',
 ]
 
+function toNodeBuffer(value) {
+  if (Buffer.isBuffer(value)) return value
+  if (value instanceof Uint8Array) return Buffer.from(value)
+  if (ArrayBuffer.isView(value)) return Buffer.from(value.buffer, value.byteOffset, value.byteLength)
+  if (Array.isArray(value)) return Buffer.from(Uint8Array.from(value.map((item) => item & 255)))
+  return Buffer.from(String(value))
+}
+
+function nodeUtilities() {
+  return {
+    getUuid: () => crypto.randomUUID(),
+    DigestAlgorithm: { SHA_256: 'SHA_256' },
+    computeDigest(_algo, value) {
+      return Array.from(crypto.createHash('sha256').update(toNodeBuffer(value)).digest())
+    },
+    computeHmacSha256Signature(value, key) {
+      return Array.from(crypto.createHmac('sha256', toNodeBuffer(key)).update(toNodeBuffer(value)).digest())
+    },
+    base64Encode(value) {
+      return toNodeBuffer(value).toString('base64')
+    },
+    base64Decode(value) {
+      return Array.from(Buffer.from(String(value), 'base64'))
+    },
+  }
+}
+
+function shouldMintHarnessSession(context, request) {
+  if (!request || !request.payload || request.payload.sessionToken !== undefined) return false
+  if (context.isPublicAuthAction(request.action)) return false
+  if (typeof context.isSetupAuthAction === 'function' && context.isSetupAuthAction(request.action)) return false
+  const actor = request.payload.actorUserId
+  if (typeof actor === 'string' && actor.trim()) return true
+  if (actor === '' || actor === null) return false
+  const action = String(request.action || '')
+  return /\.(bootstrap|get|list)$/.test(action) || action === 'settings.get'
+}
+
+export const HARNESS_IDENTITY_BOOTSTRAP_SECRET = 'a'.repeat(64)
+export const HARNESS_OWNER_ENROLL_SECRET = 'b'.repeat(64)
+export const HARNESS_OWNER_ENROLL_USERNAME = 'aina@coolslurppy.my'
+export const HARNESS_OWNER_ENROLL_USER_ID = 'u-aina'
+
+export function harnessIdentityBootstrapHash() {
+  return crypto.createHash('sha256').update(HARNESS_IDENTITY_BOOTSTRAP_SECRET).digest('hex')
+}
+
+export function harnessOwnerEnrollHash() {
+  return crypto.createHash('sha256').update(HARNESS_OWNER_ENROLL_SECRET).digest('hex')
+}
+
+export function harnessOwnerEnrollExpiry(fromMs = Date.now()) {
+  return new Date(Number(fromMs) + 10 * 60 * 1000).toISOString()
+}
+
+function injectHarnessSetup(context, request) {
+  if (!request || !request.payload || typeof request.payload !== 'object') return
+  if (typeof context.setupAuthorizationField !== 'function') return
+  const field = context.setupAuthorizationField(request.action)
+  if (!field) return
+  if (field === 'setupAuthorization') {
+    if (context.AUTH_INJECT_TEST_BOOTSTRAP === false) return
+    if (request.payload.setupAuthorization !== undefined) return
+    request.payload.setupAuthorization = HARNESS_IDENTITY_BOOTSTRAP_SECRET
+    return
+  }
+  if (field === 'ownerEnrollmentAuthorization') {
+    if (context.AUTH_INJECT_TEST_OWNER_ENROLL === false) return
+    if (request.payload.ownerEnrollmentAuthorization !== undefined) return
+    request.payload.ownerEnrollmentAuthorization = HARNESS_OWNER_ENROLL_SECRET
+  }
+}
+
 export function loadBackend(globals = {}) {
+  const utilities = { ...nodeUtilities(), ...(globals.Utilities || {}) }
   const context = {
     console,
     JSON,
@@ -84,7 +162,19 @@ export function loadBackend(globals = {}) {
     Object,
     Array,
     Intl,
-    crypto,
+    crypto: {
+      getRandomValues: (value) => crypto.getRandomValues(value),
+      randomUUID: () => crypto.randomUUID(),
+    },
+    authNativePbkdf2HmacSha256(password, salt, iterations, dkLen) {
+      return new Uint8Array(crypto.pbkdf2Sync(
+        toNodeBuffer(password),
+        toNodeBuffer(salt),
+        Number(iterations) || 600000,
+        Number(dkLen) || 32,
+        'sha256',
+      ))
+    },
     Buffer,
     Uint8Array,
     Map,
@@ -98,11 +188,50 @@ export function loadBackend(globals = {}) {
     isNaN,
     isFinite,
     ...globals,
+    Utilities: utilities,
+    AUTH_ALLOW_TEST_SESSION: true,
+    AUTH_INJECT_TEST_BOOTSTRAP: true,
+    AUTH_INJECT_TEST_OWNER_ENROLL: true,
   }
   context.globalThis = context
   vm.createContext(context)
   for (const file of files) {
     vm.runInContext(fs.readFileSync(path.join(root, file), 'utf8'), context, { filename: file })
+  }
+  context.issueHarnessSession = function issueHarnessSession(request, backend) {
+    if (!request || !request.payload || request.payload.sessionToken !== undefined) return ''
+    if (context.isPublicAuthAction(request.action)) return ''
+    if (typeof context.isSetupAuthAction === 'function' && context.isSetupAuthAction(request.action)) return ''
+    try {
+      const auth = backend && backend.auth
+        ? backend.auth
+        : context.createAuthService({
+            sheetRepository: backend && backend.sheets ? backend.sheets : context.createSheetRepository(),
+            driveStorage: backend && (backend.driveStorage || backend.drive),
+          })
+      const sheets = backend && backend.sheets ? backend.sheets : context.createSheetRepository()
+      return auth.issueTestSession(sheets.openSpreadsheet(), String((request.payload && request.payload.actorUserId) || '').trim())
+    } catch {
+      return ''
+    }
+  }
+  const innerHandle = context.handleRequest
+  const tokenCache = new WeakMap()
+  context.handleRequest = function handleRequestWithTestSession(request, backend) {
+    injectHarnessSetup(context, request)
+    if (shouldMintHarnessSession(context, request) && backend && backend.sheets) {
+      const spreadsheet = backend.sheets.openSpreadsheet()
+      const cacheKey = spreadsheet.store || spreadsheet
+      let tokens = tokenCache.get(cacheKey)
+      if (!tokens) {
+        tokens = Object.create(null)
+        tokenCache.set(cacheKey, tokens)
+      }
+      const actor = String((request.payload && request.payload.actorUserId) || '').trim() || '__default__'
+      if (!tokens[actor]) tokens[actor] = context.issueHarnessSession(request, backend)
+      if (tokens[actor]) request.payload.sessionToken = tokens[actor]
+    }
+    return innerHandle(request, backend)
   }
   return context
 }
@@ -111,10 +240,15 @@ export function memoryProperties(initial) {
   const store = { ...initial }
   return {
     getProperty(key) {
-      return store[key] || null
+      if (!Object.prototype.hasOwnProperty.call(store, key)) return null
+      const value = store[key]
+      return value === undefined || value === null ? null : String(value)
     },
     setProperty(key, value) {
       store[key] = String(value)
+    },
+    deleteProperty(key) {
+      delete store[key]
     },
   }
 }
@@ -125,6 +259,11 @@ export function devProperties() {
     SPREADSHEET_ID: 'sheet-id',
     DRIVE_ROOT_ID: 'drive-id',
     TIMEZONE: 'Asia/Kuala_Lumpur',
+    IDENTITY_BOOTSTRAP_HASH: harnessIdentityBootstrapHash(),
+    AUTH_OWNER_ENROLL_HASH: harnessOwnerEnrollHash(),
+    AUTH_OWNER_ENROLL_USERNAME: HARNESS_OWNER_ENROLL_USERNAME,
+    AUTH_OWNER_ENROLL_USER_ID: HARNESS_OWNER_ENROLL_USER_ID,
+    AUTH_OWNER_ENROLL_EXPIRES_AT: harnessOwnerEnrollExpiry(),
   })
 }
 

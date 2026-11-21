@@ -1,4 +1,7 @@
-import { Fragment, useMemo, useState } from 'react'
+import { Fragment, useEffect, useMemo, useState } from 'react'
+import { identityApiUrl, postIdentityAction } from '@/api/identityApi'
+import { preparePasswordVerifier } from '@/auth/passwordHash'
+import { passwordPolicyMessage } from '@/auth/passwordPolicy'
 import { Badge, Button, Card, Checkbox, ConfirmDialog, Field, Input, Modal, PageHeader, Select, StatusBadge, Textarea } from '@/components/ui'
 import { useApi, useStore } from '@/store/hooks'
 import type { PermissionKey, Role, RolePermissions, RoleStatus, User, UserStatus } from '@/types'
@@ -67,9 +70,11 @@ function PermissionDenied() {
   )
 }
 
-type Tab = 'users' | 'roles' | 'matrix'
+type Tab = 'users' | 'roles' | 'matrix' | 'security'
 type UserForm = { name: string; email: string; roleId: string; departmentId: string; status: UserStatus }
 type RoleForm = { name: string; description: string; status: RoleStatus }
+type AccountSummary = { userId: string; username: string; hasPassword: boolean; mustChange: boolean; passwordUpdatedAt: string; lockedUntil: string }
+type SecurityEvent = { id: string; timestamp: string; actorUserId: string; targetUserId: string; eventType: string; result: string; reason: string }
 
 function PermissionList({ permissions, enabledOnly = false }: { permissions: RolePermissions; enabledOnly?: boolean }) {
   const groups = PERMISSION_GROUPS.map((group) => ({
@@ -112,8 +117,20 @@ export function UsersSettingsPage() {
   const [roleError, setRoleError] = useState('')
   const [deactivateUser, setDeactivateUser] = useState<User | null>(null)
   const [deactivateRole, setDeactivateRole] = useState<Role | null>(null)
+  const [userQuery, setUserQuery] = useState('')
+  const [resetUser, setResetUser] = useState<User | null>(null)
+  const [resetPassword, setResetPassword] = useState('')
+  const [resetConfirm, setResetConfirm] = useState('')
+  const [resetError, setResetError] = useState('')
+  const [resetBusy, setResetBusy] = useState(false)
+  const [newPassword, setNewPassword] = useState('')
+  const [newPasswordConfirm, setNewPasswordConfirm] = useState('')
+  const [accounts, setAccounts] = useState<Record<string, AccountSummary>>({})
+  const [securityEvents, setSecurityEvents] = useState<SecurityEvent[]>([])
   const auditRows = useMemo(() => state.userAuditLogs ?? [], [state.userAuditLogs])
   const allowed = canAccessUsersAndRoles(state, actor)
+  const owner = isOwnerUser(state, actor)
+  const connected = Boolean(identityApiUrl())
 
   const firstActiveRole = assignableRoles(state)[0]?.id ?? ''
   const firstActiveDept = activeDepartments(state)[0]?.id ?? ''
@@ -124,12 +141,34 @@ export function UsersSettingsPage() {
   const canRolesEdit = canEditRoleRecord(state, actor)
   const canPerms = canManagePermissions(state, actor)
 
+  useEffect(() => {
+    if (!allowed || !owner || !connected) return
+    void postIdentityAction('auth.accounts', {}).then((result) => {
+      if (result.ok && result.data && typeof result.data === 'object' && 'accounts' in result.data) {
+        setAccounts((result.data as { accounts: Record<string, AccountSummary> }).accounts)
+      }
+    })
+    void postIdentityAction('auth.events', { limit: 50 }).then((result) => {
+      if (result.ok && result.data && typeof result.data === 'object' && 'events' in result.data) {
+        setSecurityEvents((result.data as { events: SecurityEvent[] }).events)
+      }
+    })
+  }, [allowed, owner, connected, state.users.length, tab])
+
+  const visibleUsers = useMemo(() => {
+    const query = userQuery.trim().toLowerCase()
+    if (!query) return state.users
+    return state.users.filter((user) => `${user.name} ${user.email} ${displayRoleName(state, user)}`.toLowerCase().includes(query))
+  }, [state, userQuery])
+
   if (!allowed) return <PermissionDenied />
 
   const openAddUser = () => {
     setSelectedUser(null)
     setUserError('')
     setUserForm({ name: '', email: '', roleId: firstActiveRole, departmentId: firstActiveDept, status: 'active' })
+    setNewPassword('')
+    setNewPasswordConfirm('')
     setUserMode('add')
   }
   const openEditUser = (user: User) => {
@@ -142,7 +181,7 @@ export function UsersSettingsPage() {
     setSelectedUser(user)
     setUserMode('view')
   }
-  const saveUser = () => {
+  const saveUser = async () => {
     const name = userForm.name.trim()
     const email = userForm.email.trim()
     if (!name || !email) {
@@ -150,8 +189,30 @@ export function UsersSettingsPage() {
       return
     }
     if (userMode === 'add') {
-      const created = api.createUser(userForm)
-      if (created) setUserMode(null)
+      let secret: { passwordVerifier?: string; salt?: string; iterations?: number } = {}
+      if (connected) {
+        const policy = passwordPolicyMessage(newPassword, email)
+        if (policy) {
+          setUserError(policy)
+          return
+        }
+        if (newPassword !== newPasswordConfirm) {
+          setUserError('Passwords do not match.')
+          return
+        }
+        try {
+          secret = await preparePasswordVerifier(newPassword)
+        } catch (error) {
+          setUserError(error instanceof Error ? error.message : 'Secure password hashing is unavailable in this browser.')
+          return
+        }
+      }
+      const created = api.createUser({ ...userForm, ...secret })
+      if (created) {
+        setNewPassword('')
+        setNewPasswordConfirm('')
+        setUserMode(null)
+      }
       return
     }
     if (userMode === 'edit' && selectedUser) {
@@ -226,10 +287,11 @@ export function UsersSettingsPage() {
       />
       <div className="mb-5 flex flex-wrap gap-2">
         {([
-          ['users', 'Users'],
-          ['roles', 'Roles'],
-          ['matrix', 'Permission Matrix'],
-        ] as const).map(([id, label]) => (
+          { id: 'users' as const, label: 'Users' },
+          { id: 'roles' as const, label: 'Roles' },
+          { id: 'matrix' as const, label: 'Permission Matrix' },
+          ...(owner && connected ? [{ id: 'security' as const, label: 'Security' }] : []),
+        ]).map(({ id, label }) => (
           <Button key={id} variant={tab === id ? 'primary' : 'secondary'} onClick={() => setTab(id)}>
             {label}
           </Button>
@@ -238,9 +300,17 @@ export function UsersSettingsPage() {
 
       {tab === 'users' && (
         <Card className="mb-6">
-          <div className="flex items-center justify-between border-b border-slate-100 px-5 py-3">
+          <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 px-5 py-3">
             <div className="text-sm font-semibold">Users</div>
-            {canUsersCreate && <Button onClick={openAddUser}>+ Add User</Button>}
+            <div className="flex flex-wrap items-center gap-2">
+              <Input
+                className="h-9 w-44 sm:w-56"
+                placeholder="Search staff"
+                value={userQuery}
+                onChange={(event) => setUserQuery(event.target.value)}
+              />
+              {canUsersCreate && <Button onClick={openAddUser}>+ Add User</Button>}
+            </div>
           </div>
           <div className="sf-table-wrap">
             <table>
@@ -250,23 +320,28 @@ export function UsersSettingsPage() {
                   <th>Role</th>
                   <th>Department</th>
                   <th>Status</th>
+                  <th>Last login</th>
                   <th></th>
                 </tr>
               </thead>
               <tbody>
-                {state.users.map((user) => {
+                {visibleUsers.map((user) => {
                   const role = roleById(state, user.roleId)
+                  const account = accounts[user.id]
                   return (
                     <tr key={user.id}>
                       <td>
                         <button type="button" className="text-left" onClick={() => openViewUser(user)}>
                           <div className="font-medium">{user.name}</div>
                           <div className="text-xs text-slate-400">{user.email}</div>
+                          {account && !account.hasPassword && <div className="text-[11px] text-amber-600">Password not set</div>}
+                          {account?.mustChange && <div className="text-[11px] text-amber-600">Must change password</div>}
                         </button>
                       </td>
                       <td><RoleBadge name={displayRoleName(state, user)} protectedRole={isOwnerRole(role)} /></td>
                       <td>{departmentName(state, user.departmentId)}</td>
                       <td><StatusBadge status={user.status} /></td>
+                      <td className="text-xs text-slate-500">{user.lastLogin || 'Never'}</td>
                       <td>
                         <div className="flex flex-wrap justify-end gap-2">
                           <Button size="sm" variant="ghost" onClick={() => openViewUser(user)}>View</Button>
@@ -383,6 +458,29 @@ export function UsersSettingsPage() {
         </Card>
       )}
 
+      {tab === 'security' && (
+        <Card className="mb-6 p-5">
+          <div className="mb-3 text-sm font-semibold">Security events</div>
+          <p className="mb-4 text-sm text-slate-500">Login, logout, password, and authorization events. Passwords and session tokens are never stored here.</p>
+          {securityEvents.length ? (
+            <div className="space-y-2 text-sm text-slate-600">
+              {securityEvents.map((event) => (
+                <div key={event.id}>
+                  <span className="font-medium">{event.eventType}</span>
+                  {' · '}{event.result}
+                  {event.reason ? ` · ${event.reason}` : ''}
+                  {' · '}{event.actorUserId || 'public'}
+                  {event.targetUserId && event.targetUserId !== event.actorUserId ? ` → ${event.targetUserId}` : ''}
+                  {' · '}{formatDateTime(event.timestamp)}
+                </div>
+              ))}
+            </div>
+          ) : (
+            <p className="text-sm text-slate-500">No security events yet.</p>
+          )}
+        </Card>
+      )}
+
       <Card className="p-5">
         <div className="mb-3 text-sm font-semibold">Audit log</div>
         {auditRows.length ? (
@@ -412,6 +510,17 @@ export function UsersSettingsPage() {
           {userError && <div className="rounded-xl bg-rose-50 px-3 py-2 text-sm text-rose-700">{userError}</div>}
           <Field label="Name"><Input value={userForm.name} onChange={(e) => setUserForm({ ...userForm, name: e.target.value })} /></Field>
           <Field label="Email / Username"><Input type="email" value={userForm.email} onChange={(e) => setUserForm({ ...userForm, email: e.target.value })} /></Field>
+          {userMode === 'add' && connected && (
+            <>
+              <Field label="Temporary password">
+                <Input type="password" autoComplete="new-password" value={newPassword} onChange={(event) => setNewPassword(event.target.value)} />
+              </Field>
+              <Field label="Confirm temporary password">
+                <Input type="password" autoComplete="new-password" value={newPasswordConfirm} onChange={(event) => setNewPasswordConfirm(event.target.value)} />
+              </Field>
+              <p className="text-xs text-slate-500">Give this password to the staff member out of band. They must change it at first login. It is not stored in this browser after you close the dialog.</p>
+            </>
+          )}
           <Field label="Role">
             <Select
               value={userForm.roleId}
@@ -455,10 +564,20 @@ export function UsersSettingsPage() {
         {selectedUser && (
           <div className="space-y-3 text-sm">
             <div><span className="text-slate-400">Name</span><div className="font-medium">{selectedUser.name}</div></div>
+            <div><span className="text-slate-400">Username</span><div>{selectedUser.email}</div></div>
             <div><span className="text-slate-400">Email</span><div>{selectedUser.email}</div></div>
             <div><span className="text-slate-400">Role</span><div><RoleBadge name={displayRoleName(state, selectedUser)} protectedRole={isOwnerUser(state, selectedUser)} /></div></div>
             <div><span className="text-slate-400">Department</span><div>{departmentName(state, selectedUser.departmentId)}</div></div>
             <div><span className="text-slate-400">Status</span><div><StatusBadge status={selectedUser.status} /></div></div>
+            <div><span className="text-slate-400">Last login</span><div>{selectedUser.lastLogin || 'Never'}</div></div>
+            {accounts[selectedUser.id] && (
+              <div>
+                <span className="text-slate-400">Password</span>
+                <div>
+                  {accounts[selectedUser.id].hasPassword ? (accounts[selectedUser.id].mustChange ? 'Temporary — must change on next login' : 'Set') : 'Not set'}
+                </div>
+              </div>
+            )}
             <div><span className="text-slate-400">Created</span><div>{formatDateTime(selectedUser.createdAt)}</div></div>
             <div><span className="text-slate-400">Updated</span><div>{formatDateTime(selectedUser.updatedAt)}</div></div>
             <div>
@@ -474,6 +593,19 @@ export function UsersSettingsPage() {
                 <Button variant="secondary" onClick={() => { api.updateUser(selectedUser.id, { status: 'active' }); setUserMode(null) }}>Reactivate</Button>
               )}
               <Button variant="secondary" onClick={() => setUserMode(null)}>Close</Button>
+              {owner && connected && (
+                <Button
+                  variant="secondary"
+                  onClick={() => {
+                    setResetUser(selectedUser)
+                    setResetPassword('')
+                    setResetConfirm('')
+                    setResetError('')
+                  }}
+                >
+                  Reset password
+                </Button>
+              )}
               {canUsersEdit && <Button onClick={() => openEditUser(selectedUser)}>Edit</Button>}
             </div>
           </div>
@@ -551,6 +683,59 @@ export function UsersSettingsPage() {
             </div>
           </div>
         )}
+      </Modal>
+
+      <Modal open={Boolean(resetUser)} onClose={() => setResetUser(null)} title="Reset password">
+        <div className="space-y-4">
+          <p className="text-sm text-slate-600">
+            Set a temporary password for {resetUser?.name}. Communicate it out of band. It is not emailed, not stored in this browser after you close this dialog, and the staff member must change it at next login.
+          </p>
+          {resetError && <div className="rounded-xl bg-rose-50 px-3 py-2 text-sm text-rose-700">{resetError}</div>}
+          <Field label="Temporary password">
+            <Input type="password" autoComplete="new-password" value={resetPassword} onChange={(event) => setResetPassword(event.target.value)} />
+          </Field>
+          <Field label="Confirm password">
+            <Input type="password" autoComplete="new-password" value={resetConfirm} onChange={(event) => setResetConfirm(event.target.value)} />
+          </Field>
+          <div className="flex justify-end gap-2">
+            <Button variant="secondary" onClick={() => setResetUser(null)}>Cancel</Button>
+            <Button
+              disabled={resetBusy}
+              onClick={async () => {
+                if (!resetUser || resetBusy) return
+                const policy = passwordPolicyMessage(resetPassword, resetUser.email)
+                if (policy) {
+                  setResetError(policy)
+                  return
+                }
+                if (resetPassword !== resetConfirm) {
+                  setResetError('Passwords do not match.')
+                  return
+                }
+                setResetBusy(true)
+                try {
+                  const result = await postIdentityAction('auth.resetPassword', {
+                    userId: resetUser.id,
+                    ...(await preparePasswordVerifier(resetPassword)),
+                  })
+                  if (!result.ok) {
+                    setResetError(result.error?.message || 'Could not reset password.')
+                    return
+                  }
+                  setResetPassword('')
+                  setResetConfirm('')
+                  setResetUser(null)
+                } catch {
+                  setResetError('Could not reach the server.')
+                } finally {
+                  setResetBusy(false)
+                }
+              }}
+            >
+              {resetBusy ? 'Please wait…' : 'Set temporary password'}
+            </Button>
+          </div>
+        </div>
       </Modal>
 
       <ConfirmDialog

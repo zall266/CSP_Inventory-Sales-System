@@ -149,11 +149,10 @@ test('party sheets stay unread until the module is called and Sheet1 stays reser
 test('customer and supplier create, list, and get persist the locked fields', () => {
   const backend = ready()
   const denied = call(backend, 'customers.create', customerInput({ actorUserId: '' }))
-  assert.equal(denied.error.code, 'FORBIDDEN')
-  assert.equal(denied.error.message, 'You cannot add customers.')
+  assert.equal(denied.error.code, 'UNAUTHORIZED')
   const inactive = call(backend, 'suppliers.create', supplierInput({ actorUserId: 'u-off' }))
   assert.equal(inactive.error.code, 'FORBIDDEN')
-  assert.equal(inactive.error.message, 'You cannot add suppliers.')
+  assert.equal(inactive.error.message, 'This account is disabled.')
   assert.equal(auditActions(backend).includes('customers.create'), false)
   assert.equal(auditActions(backend).includes('suppliers.create'), false)
 
@@ -323,7 +322,7 @@ test('agent create links a warehouse, update keeps the warehouse id, and status 
   assert.equal(bad.error.message, 'Agent status is not valid.')
   const missing = call(backend, 'agents.update', { actorUserId: 'u-aina', id: 'agt-missing', name: 'Nope', code: 'NOPE' })
   assert.equal(missing.error.code, 'NOT_FOUND')
-  assert.equal(call(backend, 'agents.get', { id: 'agt-uat' }).error.code, 'NOT_FOUND')
+  assert.equal(call(backend, 'agents.get', { actorUserId: '', id: 'agt-uat' }).error.code, 'UNAUTHORIZED')
   assert.equal(call(backend, 'warehouses.list', {}).data.warehouses.some((row) => row.id === 'wh-main'), true)
   assert.equal(call(backend, 'users.list', {}).data.users.find((user) => user.id === 'u-aina').name, 'Aina Rahman')
 })
