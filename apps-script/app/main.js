@@ -7,6 +7,7 @@ function defaultBackend() {
     system: createSystemService({ sheetRepository: sheets, driveStorage: drive }),
     idempotency: createIdempotencyService(sheets),
     foundation: createFoundationService(sheets),
+    authStore: createAuthStore({ sheetRepository: sheets }),
     identity: createIdentityService({ sheetRepository: sheets, driveStorage: drive }),
     masters: createMasterService({ sheetRepository: sheets }),
     products: createProductService({ sheetRepository: sheets, driveStorage: drive }),

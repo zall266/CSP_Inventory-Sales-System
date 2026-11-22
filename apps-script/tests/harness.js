@@ -1,6 +1,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import vm from 'node:vm'
+import nodeCrypto from 'node:crypto'
 import { fileURLToPath } from 'node:url'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
@@ -16,7 +17,9 @@ const files = [
   'utils/log.js',
   'config/config.js',
   'auth/boundary.js',
+  'auth/crypto.js',
   'repositories/sheetRepository.js',
+  'repositories/authRepository.js',
   'repositories/auditRepository.js',
   'repositories/idempotencyRepository.js',
   'repositories/counterRepository.js',
@@ -52,6 +55,7 @@ const files = [
   'services/counterService.js',
   'services/systemService.js',
   'services/foundationService.js',
+  'services/authStore.js',
   'services/identityService.js',
   'services/masterService.js',
   'services/productService.js',
@@ -72,6 +76,32 @@ const files = [
   'app/router.js',
   'app/main.js',
 ]
+
+export function gasUtilities() {
+  return {
+    getUuid() {
+      return nodeCrypto.randomUUID()
+    },
+    computeHmacSha256Signature(value, key) {
+      const hmac = nodeCrypto.createHmac('sha256', Buffer.from(valueToBytes(key)))
+      hmac.update(Buffer.from(valueToBytes(value)))
+      return Array.from(hmac.digest())
+    },
+    DigestAlgorithm: { SHA_256: 'SHA_256' },
+    computeDigest(algorithm, value) {
+      if (algorithm !== 'SHA_256') throw new Error('unsupported digest')
+      return Array.from(nodeCrypto.createHash('sha256').update(Buffer.from(valueToBytes(value))).digest())
+    },
+  }
+}
+
+function valueToBytes(value) {
+  if (typeof value === 'string') return Buffer.from(value, 'utf8')
+  if (value instanceof Uint8Array) return value
+  if (Buffer.isBuffer(value)) return value
+  if (Array.isArray(value)) return Uint8Array.from(value.map((item) => item & 255))
+  return Buffer.from(String(value || ''), 'utf8')
+}
 
 export function loadBackend(globals = {}) {
   const context = {
@@ -97,6 +127,10 @@ export function loadBackend(globals = {}) {
     parseFloat,
     isNaN,
     isFinite,
+    encodeURIComponent,
+    decodeURIComponent,
+    unescape,
+    Utilities: gasUtilities(),
     ...globals,
   }
   context.globalThis = context
@@ -125,6 +159,16 @@ export function devProperties() {
     SPREADSHEET_ID: 'sheet-id',
     DRIVE_ROOT_ID: 'drive-id',
     TIMEZONE: 'Asia/Kuala_Lumpur',
+  })
+}
+
+export function authDevProperties() {
+  return memoryProperties({
+    ENVIRONMENT: 'DEV',
+    SPREADSHEET_ID: 'sheet-id',
+    DRIVE_ROOT_ID: 'drive-id',
+    TIMEZONE: 'Asia/Kuala_Lumpur',
+    AUTH_CREDENTIAL_PEPPER: '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef',
   })
 }
 
