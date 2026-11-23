@@ -182,6 +182,9 @@ export function memoryProperties(initial) {
     setProperty(key, value) {
       store[key] = String(value)
     },
+    deleteProperty(key) {
+      delete store[key]
+    },
   }
 }
 

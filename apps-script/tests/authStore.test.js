@@ -57,6 +57,7 @@ test('Phase 1 uses HMAC-SHA256 lookup-secret hashing, not PBKDF2-12k', () => {
   assert.equal(app.context.AUTH_MIN_ENTROPY_BITS, 128)
   assert.equal(app.context.AUTH_SECRET_BYTES * 8 >= app.context.AUTH_MIN_ENTROPY_BITS, true)
   assert.equal(app.context.AUTH_PBKDF2_ITERATIONS, undefined)
+  assert.equal(app.context.AUTH_NIST_800_90A_RBG, false)
   assert.equal(typeof app.context.authPbkdf2, 'undefined')
   assert.equal(typeof app.context.authHashSecret, 'function')
   assert.equal(typeof app.context.authHmacSha256, 'function')
@@ -132,7 +133,7 @@ test('HMAC-DRBG is used when Web Crypto is absent and getUuid is never consulted
     assert.equal(first.raw.length, 32)
     assert.match(first.plaintext, /^[0-9a-f]{64}$/)
     assert.notEqual(first.plaintext, second.plaintext)
-    assert.equal(Number(properties.getProperty('AUTH_CSPRNG_COUNTER')) >= 2, true)
+    assert.equal(Number(properties.getProperty('AUTH_KDF_COUNTER')) >= 2, true)
   } finally {
     Math.random = mathRandom
   }
@@ -456,18 +457,19 @@ test('HMAC-DRBG never reacquires the caller lock during issue, rotate, and sessi
   assert.equal(JSON.stringify(app.spreadsheet.store).includes(session.token), false)
 })
 
-test('HMAC-DRBG refuses to mint secrets unless a script lock is already held', () => {
+test('keyed KDF refuses to mint secrets unless a script lock is already held', () => {
   const app = hmacDrbgBackend()
   assert.equal(app.context.scriptLockDepth, 0)
-  assert.throws(() => app.context.authHmacDrbgBytes(32), (error) => error.code === 'INTERNAL_ERROR')
-  assert.equal(app.properties.getProperty('AUTH_CSPRNG_COUNTER'), null)
+  assert.throws(() => app.context.authKeyedKdfBytes(32), (error) => error.code === 'INTERNAL_ERROR')
+  assert.equal(app.properties.getProperty('AUTH_KDF_COUNTER'), null)
 
-  const generated = app.context.withScriptLock(() => app.context.authHmacDrbgBytes(32))
+  const generated = app.context.withScriptLock(() => app.context.authKeyedKdfBytes(32))
   assert.equal(generated.length, 32)
-  assert.equal(app.properties.getProperty('AUTH_CSPRNG_COUNTER'), '1')
+  assert.equal(app.properties.getProperty('AUTH_KDF_COUNTER'), '1')
+  assert.equal(app.properties.getProperty('AUTH_KDF_INITIALIZED'), '1')
 })
 
-test('concurrent HMAC-DRBG generation serializes on the script lock and never duplicates output', () => {
+test('concurrent keyed KDF generation serializes on the script lock and never duplicates output', () => {
   const properties = authDevProperties()
   const lockState = { held: false }
   const firstLocks = []
@@ -478,21 +480,74 @@ test('concurrent HMAC-DRBG generation serializes on the script lock and never du
   const one = first.store.issueCredential({ userId: 'user-1', username: 'one@example.com', createdBy: 'owner-1' })
   const two = second.store.issueCredential({ userId: 'user-2', username: 'two@example.com', createdBy: 'owner-1' })
   assert.notEqual(one.plaintext, two.plaintext)
-  assert.equal(properties.getProperty('AUTH_CSPRNG_COUNTER'), '2')
+  assert.equal(properties.getProperty('AUTH_KDF_COUNTER'), '2')
 
   const held = first.context.LockService.getScriptLock()
   assert.equal(held.tryLock(), true)
-  const before = properties.getProperty('AUTH_CSPRNG_COUNTER')
+  const before = properties.getProperty('AUTH_KDF_COUNTER')
   assert.throws(
     () => second.store.issueCredential({ userId: 'user-3', username: 'three@example.com', createdBy: 'owner-1' }),
     (error) => error.code === 'CONFLICT',
   )
-  assert.equal(properties.getProperty('AUTH_CSPRNG_COUNTER'), before)
+  assert.equal(properties.getProperty('AUTH_KDF_COUNTER'), before)
   assert.equal(secondLocks.includes('nested-rejected'), true)
   held.releaseLock()
 
   const three = second.store.issueCredential({ userId: 'user-3', username: 'three@example.com', createdBy: 'owner-1' })
   assert.notEqual(three.plaintext, one.plaintext)
   assert.notEqual(three.plaintext, two.plaintext)
-  assert.equal(properties.getProperty('AUTH_CSPRNG_COUNTER'), '3')
+  assert.equal(properties.getProperty('AUTH_KDF_COUNTER'), '3')
+})
+
+function rangeBytes(start, length) {
+  const out = new Uint8Array(length)
+  for (let i = 0; i < length; i += 1) out[i] = (start + i) & 255
+  return out
+}
+
+test('HMAC_DRBG Update and Generate match the published SHA-256 known-answer vector', () => {
+  const app = hmacDrbgBackend()
+  const entropy = rangeBytes(0x00, 32)
+  const nonce = rangeBytes(0x20, 16)
+  const state = app.context.authHmacDrbgInstantiate(entropy, nonce, new Uint8Array(0))
+  assert.equal(app.context.authBytesToHex(state.key), '345c7f099d0c4adce91379b6e2e03edfd4c2fa0b874e7a5b3cf24fb11f6ed4f1')
+  assert.equal(app.context.authBytesToHex(state.value), '976b4836a5b3d828293e26900371f2d49e5a11754c0a45c9cc4c8fe921014a03')
+  const first = app.context.authHmacDrbgGenerate(state, 32, new Uint8Array(0))
+  assert.equal(app.context.authBytesToHex(first.bytes), '0ffb80875a3e9022a4941a3fa1b0d3611df14e1cf651a73ce9229b9f3ad56887')
+  assert.equal(first.reseedCounter, 2)
+  assert.notEqual(app.context.authBytesToHex(first.key), app.context.authBytesToHex(state.key))
+  const second = app.context.authHmacDrbgGenerate(first, 32, new Uint8Array(0))
+  assert.equal(app.context.authBytesToHex(second.bytes), '08767656d3e9669eb668d1e1f5b80d27bb1aee12ff719eeb83e3dce006718c16')
+  assert.equal(app.context.AUTH_NIST_800_90A_RBG, false)
+})
+
+test('keyed KDF fails closed on counter reset, property deletion, and reinitialization after use', () => {
+  const app = hmacDrbgBackend()
+  const first = app.store.issueCredential({ userId: 'user-1', username: 'staff@example.com', createdBy: 'owner-1' })
+  const second = app.store.issueCredential({ userId: 'user-2', username: 'other@example.com', createdBy: 'owner-1' })
+  assert.notEqual(first.plaintext, second.plaintext)
+  const counter = app.properties.getProperty('AUTH_KDF_COUNTER')
+  assert.equal(Number(counter) >= 2, true)
+
+  app.properties.setProperty('AUTH_KDF_COUNTER', '1')
+  assert.throws(
+    () => app.store.issueCredential({ userId: 'user-3', username: 'third@example.com', createdBy: 'owner-1' }),
+    (error) => error.code === 'INTERNAL_ERROR',
+  )
+  assert.equal(app.store.verifyCredential('staff@example.com', first.plaintext).ok, true)
+
+  app.properties.setProperty('AUTH_KDF_COUNTER', counter)
+  app.properties.deleteProperty('AUTH_KDF_INITIALIZED')
+  assert.throws(
+    () => app.store.issueCredential({ userId: 'user-3', username: 'third@example.com', createdBy: 'owner-1' }),
+    (error) => error.code === 'INTERNAL_ERROR',
+  )
+
+  app.properties.deleteProperty('AUTH_KDF_COUNTER')
+  app.properties.deleteProperty('AUTH_KDF_INITIALIZED')
+  assert.throws(
+    () => app.store.issueCredential({ userId: 'user-3', username: 'third@example.com', createdBy: 'owner-1' }),
+    (error) => error.code === 'INTERNAL_ERROR',
+  )
+  assert.equal(app.store.verifyCredential('other@example.com', second.plaintext).ok, true)
 })

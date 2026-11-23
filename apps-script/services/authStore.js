@@ -30,6 +30,43 @@ function createAuthStore(dependencies) {
     return null;
   }
 
+  function kdfHighWater(spreadsheet) {
+    var events = repo.readEvents(spreadsheet);
+    var max = 0;
+    var i;
+    for (i = 0; i < events.length; i += 1) {
+      if (events[i].eventType !== 'kdf_advance') continue;
+      var n = parseInt(events[i].reason, 10);
+      if (isFinite(n) && n > max) max = n;
+    }
+    return max;
+  }
+
+  function existingKeyedOutputs(spreadsheet) {
+    return repo.readCredentials(spreadsheet).length + repo.readSessions(spreadsheet).length;
+  }
+
+  function keyedOptions(spreadsheet) {
+    return {
+      minCounter: kdfHighWater(spreadsheet),
+      existingOutputs: existingKeyedOutputs(spreadsheet)
+    };
+  }
+
+  function recordKdfAdvance(spreadsheet) {
+    if (!authKeyedKdfActive()) return;
+    repo.appendEvent(spreadsheet, {
+      id: createId(),
+      timestamp: stamp(),
+      actorUserId: '',
+      targetUserId: '',
+      eventType: 'kdf_advance',
+      result: 'ok',
+      reason: String(authGetLastKeyedCounter()),
+      requestId: ''
+    });
+  }
+
   function issueCredential(input) {
     return withScriptLock(function () {
       var spreadsheet = open();
@@ -37,7 +74,8 @@ function createAuthStore(dependencies) {
       var username = String(input && input.username || '').trim().toLowerCase();
       var createdBy = String(input && input.createdBy || '').trim();
       if (!userId || !username) throw appError('VALIDATION_ERROR', 'User is not valid.');
-      var secret = authGenerateSecret();
+      var secret = authGenerateSecret(keyedOptions(spreadsheet));
+      recordKdfAdvance(spreadsheet);
       if (secret.minEntropyBits < AUTH_MIN_ENTROPY_BITS || secret.entropyBits < AUTH_MIN_ENTROPY_BITS) {
         throw appError('INTERNAL_ERROR', 'The request could not be completed.');
       }
@@ -92,7 +130,8 @@ function createAuthStore(dependencies) {
       var records = repo.readCredentials(spreadsheet);
       var current = findCredential(records, userId);
       if (!current) throw appError('NOT_FOUND', 'Credential was not found.');
-      var secret = authGenerateSecret();
+      var secret = authGenerateSecret(keyedOptions(spreadsheet));
+      recordKdfAdvance(spreadsheet);
       var hashed = authHashSecret(secret.plaintext);
       var now = stamp();
       var next = records.map(function (item) {
@@ -136,7 +175,8 @@ function createAuthStore(dependencies) {
       var spreadsheet = open();
       var userId = String(input && input.userId || '').trim();
       if (!userId) throw appError('VALIDATION_ERROR', 'User is not valid.');
-      var token = authRandomToken();
+      var token = authRandomToken(keyedOptions(spreadsheet));
+      recordKdfAdvance(spreadsheet);
       var now = stamp();
       var record = {
         id: createId(),

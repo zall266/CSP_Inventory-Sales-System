@@ -9,14 +9,14 @@
 // 1. Web Crypto crypto.getRandomValues, when present. W3C Web Cryptography and
 //    MDN document this as a CSPRNG. Google Issue 235538670 (Won't Fix) states
 //    the Web Crypto API is not available in Apps Script.
-// 2. Otherwise NIST SP 800-90A Rev. 1 HMAC-DRBG with HMAC-SHA256 from
-//    Utilities.computeHmacSha256Signature, seeded by AUTH_CREDENTIAL_PEPPER
-//    (operator-supplied entropy, >= 128 bits). Domain-separated from the
-//    credential HMAC key. The DRBG counter is advanced only while the caller
-//    already holds withScriptLock. HMAC-DRBG itself never calls tryLock.
-// Utilities.getUuid() is not used for authentication secrets. Google documents
-// it as an identifier ("equivalent to java.util.UUID.randomUUID()") and warns
-// it is not guaranteed unique. Google does not document it as a CSPRNG.
+// 2. Otherwise NIST SP 800-108 HMAC-SHA256 KDF in counter mode, keyed by
+//    AUTH_CREDENTIAL_PEPPER (>= 128 bits) with domain separation from the
+//    credential HMAC. The counter advances only under a held script lock.
+//    This is NOT a validated SP 800-90A HMAC_DRBG: GAS has no live entropy
+//    source for Instantiate/Reseed, and a one-shot instantiate-per-call with a
+//    resettable counter can repeat secrets. HMAC_DRBG Update/Generate helpers
+//    exist only for known-answer tests.
+// Utilities.getUuid() is not used for authentication secrets.
 
 var AUTH_SECRET_BYTES = 32;
 var AUTH_MIN_ENTROPY_BITS = 128;
@@ -24,11 +24,15 @@ var AUTH_ALGORITHM = 'hmac-sha256';
 var AUTH_HASH_HEX_LENGTH = 64;
 var AUTH_PEPPER_PROPERTY = 'AUTH_CREDENTIAL_PEPPER';
 var AUTH_PEPPER_MIN_HEX = 32;
-var AUTH_CSPRNG_COUNTER_PROPERTY = 'AUTH_CSPRNG_COUNTER';
-var AUTH_DRBG_PERSONALIZATION = 'csp.auth.hmac-drbg.v1';
-var AUTH_DRBG_ENTROPY_LABEL = 'csp.auth.drbg.entropy.v1';
+var AUTH_KDF_COUNTER_PROPERTY = 'AUTH_KDF_COUNTER';
+var AUTH_KDF_INITIALIZED_PROPERTY = 'AUTH_KDF_INITIALIZED';
+var AUTH_KDF_LABEL = 'csp.auth.lookup-secret.v1';
+var AUTH_KDF_KEY_LABEL = 'csp.auth.kdf.key.v1';
+var AUTH_NIST_800_90A_RBG = false;
+var AUTH_DRBG_RESEED_INTERVAL = 10000;
 var AUTH_SESSION_ABSOLUTE_MS = 12 * 60 * 60 * 1000;
 var AUTH_SESSION_IDLE_MS = 2 * 60 * 60 * 1000;
+var authLastKeyedCounter = 0;
 
 function authToBytes(value) {
   if (value instanceof Uint8Array) return value;
@@ -114,6 +118,16 @@ function authRepeatByte(value, length) {
   return out;
 }
 
+function authU32be(value) {
+  var n = Number(value) || 0;
+  return new Uint8Array([
+    (Math.floor(n / 16777216) % 256),
+    (Math.floor(n / 65536) % 256),
+    (Math.floor(n / 256) % 256),
+    n % 256
+  ]);
+}
+
 function authU64be(value) {
   var out = new Uint8Array(8);
   var remaining = Number(value) || 0;
@@ -141,38 +155,114 @@ function authUnderHeldScriptLock(fn) {
   return withScriptLock(fn);
 }
 
-function authHmacDrbgBytes(size) {
-  if (typeof scriptLockDepth !== 'number' || scriptLockDepth < 1) {
+function authKeyedKdfActive() {
+  return !(typeof crypto !== 'undefined' && typeof crypto.getRandomValues === 'function');
+}
+
+function authGetLastKeyedCounter() {
+  return authLastKeyedCounter;
+}
+
+function authHmacDrbgInstantiate(entropy, nonce, personalization) {
+  var seed = authConcatBytes(
+    entropy,
+    nonce,
+    personalization && personalization.length ? personalization : new Uint8Array(0)
+  );
+  var updated = authHmacDrbgUpdate(authRepeatByte(0, 32), authRepeatByte(1, 32), seed);
+  return { key: updated.key, value: updated.value, reseedCounter: 1 };
+}
+
+function authHmacDrbgGenerate(state, byteCount, additionalInput) {
+  if (!state || !state.key || !state.value) {
     throw appError('INTERNAL_ERROR', 'A cryptographically secure random source is unavailable.');
   }
-  var pepper = authReadPepper();
-  var entropy = authHmacSha256(pepper, authToBytes(AUTH_DRBG_ENTROPY_LABEL));
-  if (typeof PropertiesService === 'undefined' || !PropertiesService.getScriptProperties) {
+  if (state.reseedCounter > AUTH_DRBG_RESEED_INTERVAL) {
     throw appError('INTERNAL_ERROR', 'A cryptographically secure random source is unavailable.');
   }
-  var props = PropertiesService.getScriptProperties();
-  var seq = parseInt(props.getProperty(AUTH_CSPRNG_COUNTER_PROPERTY) || '0', 10);
-  if (!isFinite(seq) || seq < 0) seq = 0;
-  seq += 1;
-  props.setProperty(AUTH_CSPRNG_COUNTER_PROPERTY, String(seq));
-  var nonce = authConcatBytes(authU64be(seq), authU64be(Date.now()));
-  var seed = authConcatBytes(entropy, nonce, authToBytes(AUTH_DRBG_PERSONALIZATION));
-  var state = authHmacDrbgUpdate(authRepeatByte(0, 32), authRepeatByte(1, 32), seed);
-  var out = new Uint8Array(size);
+  var key = state.key;
+  var value = state.value;
+  var extra = additionalInput && additionalInput.length ? additionalInput : new Uint8Array(0);
+  if (extra.length) {
+    var before = authHmacDrbgUpdate(key, value, extra);
+    key = before.key;
+    value = before.value;
+  }
+  var out = new Uint8Array(byteCount);
   var offset = 0;
-  while (offset < size) {
-    state.value = authHmacSha256(state.key, state.value);
+  while (offset < byteCount) {
+    value = authHmacSha256(key, value);
     var i = 0;
-    while (i < state.value.length && offset < size) {
-      out[offset] = state.value[i];
+    while (i < value.length && offset < byteCount) {
+      out[offset] = value[i];
       offset += 1;
       i += 1;
     }
   }
+  var after = authHmacDrbgUpdate(key, value, extra);
+  return {
+    bytes: out,
+    key: after.key,
+    value: after.value,
+    reseedCounter: state.reseedCounter + 1
+  };
+}
+
+function authSp800108Block(key, counter, label, context, bits) {
+  return authHmacSha256(
+    key,
+    authConcatBytes(authU32be(counter), authToBytes(label), new Uint8Array([0]), context, authU32be(bits))
+  );
+}
+
+function authKeyedKdfBytes(size, options) {
+  if (typeof scriptLockDepth !== 'number' || scriptLockDepth < 1) {
+    throw appError('INTERNAL_ERROR', 'A cryptographically secure random source is unavailable.');
+  }
+  var settings = options || {};
+  var minCounter = Number(settings.minCounter) || 0;
+  var existingOutputs = Number(settings.existingOutputs) || 0;
+  var pepper = authReadPepper();
+  if (typeof PropertiesService === 'undefined' || !PropertiesService.getScriptProperties) {
+    throw appError('INTERNAL_ERROR', 'A cryptographically secure random source is unavailable.');
+  }
+  var props = PropertiesService.getScriptProperties();
+  var initialized = String(props.getProperty(AUTH_KDF_INITIALIZED_PROPERTY) || '') === '1';
+  var storedRaw = props.getProperty(AUTH_KDF_COUNTER_PROPERTY);
+  var stored = parseInt(storedRaw || '', 10);
+  if (initialized) {
+    if (!storedRaw || !isFinite(stored) || stored < 1) {
+      throw appError('INTERNAL_ERROR', 'A cryptographically secure random source is unavailable.');
+    }
+    if (stored < minCounter) {
+      throw appError('INTERNAL_ERROR', 'A cryptographically secure random source is unavailable.');
+    }
+  } else if (minCounter > 0 || existingOutputs > 0) {
+    throw appError('INTERNAL_ERROR', 'A cryptographically secure random source is unavailable.');
+  }
+  var next = Math.max(isFinite(stored) ? stored : 0, minCounter) + 1;
+  var prk = authHmacSha256(pepper, authToBytes(AUTH_KDF_KEY_LABEL));
+  var context = authU64be(next);
+  var out = new Uint8Array(size);
+  var offset = 0;
+  var blockIndex = 1;
+  while (offset < size) {
+    var block = authSp800108Block(prk, blockIndex, AUTH_KDF_LABEL, context, size * 8);
+    var i = 0;
+    while (i < block.length && offset < size) {
+      out[offset] = block[i];
+      offset += 1;
+      i += 1;
+    }
+    blockIndex += 1;
+  }
+  props.setProperty(AUTH_KDF_COUNTER_PROPERTY, String(next));
+  props.setProperty(AUTH_KDF_INITIALIZED_PROPERTY, '1');
+  authLastKeyedCounter = next;
   return out;
 }
 
-function authRandomBytes(size) {
+function authRandomBytes(size, options) {
   var needed = Number(size) || 0;
   if (needed < 1 || needed > 1024) throw appError('INTERNAL_ERROR', 'Random size is invalid.');
   if (typeof crypto !== 'undefined' && typeof crypto.getRandomValues === 'function') {
@@ -191,7 +281,7 @@ function authRandomBytes(size) {
   }
   try {
     return authUnderHeldScriptLock(function () {
-      return authHmacDrbgBytes(needed);
+      return authKeyedKdfBytes(needed, options);
     });
   } catch (error) {
     if (error && error.expose && error.code) throw error;
@@ -238,13 +328,14 @@ function authReadPepper() {
   return authHexToBytes(hex);
 }
 
-function authGenerateSecret() {
-  var raw = authRandomBytes(AUTH_SECRET_BYTES);
+function authGenerateSecret(options) {
+  var raw = authRandomBytes(AUTH_SECRET_BYTES, options);
   return {
     plaintext: authBytesToHex(raw),
     raw: raw,
     entropyBits: AUTH_SECRET_BYTES * 8,
-    minEntropyBits: AUTH_MIN_ENTROPY_BITS
+    minEntropyBits: AUTH_MIN_ENTROPY_BITS,
+    counter: authLastKeyedCounter
   };
 }
 
@@ -276,6 +367,6 @@ function authHashToken(token) {
   return authBytesToHex(authSha256(String(token || '')));
 }
 
-function authRandomToken() {
-  return authBytesToHex(authRandomBytes(32));
+function authRandomToken(options) {
+  return authBytesToHex(authRandomBytes(32, options));
 }
