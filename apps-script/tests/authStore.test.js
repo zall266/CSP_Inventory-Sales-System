@@ -8,26 +8,30 @@ import {
   memoryProperties,
 } from './harness.js'
 
+function dummyLocks(lockFails = false, locks = []) {
+  return {
+    getScriptLock() {
+      return {
+        tryLock() {
+          if (lockFails) return false
+          locks.push('acquired')
+          return true
+        },
+        releaseLock() {
+          locks.push('released')
+        },
+      }
+    },
+  }
+}
+
 function backend(options = {}) {
   const spreadsheet = options.spreadsheet || createFakeSpreadsheet()
   const properties = options.properties || authDevProperties()
   const locks = []
   const context = loadBackend({
     PropertiesService: { getScriptProperties: () => properties },
-    LockService: {
-      getScriptLock() {
-        return {
-          tryLock() {
-            if (options.lockFails) return false
-            locks.push('acquired')
-            return true
-          },
-          releaseLock() {
-            locks.push('released')
-          },
-        }
-      },
-    },
+    LockService: dummyLocks(options.lockFails, locks),
     SpreadsheetApp: {
       openById() {
         return spreadsheet
@@ -40,7 +44,11 @@ function backend(options = {}) {
     spreadsheet,
     locks,
     context,
-    store: context.createAuthStore({ sheetRepository: sheets }),
+    properties,
+    store: context.createAuthStore({
+      sheetRepository: sheets,
+      now: options.now,
+    }),
     repo: context.createAuthRepository(sheets),
   }
 }
@@ -84,16 +92,81 @@ test('CSPRNG generates 32-byte secrets and fails closed without a secure source'
   assert.equal(first.minEntropyBits, 128)
   assert.notEqual(first.plaintext, second.plaintext)
 
-  const uuidOnly = loadBackend({ crypto: {} })
-  const fromUuid = uuidOnly.authGenerateSecret()
-  assert.equal(fromUuid.raw.length, 32)
-  assert.match(fromUuid.plaintext, /^[0-9a-f]{64}$/)
-
-  const closed = loadBackend({ crypto: {}, Utilities: {} })
+  const closed = loadBackend({
+    crypto: {},
+    Utilities: {},
+    LockService: dummyLocks(),
+    PropertiesService: { getScriptProperties: () => authDevProperties() },
+  })
   assert.throws(() => closed.authRandomBytes(32), (error) => {
     assert.equal(error.code, 'INTERNAL_ERROR')
     return true
   })
+})
+
+test('HMAC-DRBG is used when Web Crypto is absent and getUuid is never consulted', () => {
+  let uuidCalls = 0
+  let mathCalls = 0
+  const mathRandom = Math.random
+  Math.random = () => {
+    mathCalls += 1
+    return mathRandom()
+  }
+  const properties = authDevProperties()
+  const utilities = gasUtilities()
+  try {
+    const context = loadBackend({
+      crypto: {},
+      LockService: dummyLocks(),
+      PropertiesService: { getScriptProperties: () => properties },
+      Utilities: {
+        ...utilities,
+        getUuid() {
+          uuidCalls += 1
+          throw new Error('Utilities.getUuid must not be used for authentication secrets')
+        },
+      },
+    })
+    assert.equal(typeof context.authFillFromUuidString, 'undefined')
+    const first = context.authGenerateSecret()
+    const second = context.authGenerateSecret()
+    assert.equal(uuidCalls, 0)
+    assert.equal(mathCalls, 0)
+    assert.equal(first.raw.length, 32)
+    assert.match(first.plaintext, /^[0-9a-f]{64}$/)
+    assert.notEqual(first.plaintext, second.plaintext)
+    assert.equal(Number(properties.getProperty('AUTH_CSPRNG_COUNTER')) >= 2, true)
+  } finally {
+    Math.random = mathRandom
+  }
+})
+
+test('HMAC-DRBG fails closed without pepper or HMAC and does not use Math.random', () => {
+  const noPepper = loadBackend({
+    crypto: {},
+    LockService: dummyLocks(),
+    PropertiesService: {
+      getScriptProperties: () => memoryProperties({
+        ENVIRONMENT: 'DEV',
+        SPREADSHEET_ID: 'sheet-id',
+        DRIVE_ROOT_ID: 'drive-id',
+        TIMEZONE: 'Asia/Kuala_Lumpur',
+      }),
+    },
+  })
+  assert.throws(() => noPepper.authGenerateSecret(), (error) => error.code === 'INTERNAL_ERROR')
+
+  const noHmac = loadBackend({
+    crypto: {},
+    LockService: dummyLocks(),
+    PropertiesService: { getScriptProperties: () => authDevProperties() },
+    Utilities: {
+      getUuid() {
+        throw new Error('uuid')
+      },
+    },
+  })
+  assert.throws(() => noHmac.authGenerateSecret(), (error) => error.code === 'INTERNAL_ERROR')
 })
 
 test('pepper is required and fail-closed; hashes never store plaintext', () => {
@@ -240,17 +313,110 @@ test('issueCredential holds the script lock and fails closed when the lock is bu
   )
 })
 
-test('UUID-only CSPRNG still meets the 128-bit floor used in Apps Script', () => {
-  const context = loadBackend({
-    crypto: {},
-    Utilities: gasUtilities(),
-    PropertiesService: { getScriptProperties: () => authDevProperties() },
+test('issueCredential replacement revokes that user sessions and leaves other users valid', () => {
+  const app = backend()
+  app.store.issueCredential({ userId: 'user-1', username: 'staff@example.com', createdBy: 'owner-1' })
+  app.store.issueCredential({ userId: 'user-2', username: 'other@example.com', createdBy: 'owner-1' })
+  const firstSession = app.store.issueSession({ userId: 'user-1' })
+  const otherSession = app.store.issueSession({ userId: 'user-2' })
+  assert.equal(Boolean(app.store.validateSession(firstSession.token)), true)
+  assert.equal(Boolean(app.store.validateSession(otherSession.token)), true)
+
+  const replacement = app.store.issueCredential({
+    userId: 'user-1',
+    username: 'staff@example.com',
+    createdBy: 'owner-1',
+    requestId: 'replace-1',
   })
-  const secret = context.authGenerateSecret()
-  assert.equal(secret.raw.length, 32)
-  assert.equal(secret.entropyBits, 256)
-  const bytes = secret.raw
-  let nonzero = 0
-  for (let i = 0; i < bytes.length; i += 1) if (bytes[i] !== 0) nonzero += 1
-  assert.equal(nonzero > 8, true)
+  assert.equal(app.store.validateSession(firstSession.token), null)
+  assert.equal(Boolean(app.store.validateSession(otherSession.token)), true)
+  assert.equal(app.store.verifyCredential('staff@example.com', replacement.plaintext).ok, true)
+  const rows = app.repo.readSessions(app.spreadsheet)
+  const revoked = rows.find((item) => item.userId === 'user-1' && item.tokenHash === app.context.authHashToken(firstSession.token))
+  assert.equal(revoked.revokedReason, 'credential_replaced')
+  assert.equal(String(revoked.revokedAt).length > 0, true)
+  assert.equal(app.locks.filter((item) => item === 'acquired').length > 0, true)
+  const serialized = JSON.stringify(app.spreadsheet.store)
+  assert.equal(serialized.includes(firstSession.token), false)
+  assert.equal(serialized.includes(replacement.plaintext), false)
+})
+
+test('validateSession slides idle expiry, never extends absolute expiry, and keeps expired or revoked sessions invalid', () => {
+  let current = Date.parse('2026-01-01T00:00:00.000Z')
+  const app = backend({ now: () => new Date(current) })
+  app.store.issueCredential({ userId: 'user-1', username: 'staff@example.com', createdBy: 'owner-1' })
+  const session = app.store.issueSession({ userId: 'user-1' })
+  const issued = app.repo.readSessions(app.spreadsheet)[0]
+  const originalExpiry = issued.expiresAt
+  assert.equal(Date.parse(originalExpiry) - current, app.context.AUTH_SESSION_ABSOLUTE_MS)
+  assert.equal(Date.parse(issued.idleExpiresAt) - current, app.context.AUTH_SESSION_IDLE_MS)
+
+  current += 60 * 60 * 1000
+  const active = app.store.validateSession(session.token)
+  assert.equal(Boolean(active), true)
+  assert.equal(active.expiresAt, originalExpiry)
+  assert.equal(active.lastSeenAt, new Date(current).toISOString())
+  assert.equal(Date.parse(active.idleExpiresAt) - current, app.context.AUTH_SESSION_IDLE_MS)
+  assert.equal(app.locks.includes('acquired'), true)
+
+  current += 60 * 60 * 1000
+  const again = app.store.validateSession(session.token)
+  assert.equal(again.expiresAt, originalExpiry)
+  assert.equal(Date.parse(again.idleExpiresAt) - current, app.context.AUTH_SESSION_IDLE_MS)
+
+  const idleApp = backend({ now: () => new Date(current) })
+  idleApp.store.issueCredential({ userId: 'idle-user', username: 'idle@example.com', createdBy: 'owner-1' })
+  const idleSession = idleApp.store.issueSession({ userId: 'idle-user' })
+  current += app.context.AUTH_SESSION_IDLE_MS
+  assert.equal(idleApp.store.validateSession(idleSession.token), null)
+  const idleRow = idleApp.repo.readSessions(idleApp.spreadsheet)[0]
+  assert.equal(idleRow.lastSeenAt, idleSession.record.lastSeenAt)
+  assert.equal(idleRow.expiresAt, idleSession.record.expiresAt)
+
+  current = Date.parse('2026-01-01T00:00:00.000Z')
+  const absoluteApp = backend({ now: () => new Date(current) })
+  absoluteApp.store.issueCredential({ userId: 'abs-user', username: 'abs@example.com', createdBy: 'owner-1' })
+  const absoluteSession = absoluteApp.store.issueSession({ userId: 'abs-user' })
+  const originalAbsExpiry = absoluteSession.record.expiresAt
+  for (let hour = 1; hour <= 11; hour += 1) {
+    current += 60 * 60 * 1000
+    const live = absoluteApp.store.validateSession(absoluteSession.token)
+    assert.equal(Boolean(live), true, 'session should stay valid while idle is refreshed before 12h')
+    assert.equal(live.expiresAt, originalAbsExpiry)
+    assert.equal(Date.parse(live.idleExpiresAt) <= Date.parse(originalAbsExpiry), true)
+  }
+  current += 60 * 60 * 1000
+  assert.equal(absoluteApp.store.validateSession(absoluteSession.token), null)
+
+  current = Date.parse('2026-01-01T00:00:00.000Z')
+  const revokedApp = backend({ now: () => new Date(current) })
+  revokedApp.store.issueCredential({ userId: 'rev-user', username: 'rev@example.com', createdBy: 'owner-1' })
+  const revokedSession = revokedApp.store.issueSession({ userId: 'rev-user' })
+  revokedApp.store.revokeUserSessions('rev-user', 'manual')
+  current += 60 * 1000
+  assert.equal(revokedApp.store.validateSession(revokedSession.token), null)
+  const revokedRow = revokedApp.repo.readSessions(revokedApp.spreadsheet)[0]
+  assert.equal(revokedRow.lastSeenAt, revokedSession.record.lastSeenAt)
+})
+
+test('validateSession concurrent updates take the script lock and fail closed when the lock is busy', () => {
+  let current = Date.parse('2026-02-01T00:00:00.000Z')
+  const app = backend({ now: () => new Date(current) })
+  app.store.issueCredential({ userId: 'user-1', username: 'staff@example.com', createdBy: 'owner-1' })
+  const session = app.store.issueSession({ userId: 'user-1' })
+  const originalExpiry = session.record.expiresAt
+  const first = app.store.validateSession(session.token)
+  current += 30 * 60 * 1000
+  const second = app.store.validateSession(session.token)
+  assert.equal(first.expiresAt, originalExpiry)
+  assert.equal(second.expiresAt, originalExpiry)
+  assert.equal(Date.parse(second.lastSeenAt) > Date.parse(first.lastSeenAt), true)
+  assert.equal(Date.parse(second.idleExpiresAt) > Date.parse(first.idleExpiresAt), true)
+  assert.equal(app.locks.filter((item) => item === 'acquired').length >= 3, true)
+
+  const blocked = backend({ lockFails: true, spreadsheet: app.spreadsheet, now: () => new Date(current) })
+  assert.throws(() => blocked.store.validateSession(session.token), (error) => error.code === 'CONFLICT')
+  const still = app.store.validateSession(session.token)
+  assert.equal(Boolean(still), true)
+  assert.equal(still.expiresAt, originalExpiry)
 })

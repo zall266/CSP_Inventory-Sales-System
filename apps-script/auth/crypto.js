@@ -4,15 +4,28 @@
 // Do not use PBKDF2-HMAC-SHA256 at 12,000 iterations. That work factor is not
 // OWASP-compliant and is not used here.
 // Apps Script V8 has no crypto.subtle / Argon2 / scrypt / native PBKDF2.
+//
+// Randomness (fail-closed):
+// 1. Web Crypto crypto.getRandomValues, when present. W3C Web Cryptography and
+//    MDN document this as a CSPRNG. Google Issue 235538670 (Won't Fix) states
+//    the Web Crypto API is not available in Apps Script.
+// 2. Otherwise NIST SP 800-90A Rev. 1 HMAC-DRBG with HMAC-SHA256 from
+//    Utilities.computeHmacSha256Signature, seeded by AUTH_CREDENTIAL_PEPPER
+//    (operator-supplied entropy, >= 128 bits). Domain-separated from the
+//    credential HMAC key. A lock-protected counter is the DRBG nonce only.
+// Utilities.getUuid() is not used for authentication secrets. Google documents
+// it as an identifier ("equivalent to java.util.UUID.randomUUID()") and warns
+// it is not guaranteed unique. Google does not document it as a CSPRNG.
 
-// 32 bytes: Node/WebCrypto is 256 bits; Apps Script Utilities.getUuid() is a
-// RFC 4122 UUID (~122 bits), so two UUIDs (~244 bits) still clear 128 bits.
 var AUTH_SECRET_BYTES = 32;
 var AUTH_MIN_ENTROPY_BITS = 128;
 var AUTH_ALGORITHM = 'hmac-sha256';
 var AUTH_HASH_HEX_LENGTH = 64;
 var AUTH_PEPPER_PROPERTY = 'AUTH_CREDENTIAL_PEPPER';
 var AUTH_PEPPER_MIN_HEX = 32;
+var AUTH_CSPRNG_COUNTER_PROPERTY = 'AUTH_CSPRNG_COUNTER';
+var AUTH_DRBG_PERSONALIZATION = 'csp.auth.hmac-drbg.v1';
+var AUTH_DRBG_ENTROPY_LABEL = 'csp.auth.drbg.entropy.v1';
 var AUTH_SESSION_ABSOLUTE_MS = 12 * 60 * 60 * 1000;
 var AUTH_SESSION_IDLE_MS = 2 * 60 * 60 * 1000;
 
@@ -72,42 +85,109 @@ function authHexToBytes(hex) {
   return out;
 }
 
-function authFillFromUuidString(uuid, out, offset) {
-  var hex = String(uuid || '').replace(/-/g, '').toLowerCase();
-  if (!/^[0-9a-f]{32}$/.test(hex)) {
-    throw appError('INTERNAL_ERROR', 'Secure random source returned an invalid UUID.');
+function authConcatBytes() {
+  var total = 0;
+  var parts = [];
+  var i;
+  for (i = 0; i < arguments.length; i += 1) {
+    parts.push(authToBytes(arguments[i]));
+    total += parts[i].length;
   }
-  var i = 0;
-  while (i + 1 < hex.length && offset < out.length) {
-    out[offset] = parseInt(hex.substr(i, 2), 16);
-    offset += 1;
-    i += 2;
+  var out = new Uint8Array(total);
+  var offset = 0;
+  for (i = 0; i < parts.length; i += 1) {
+    var part = parts[i];
+    var j;
+    for (j = 0; j < part.length; j += 1) {
+      out[offset] = part[j];
+      offset += 1;
+    }
   }
-  return offset;
+  return out;
+}
+
+function authRepeatByte(value, length) {
+  var out = new Uint8Array(length);
+  var i;
+  for (i = 0; i < length; i += 1) out[i] = value & 255;
+  return out;
+}
+
+function authU64be(value) {
+  var out = new Uint8Array(8);
+  var remaining = Number(value) || 0;
+  var i;
+  for (i = 7; i >= 0; i -= 1) {
+    out[i] = remaining & 255;
+    remaining = Math.floor(remaining / 256);
+  }
+  return out;
+}
+
+function authHmacDrbgUpdate(key, value, data) {
+  var provided = data && data.length ? data : new Uint8Array(0);
+  var nextKey = authHmacSha256(key, authConcatBytes(value, new Uint8Array([0]), provided));
+  var nextValue = authHmacSha256(nextKey, value);
+  if (provided.length) {
+    nextKey = authHmacSha256(nextKey, authConcatBytes(nextValue, new Uint8Array([1]), provided));
+    nextValue = authHmacSha256(nextKey, nextValue);
+  }
+  return { key: nextKey, value: nextValue };
+}
+
+function authHmacDrbgBytes(size) {
+  return withScriptLock(function () {
+    var pepper = authReadPepper();
+    var entropy = authHmacSha256(pepper, authToBytes(AUTH_DRBG_ENTROPY_LABEL));
+    if (typeof PropertiesService === 'undefined' || !PropertiesService.getScriptProperties) {
+      throw appError('INTERNAL_ERROR', 'A cryptographically secure random source is unavailable.');
+    }
+    var props = PropertiesService.getScriptProperties();
+    var seq = parseInt(props.getProperty(AUTH_CSPRNG_COUNTER_PROPERTY) || '0', 10);
+    if (!isFinite(seq) || seq < 0) seq = 0;
+    seq += 1;
+    props.setProperty(AUTH_CSPRNG_COUNTER_PROPERTY, String(seq));
+    var nonce = authConcatBytes(authU64be(seq), authU64be(Date.now()));
+    var seed = authConcatBytes(entropy, nonce, authToBytes(AUTH_DRBG_PERSONALIZATION));
+    var state = authHmacDrbgUpdate(authRepeatByte(0, 32), authRepeatByte(1, 32), seed);
+    var out = new Uint8Array(size);
+    var offset = 0;
+    while (offset < size) {
+      state.value = authHmacSha256(state.key, state.value);
+      var i = 0;
+      while (i < state.value.length && offset < size) {
+        out[offset] = state.value[i];
+        offset += 1;
+        i += 1;
+      }
+    }
+    return out;
+  });
 }
 
 function authRandomBytes(size) {
   var needed = Number(size) || 0;
   if (needed < 1 || needed > 1024) throw appError('INTERNAL_ERROR', 'Random size is invalid.');
-  var out = new Uint8Array(needed);
-  var offset = 0;
   if (typeof crypto !== 'undefined' && typeof crypto.getRandomValues === 'function') {
-    while (offset < needed) {
-      var slice = out.subarray(offset, Math.min(offset + 65536, needed));
-      crypto.getRandomValues(slice);
-      offset += slice.length;
+    try {
+      var out = new Uint8Array(needed);
+      var offset = 0;
+      while (offset < needed) {
+        var slice = out.subarray(offset, Math.min(offset + 65536, needed));
+        crypto.getRandomValues(slice);
+        offset += slice.length;
+      }
+      return out;
+    } catch (error) {
+      throw appError('INTERNAL_ERROR', 'A cryptographically secure random source is unavailable.');
     }
-    return out;
   }
-  if (typeof Utilities !== 'undefined' && typeof Utilities.getUuid === 'function') {
-    while (offset < needed) offset = authFillFromUuidString(Utilities.getUuid(), out, offset);
-    return out;
+  try {
+    return authHmacDrbgBytes(needed);
+  } catch (error) {
+    if (error && error.expose && error.code) throw error;
+    throw appError('INTERNAL_ERROR', 'A cryptographically secure random source is unavailable.');
   }
-  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
-    while (offset < needed) offset = authFillFromUuidString(crypto.randomUUID(), out, offset);
-    return out;
-  }
-  throw appError('INTERNAL_ERROR', 'A cryptographically secure random source is unavailable.');
 }
 
 function authHmacSha256(key, message) {

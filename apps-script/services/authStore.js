@@ -42,8 +42,11 @@ function createAuthStore(dependencies) {
         throw appError('INTERNAL_ERROR', 'The request could not be completed.');
       }
       var hashed = authHashSecret(secret.plaintext);
+      var affectedUsers = {};
+      affectedUsers[userId] = true;
       var records = repo.readCredentials(spreadsheet).map(function (item) {
         if (item.userId === userId || item.username === username) {
+          affectedUsers[item.userId] = true;
           return Object.assign({}, item, { status: 'revoked', updatedAt: stamp() });
         }
         return item;
@@ -62,6 +65,11 @@ function createAuthStore(dependencies) {
       };
       records.push(record);
       repo.writeCredentials(spreadsheet, records);
+      var revokedIds = Object.keys(affectedUsers);
+      var r;
+      for (r = 0; r < revokedIds.length; r += 1) {
+        revokeUserSessionsUnlocked(spreadsheet, revokedIds[r], 'credential_replaced');
+      }
       repo.appendEvent(spreadsheet, {
         id: createId(),
         timestamp: stamp(),
@@ -148,20 +156,42 @@ function createAuthStore(dependencies) {
     });
   }
 
+  function sessionExpired(item, now) {
+    var absolute = Date.parse(item.expiresAt);
+    var idle = Date.parse(item.idleExpiresAt);
+    if (!isFinite(absolute) || !isFinite(idle)) return true;
+    if (now >= absolute) return true;
+    if (now >= idle) return true;
+    return false;
+  }
+
   function validateSession(token) {
-    var spreadsheet = open();
-    var hash = authHashToken(String(token || ''));
-    var sessions = repo.readSessions(spreadsheet);
-    var now = clock().getTime();
-    for (var i = 0; i < sessions.length; i += 1) {
-      var item = sessions[i];
-      if (item.revokedAt) continue;
-      if (!authTimingSafeEqual(authHexToBytes(item.tokenHash), authHexToBytes(hash))) continue;
-      if (Date.parse(item.expiresAt) < now) return null;
-      if (Date.parse(item.idleExpiresAt) < now) return null;
-      return item;
-    }
-    return null;
+    return withScriptLock(function () {
+      var spreadsheet = open();
+      var hash = authHashToken(String(token || ''));
+      var sessions = repo.readSessions(spreadsheet);
+      var now = clock().getTime();
+      var found = null;
+      var i;
+      for (i = 0; i < sessions.length; i += 1) {
+        var item = sessions[i];
+        if (item.revokedAt) continue;
+        if (!authTimingSafeEqual(authHexToBytes(item.tokenHash), authHexToBytes(hash))) continue;
+        if (sessionExpired(item, now)) return null;
+        var nextIdleMs = now + AUTH_SESSION_IDLE_MS;
+        var absoluteMs = Date.parse(item.expiresAt);
+        if (nextIdleMs > absoluteMs) nextIdleMs = absoluteMs;
+        var updated = Object.assign({}, item, {
+          lastSeenAt: stamp(),
+          idleExpiresAt: nowIso(new Date(nextIdleMs))
+        });
+        sessions[i] = updated;
+        found = updated;
+        break;
+      }
+      if (found) repo.writeSessions(spreadsheet, sessions);
+      return found;
+    });
   }
 
   function revokeUserSessionsUnlocked(spreadsheet, userId, reason) {
