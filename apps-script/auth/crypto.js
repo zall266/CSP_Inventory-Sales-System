@@ -12,7 +12,8 @@
 // 2. Otherwise NIST SP 800-90A Rev. 1 HMAC-DRBG with HMAC-SHA256 from
 //    Utilities.computeHmacSha256Signature, seeded by AUTH_CREDENTIAL_PEPPER
 //    (operator-supplied entropy, >= 128 bits). Domain-separated from the
-//    credential HMAC key. A lock-protected counter is the DRBG nonce only.
+//    credential HMAC key. The DRBG counter is advanced only while the caller
+//    already holds withScriptLock. HMAC-DRBG itself never calls tryLock.
 // Utilities.getUuid() is not used for authentication secrets. Google documents
 // it as an identifier ("equivalent to java.util.UUID.randomUUID()") and warns
 // it is not guaranteed unique. Google does not document it as a CSPRNG.
@@ -135,34 +136,40 @@ function authHmacDrbgUpdate(key, value, data) {
   return { key: nextKey, value: nextValue };
 }
 
+function authUnderHeldScriptLock(fn) {
+  if (typeof scriptLockDepth === 'number' && scriptLockDepth > 0) return fn();
+  return withScriptLock(fn);
+}
+
 function authHmacDrbgBytes(size) {
-  return withScriptLock(function () {
-    var pepper = authReadPepper();
-    var entropy = authHmacSha256(pepper, authToBytes(AUTH_DRBG_ENTROPY_LABEL));
-    if (typeof PropertiesService === 'undefined' || !PropertiesService.getScriptProperties) {
-      throw appError('INTERNAL_ERROR', 'A cryptographically secure random source is unavailable.');
+  if (typeof scriptLockDepth !== 'number' || scriptLockDepth < 1) {
+    throw appError('INTERNAL_ERROR', 'A cryptographically secure random source is unavailable.');
+  }
+  var pepper = authReadPepper();
+  var entropy = authHmacSha256(pepper, authToBytes(AUTH_DRBG_ENTROPY_LABEL));
+  if (typeof PropertiesService === 'undefined' || !PropertiesService.getScriptProperties) {
+    throw appError('INTERNAL_ERROR', 'A cryptographically secure random source is unavailable.');
+  }
+  var props = PropertiesService.getScriptProperties();
+  var seq = parseInt(props.getProperty(AUTH_CSPRNG_COUNTER_PROPERTY) || '0', 10);
+  if (!isFinite(seq) || seq < 0) seq = 0;
+  seq += 1;
+  props.setProperty(AUTH_CSPRNG_COUNTER_PROPERTY, String(seq));
+  var nonce = authConcatBytes(authU64be(seq), authU64be(Date.now()));
+  var seed = authConcatBytes(entropy, nonce, authToBytes(AUTH_DRBG_PERSONALIZATION));
+  var state = authHmacDrbgUpdate(authRepeatByte(0, 32), authRepeatByte(1, 32), seed);
+  var out = new Uint8Array(size);
+  var offset = 0;
+  while (offset < size) {
+    state.value = authHmacSha256(state.key, state.value);
+    var i = 0;
+    while (i < state.value.length && offset < size) {
+      out[offset] = state.value[i];
+      offset += 1;
+      i += 1;
     }
-    var props = PropertiesService.getScriptProperties();
-    var seq = parseInt(props.getProperty(AUTH_CSPRNG_COUNTER_PROPERTY) || '0', 10);
-    if (!isFinite(seq) || seq < 0) seq = 0;
-    seq += 1;
-    props.setProperty(AUTH_CSPRNG_COUNTER_PROPERTY, String(seq));
-    var nonce = authConcatBytes(authU64be(seq), authU64be(Date.now()));
-    var seed = authConcatBytes(entropy, nonce, authToBytes(AUTH_DRBG_PERSONALIZATION));
-    var state = authHmacDrbgUpdate(authRepeatByte(0, 32), authRepeatByte(1, 32), seed);
-    var out = new Uint8Array(size);
-    var offset = 0;
-    while (offset < size) {
-      state.value = authHmacSha256(state.key, state.value);
-      var i = 0;
-      while (i < state.value.length && offset < size) {
-        out[offset] = state.value[i];
-        offset += 1;
-        i += 1;
-      }
-    }
-    return out;
-  });
+  }
+  return out;
 }
 
 function authRandomBytes(size) {
@@ -183,7 +190,9 @@ function authRandomBytes(size) {
     }
   }
   try {
-    return authHmacDrbgBytes(needed);
+    return authUnderHeldScriptLock(function () {
+      return authHmacDrbgBytes(needed);
+    });
   } catch (error) {
     if (error && error.expose && error.code) throw error;
     throw appError('INTERNAL_ERROR', 'A cryptographically secure random source is unavailable.');

@@ -3,35 +3,24 @@ import test from 'node:test'
 import {
   authDevProperties,
   createFakeSpreadsheet,
+  createNonReentrantScriptLock,
   gasUtilities,
   loadBackend,
   memoryProperties,
 } from './harness.js'
 
-function dummyLocks(lockFails = false, locks = []) {
-  return {
-    getScriptLock() {
-      return {
-        tryLock() {
-          if (lockFails) return false
-          locks.push('acquired')
-          return true
-        },
-        releaseLock() {
-          locks.push('released')
-        },
-      }
-    },
-  }
+function dummyLocks(lockFails = false, locks = [], state) {
+  return createNonReentrantScriptLock({ lockFails, events: locks, state: state || { held: false } })
 }
 
 function backend(options = {}) {
   const spreadsheet = options.spreadsheet || createFakeSpreadsheet()
   const properties = options.properties || authDevProperties()
-  const locks = []
+  const locks = options.locks || []
+  const lockState = options.lockState || { held: false }
   const context = loadBackend({
     PropertiesService: { getScriptProperties: () => properties },
-    LockService: dummyLocks(options.lockFails, locks),
+    LockService: dummyLocks(options.lockFails, locks, lockState),
     SpreadsheetApp: {
       openById() {
         return spreadsheet
@@ -43,6 +32,7 @@ function backend(options = {}) {
   return {
     spreadsheet,
     locks,
+    lockState,
     context,
     properties,
     store: context.createAuthStore({
@@ -51,6 +41,13 @@ function backend(options = {}) {
     }),
     repo: context.createAuthRepository(sheets),
   }
+}
+
+function hmacDrbgBackend(options = {}) {
+  return backend({
+    ...options,
+    globals: { crypto: {}, ...(options.globals || {}) },
+  })
 }
 
 test('Phase 1 uses HMAC-SHA256 lookup-secret hashing, not PBKDF2-12k', () => {
@@ -419,4 +416,83 @@ test('validateSession concurrent updates take the script lock and fail closed wh
   const still = app.store.validateSession(session.token)
   assert.equal(Boolean(still), true)
   assert.equal(still.expiresAt, originalExpiry)
+})
+
+test('Apps Script script lock rejects nested tryLock in the same execution', () => {
+  const app = hmacDrbgBackend()
+  const lock = app.context.LockService.getScriptLock()
+  assert.equal(lock.tryLock(), true)
+  assert.equal(lock.tryLock(), false)
+  assert.equal(app.locks.includes('nested-rejected'), true)
+  lock.releaseLock()
+  assert.equal(lock.tryLock(), true)
+  lock.releaseLock()
+})
+
+test('HMAC-DRBG never reacquires the caller lock during issue, rotate, and session', () => {
+  const app = hmacDrbgBackend()
+  const issued = app.store.issueCredential({
+    userId: 'user-1',
+    username: 'staff@example.com',
+    createdBy: 'owner-1',
+  })
+  assert.equal(issued.plaintext.length, 64)
+  assert.equal(app.store.verifyCredential('staff@example.com', issued.plaintext).ok, true)
+  assert.equal(app.locks.filter((item) => item === 'acquired').length, 1)
+  assert.equal(app.locks.filter((item) => item === 'nested-rejected').length, 0)
+  assert.equal(app.lockState.held, false)
+
+  const session = app.store.issueSession({ userId: 'user-1' })
+  assert.equal(Boolean(app.store.validateSession(session.token)), true)
+  assert.equal(app.locks.includes('nested-rejected'), false)
+
+  const rotated = app.store.rotateCredential({ userId: 'user-1', createdBy: 'owner-1' })
+  assert.notEqual(rotated.plaintext, issued.plaintext)
+  assert.equal(app.store.verifyCredential('staff@example.com', issued.plaintext).ok, false)
+  assert.equal(app.store.verifyCredential('staff@example.com', rotated.plaintext).ok, true)
+  assert.equal(app.store.validateSession(session.token), null)
+  assert.equal(app.locks.filter((item) => item === 'nested-rejected').length, 0)
+  assert.equal(JSON.stringify(app.spreadsheet.store).includes(issued.plaintext), false)
+  assert.equal(JSON.stringify(app.spreadsheet.store).includes(session.token), false)
+})
+
+test('HMAC-DRBG refuses to mint secrets unless a script lock is already held', () => {
+  const app = hmacDrbgBackend()
+  assert.equal(app.context.scriptLockDepth, 0)
+  assert.throws(() => app.context.authHmacDrbgBytes(32), (error) => error.code === 'INTERNAL_ERROR')
+  assert.equal(app.properties.getProperty('AUTH_CSPRNG_COUNTER'), null)
+
+  const generated = app.context.withScriptLock(() => app.context.authHmacDrbgBytes(32))
+  assert.equal(generated.length, 32)
+  assert.equal(app.properties.getProperty('AUTH_CSPRNG_COUNTER'), '1')
+})
+
+test('concurrent HMAC-DRBG generation serializes on the script lock and never duplicates output', () => {
+  const properties = authDevProperties()
+  const lockState = { held: false }
+  const firstLocks = []
+  const secondLocks = []
+  const first = hmacDrbgBackend({ properties, lockState, locks: firstLocks })
+  const second = hmacDrbgBackend({ properties, lockState, locks: secondLocks })
+
+  const one = first.store.issueCredential({ userId: 'user-1', username: 'one@example.com', createdBy: 'owner-1' })
+  const two = second.store.issueCredential({ userId: 'user-2', username: 'two@example.com', createdBy: 'owner-1' })
+  assert.notEqual(one.plaintext, two.plaintext)
+  assert.equal(properties.getProperty('AUTH_CSPRNG_COUNTER'), '2')
+
+  const held = first.context.LockService.getScriptLock()
+  assert.equal(held.tryLock(), true)
+  const before = properties.getProperty('AUTH_CSPRNG_COUNTER')
+  assert.throws(
+    () => second.store.issueCredential({ userId: 'user-3', username: 'three@example.com', createdBy: 'owner-1' }),
+    (error) => error.code === 'CONFLICT',
+  )
+  assert.equal(properties.getProperty('AUTH_CSPRNG_COUNTER'), before)
+  assert.equal(secondLocks.includes('nested-rejected'), true)
+  held.releaseLock()
+
+  const three = second.store.issueCredential({ userId: 'user-3', username: 'three@example.com', createdBy: 'owner-1' })
+  assert.notEqual(three.plaintext, one.plaintext)
+  assert.notEqual(three.plaintext, two.plaintext)
+  assert.equal(properties.getProperty('AUTH_CSPRNG_COUNTER'), '3')
 })

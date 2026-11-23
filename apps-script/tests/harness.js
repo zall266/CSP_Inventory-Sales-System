@@ -77,6 +77,38 @@ const files = [
   'app/main.js',
 ]
 
+export function createNonReentrantScriptLock(options = {}) {
+  const events = options.events || []
+  const state = options.state || { held: false }
+  return {
+    events,
+    state,
+    getScriptLock() {
+      events.push('get')
+      return {
+        tryLock() {
+          events.push('try')
+          if (options.lockFails) {
+            events.push('failed')
+            return false
+          }
+          if (state.held) {
+            events.push('nested-rejected')
+            return false
+          }
+          state.held = true
+          events.push('acquired')
+          return true
+        },
+        releaseLock() {
+          state.held = false
+          events.push('released')
+        },
+      }
+    },
+  }
+}
+
 export function gasUtilities() {
   return {
     getUuid() {
