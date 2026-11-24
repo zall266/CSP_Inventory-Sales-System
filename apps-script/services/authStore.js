@@ -57,10 +57,16 @@ function createAuthStore(dependencies) {
   // 1. AUTH_KDF_COUNTER / AUTH_KDF_INITIALIZED are written inside the KDF.
   // 2. AuthEvents kdf_advance is appended next (this function).
   // 3. Credential or session rows are written last.
+  // 4. credential_issued / credential_rotated audit rows are appended after persist.
   // A crash after (1) leaves the property counter ahead of the sheet. Recovery
   // uses max(property, sheet high-water)+1 and skips the used counter; it does
   // not reuse it. A crash after (2) before (3) leaves an unused hole. Missing
   // INITIALIZED after any outputs or sheet high-water still fails closed.
+  // Pepper rotation does not reset AUTH_KDF_COUNTER. Changing the pepper makes
+  // existing HMAC credential hashes unverifiable; re-issue credentials. Session
+  // token hashes are SHA-256 of the token (not peppered); revoke sessions after
+  // a pepper rotation. A full wipe of properties AND auth sheets with the same
+  // pepper looks like first boot and can repeat counter 1.
   function recordKdfAdvance(spreadsheet) {
     if (!authKeyedKdfActive()) return;
     repo.appendEvent(spreadsheet, {
@@ -123,7 +129,15 @@ function createAuthStore(dependencies) {
         reason: '',
         requestId: String(input && input.requestId || '')
       });
-      return { plaintext: secret.plaintext, record: record, entropyBits: secret.entropyBits };
+      return {
+        plaintext: secret.plaintext,
+        record: record,
+        entropyBits: secret.entropyBits,
+        securityBoundBits: secret.securityBoundBits,
+        entropyMeasured: secret.entropyMeasured,
+        entropyAssumption: secret.entropyAssumption,
+        source: secret.source
+      };
     });
   }
 

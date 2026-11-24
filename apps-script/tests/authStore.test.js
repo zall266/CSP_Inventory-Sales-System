@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import nodeCrypto from 'node:crypto'
 import test from 'node:test'
 import {
   authDevProperties,
@@ -66,6 +67,8 @@ test('Phase 1 uses HMAC-SHA256 lookup-secret hashing, not PBKDF2-12k', () => {
   assert.equal(app.context.AUTH_ALGORITHM, 'hmac-sha256')
   assert.equal(app.context.AUTH_SECRET_BYTES, 32)
   assert.equal(app.context.AUTH_MIN_ENTROPY_BITS, 128)
+  assert.equal(app.context.AUTH_PEPPER_MIN_BYTES, 32)
+  assert.equal(app.context.AUTH_PEPPER_MIN_HEX, 64)
   assert.equal(app.context.AUTH_SECRET_BYTES * 8 >= app.context.AUTH_MIN_ENTROPY_BITS, true)
   assert.equal(app.context.AUTH_PBKDF2_ITERATIONS, undefined)
   assert.equal(app.context.AUTH_NIST_800_90A_RBG, false)
@@ -101,6 +104,8 @@ test('CSPRNG generates 32-byte secrets and fails closed without a secure source'
   assert.equal(first.entropyBits, 256)
   assert.equal(first.minEntropyBits, 128)
   assert.equal(first.outputBits, 256)
+  assert.equal(first.entropyMeasured, true)
+  assert.equal(first.entropyAssumption, 'web-crypto-csprng')
   assert.equal(first.source, 'web-crypto')
   assert.notEqual(first.plaintext, second.plaintext)
 
@@ -148,8 +153,11 @@ test('SP 800-108 KDF is used when Web Crypto is absent and getUuid is never cons
     assert.match(first.plaintext, /^[0-9a-f]{64}$/)
     assert.equal(first.source, 'sp800-108-kdf')
     assert.equal(first.minEntropyBits, 128)
-    assert.equal(first.pepperEntropyBits, 256)
+    assert.equal(first.pepperLengthBits, 256)
+    assert.equal(first.securityBoundBits, 256)
     assert.equal(first.entropyBits, 256)
+    assert.equal(first.entropyMeasured, false)
+    assert.equal(first.entropyAssumption, 'pepper-length-if-csprng-provisioned')
     assert.equal(first.outputBits, 256)
     assert.notEqual(first.plaintext, second.plaintext)
     assert.equal(Number(properties.getProperty('AUTH_KDF_COUNTER')) >= 2, true)
@@ -314,6 +322,18 @@ test('repository refuses to persist plaintext password, secret, or token fields'
       userId: 'user-1',
       tokenHash: '00'.repeat(32),
       token: 'raw-session-token',
+    }]),
+    (error) => error.code === 'INTERNAL_ERROR',
+  )
+  assert.throws(
+    () => app.repo.writeCredentials(app.spreadsheet, [{
+      id: 'c2',
+      userId: 'user-1',
+      username: 'staff@example.com',
+      algorithm: 'hmac-sha256',
+      secretHash: '00'.repeat(32),
+      status: 'active',
+      pepper: 'should-not-store',
     }]),
     (error) => error.code === 'INTERNAL_ERROR',
   )
@@ -571,27 +591,23 @@ test('keyed KDF fails closed on counter reset, property deletion, and reinitiali
   assert.equal(app.store.verifyCredential('other@example.com', second.plaintext).ok, true)
 })
 
-test('keyed KDF entropyBits is min(pepper, PRF, output), not a 256-bit CSPRNG claim', () => {
-  const properties = memoryProperties({
-    ENVIRONMENT: 'DEV',
-    SPREADSHEET_ID: 'sheet-id',
-    DRIVE_ROOT_ID: 'drive-id',
-    TIMEZONE: 'Asia/Kuala_Lumpur',
-    AUTH_CREDENTIAL_PEPPER: '0123456789abcdef0123456789abcdef',
-  })
-  const app = keyedKdfBackend({ properties })
+test('keyed KDF reports a length-based security bound, not measured entropy', () => {
+  const app = keyedKdfBackend()
   const issued = app.store.issueCredential({
     userId: 'user-1',
     username: 'staff@example.com',
     createdBy: 'owner-1',
   })
-  assert.equal(issued.entropyBits, 128)
+  assert.equal(issued.source, 'sp800-108-kdf')
+  assert.equal(issued.entropyMeasured, false)
+  assert.equal(issued.entropyAssumption, 'pepper-length-if-csprng-provisioned')
+  assert.equal(issued.securityBoundBits, 256)
+  assert.equal(issued.entropyBits, 256)
   const secret = app.context.withScriptLock(() => app.context.authGenerateSecret())
-  assert.equal(secret.source, 'sp800-108-kdf')
-  assert.equal(secret.pepperEntropyBits, 128)
+  assert.equal(secret.pepperLengthBits, 256)
   assert.equal(secret.outputBits, 256)
   assert.equal(secret.minEntropyBits, 128)
-  assert.equal(secret.entropyBits, 128)
+  assert.equal(secret.entropyMeasured, false)
   assert.notEqual(secret.source, 'csprng')
 })
 
@@ -741,4 +757,273 @@ test('partial failure after kdf_advance before credential persist recovers witho
   assert.equal(app.store.verifyCredential('other@example.com', recovered.plaintext).ok, true)
   assert.equal(app.store.verifyCredential('staff@example.com', first.plaintext).ok, true)
 })
+
+test('pepper provisioning rejects missing, non-hex, short, and 32-hex values and does not invent a replacement', () => {
+  const base = {
+    ENVIRONMENT: 'DEV',
+    SPREADSHEET_ID: 'sheet-id',
+    DRIVE_ROOT_ID: 'drive-id',
+    TIMEZONE: 'Asia/Kuala_Lumpur',
+  }
+  const missing = keyedKdfBackend({ properties: memoryProperties(base) })
+  assert.throws(
+    () => missing.store.issueCredential({ userId: 'u1', username: 'staff@example.com' }),
+    (error) => error.code === 'INTERNAL_ERROR',
+  )
+  assert.equal(missing.properties.getProperty('AUTH_CREDENTIAL_PEPPER'), null)
+  assert.equal(missing.properties.getProperty('AUTH_KDF_COUNTER'), null)
+
+  const invalid = keyedKdfBackend({
+    properties: memoryProperties({ ...base, AUTH_CREDENTIAL_PEPPER: `${'g'.repeat(64)}` }),
+  })
+  assert.throws(
+    () => invalid.store.issueCredential({ userId: 'u1', username: 'staff@example.com' }),
+    (error) => error.code === 'INTERNAL_ERROR',
+  )
+
+  const odd = keyedKdfBackend({
+    properties: memoryProperties({ ...base, AUTH_CREDENTIAL_PEPPER: `${'ab'.repeat(31)}a` }),
+  })
+  assert.throws(
+    () => odd.store.issueCredential({ userId: 'u1', username: 'staff@example.com' }),
+    (error) => error.code === 'INTERNAL_ERROR',
+  )
+
+  const shorterThan32Hex = keyedKdfBackend({
+    properties: memoryProperties({ ...base, AUTH_CREDENTIAL_PEPPER: 'abcd' }),
+  })
+  assert.throws(
+    () => shorterThan32Hex.store.issueCredential({ userId: 'u1', username: 'staff@example.com' }),
+    (error) => error.code === 'INTERNAL_ERROR',
+  )
+
+  const thirtyTwoHex = keyedKdfBackend({
+    properties: memoryProperties({
+      ...base,
+      AUTH_CREDENTIAL_PEPPER: '0123456789abcdef0123456789abcdef',
+    }),
+  })
+  assert.throws(
+    () => thirtyTwoHex.store.issueCredential({ userId: 'u1', username: 'staff@example.com' }),
+    (error) => error.code === 'INTERNAL_ERROR',
+  )
+  assert.equal(thirtyTwoHex.properties.getProperty('AUTH_KDF_COUNTER'), null)
+})
+
+test('a 32-byte CSPRNG pepper is accepted and never leaks into sheets, events, or errors', () => {
+  const pepper = nodeCrypto.randomBytes(32).toString('hex')
+  assert.equal(pepper.length, 64)
+  const properties = memoryProperties({
+    ENVIRONMENT: 'DEV',
+    SPREADSHEET_ID: 'sheet-id',
+    DRIVE_ROOT_ID: 'drive-id',
+    TIMEZONE: 'Asia/Kuala_Lumpur',
+    AUTH_CREDENTIAL_PEPPER: pepper,
+  })
+  const app = keyedKdfBackend({ properties })
+  const issued = app.store.issueCredential({
+    userId: 'user-1',
+    username: 'staff@example.com',
+    createdBy: 'owner-1',
+    requestId: 'req-pepper',
+  })
+  assert.equal(issued.plaintext.length, 64)
+  assert.equal(issued.entropyMeasured, false)
+  const dump = JSON.stringify(app.spreadsheet.store)
+  assert.equal(dump.includes(pepper), false)
+  assert.equal(dump.toLowerCase().includes(pepper), false)
+  const events = JSON.stringify(app.store.readEvents())
+  assert.equal(events.includes(pepper), false)
+  assert.equal(events.includes(issued.plaintext), false)
+  let failed
+  try {
+    app.store.issueCredential({ userId: '', username: '' })
+  } catch (error) {
+    failed = error
+  }
+  assert.equal(Boolean(failed), true)
+  assert.equal(String(failed && failed.message || '').includes(pepper), false)
+  assert.equal(JSON.stringify(failed).includes(pepper), false)
+})
+
+test('SP 800-108 key and output labels are domain-separated from credential HMAC', () => {
+  const app = keyedKdfBackend()
+  const pepper = app.context.authReadPepper()
+  const prk = app.context.authHmacSha256(pepper, app.context.authToBytes(app.context.AUTH_KDF_KEY_LABEL))
+  const other = app.context.authHmacSha256(pepper, app.context.authToBytes(app.context.AUTH_KDF_LABEL))
+  const secret = app.context.withScriptLock(() => app.context.authGenerateSecret())
+  const cred = app.context.authHmacSha256(pepper, secret.raw)
+  const block = app.context.authSp800108Block(
+    prk,
+    1,
+    app.context.AUTH_KDF_LABEL,
+    app.context.authU64be(secret.counter),
+    256,
+  )
+  assert.notEqual(app.context.authBytesToHex(prk), app.context.authBytesToHex(other))
+  assert.notEqual(app.context.authBytesToHex(prk), app.context.authBytesToHex(cred))
+  assert.notEqual(app.context.authBytesToHex(block), app.context.authBytesToHex(cred))
+  assert.deepEqual([...block], [...secret.raw])
+  assert.equal(app.context.AUTH_KDF_KEY_LABEL === app.context.AUTH_KDF_LABEL, false)
+})
+
+test('SP 800-108 multi-block output uses incrementing i and total L in bits', () => {
+  const app = keyedKdfBackend()
+  const prk = app.context.authHmacSha256(
+    app.context.authReadPepper(),
+    app.context.authToBytes(app.context.AUTH_KDF_KEY_LABEL),
+  )
+  const actual = app.context.withScriptLock(() => app.context.authKeyedKdfBytes(40))
+  const context = app.context.authU64be(1)
+  const first = app.context.authSp800108Block(prk, 1, app.context.AUTH_KDF_LABEL, context, 320)
+  const second = app.context.authSp800108Block(prk, 2, app.context.AUTH_KDF_LABEL, context, 320)
+  const expected = app.context.authConcatBytes(first, second).slice(0, 40)
+  assert.equal(actual.length, 40)
+  assert.deepEqual([...actual], [...expected])
+  assert.notEqual(app.context.authBytesToHex(first), app.context.authBytesToHex(second))
+})
+
+test('HMAC_DRBG helpers are test-only and unused by production generation', () => {
+  const app = keyedKdfBackend()
+  let calls = 0
+  app.context.authHmacDrbgUpdate = function () {
+    calls += 1
+    throw new Error('drbg update')
+  }
+  app.context.authHmacDrbgInstantiate = function () {
+    calls += 1
+    throw new Error('drbg instantiate')
+  }
+  app.context.authHmacDrbgGenerate = function () {
+    calls += 1
+    throw new Error('drbg generate')
+  }
+  const issued = app.store.issueCredential({
+    userId: 'user-1',
+    username: 'staff@example.com',
+    createdBy: 'owner-1',
+  })
+  assert.equal(issued.plaintext.length, 64)
+  assert.equal(calls, 0)
+  assert.equal(app.context.AUTH_NIST_800_90A_RBG, false)
+  assert.equal(app.store.verifyCredential('staff@example.com', issued.plaintext).ok, true)
+})
+
+test('script lock is released after a fail-closed counter error', () => {
+  const app = keyedKdfBackend()
+  app.properties.setProperty('AUTH_KDF_INITIALIZED', '1')
+  app.properties.setProperty('AUTH_KDF_COUNTER', '01')
+  assert.throws(
+    () => app.store.issueCredential({ userId: 'user-1', username: 'staff@example.com', createdBy: 'owner-1' }),
+    (error) => error.code === 'INTERNAL_ERROR',
+  )
+  assert.equal(app.lockState.held, false)
+  assert.equal(app.locks.at(-1), 'released')
+})
+
+test('partial failure during session persist recovers without repeating the counter', () => {
+  let failWrite = false
+  const spreadsheet = createFakeSpreadsheet({}, {
+    beforeClearContent(name, row) {
+      if (failWrite && name === 'AuthSessions' && row === 2) {
+        failWrite = false
+        throw persistError('session write failed')
+      }
+    },
+  })
+  const app = keyedKdfBackend({ spreadsheet })
+  app.store.issueCredential({ userId: 'user-1', username: 'staff@example.com', createdBy: 'owner-1' })
+  const firstSession = app.store.issueSession({ userId: 'user-1' })
+  failWrite = true
+  assert.throws(() => app.store.issueSession({ userId: 'user-1' }), (error) => error.code === 'INTERNAL_ERROR')
+  assert.equal(app.properties.getProperty('AUTH_KDF_COUNTER'), '3')
+  assert.equal(Boolean(app.store.validateSession(firstSession.token)), true)
+  const recovered = app.store.issueSession({ userId: 'user-1' })
+  assert.notEqual(recovered.token, firstSession.token)
+  assert.equal(app.properties.getProperty('AUTH_KDF_COUNTER'), '4')
+  assert.equal(Boolean(app.store.validateSession(firstSession.token)), true)
+  assert.equal(Boolean(app.store.validateSession(recovered.token)), true)
+  const dump = JSON.stringify(app.spreadsheet.store)
+  assert.equal(dump.includes(firstSession.token), false)
+  assert.equal(dump.includes(recovered.token), false)
+})
+
+test('partial failure after credential persist during audit append does not reuse the counter', () => {
+  let failIssued = false
+  const spreadsheet = createFakeSpreadsheet({}, {
+    beforeAppendRow(name, row) {
+      if (failIssued && name === 'AuthEvents' && row[4] === 'credential_issued') {
+        failIssued = false
+        throw persistError('audit append failed')
+      }
+    },
+  })
+  const app = keyedKdfBackend({ spreadsheet })
+  const first = app.store.issueCredential({ userId: 'user-1', username: 'staff@example.com', createdBy: 'owner-1' })
+  failIssued = true
+  assert.throws(
+    () => app.store.issueCredential({ userId: 'user-2', username: 'other@example.com', createdBy: 'owner-1' }),
+    (error) => error.code === 'INTERNAL_ERROR',
+  )
+  assert.equal(app.properties.getProperty('AUTH_KDF_COUNTER'), '2')
+  assert.equal(app.store.verifyCredential('staff@example.com', first.plaintext).ok, true)
+  const recovered = app.store.issueCredential({ userId: 'user-2', username: 'other@example.com', createdBy: 'owner-1' })
+  assert.notEqual(recovered.plaintext, first.plaintext)
+  assert.equal(app.properties.getProperty('AUTH_KDF_COUNTER'), '3')
+  assert.equal(app.store.verifyCredential('other@example.com', recovered.plaintext).ok, true)
+})
+
+test('pepper rotation does not reset the KDF counter and invalidates previous hashes', () => {
+  const firstPepper = `${'ab'.repeat(32)}`
+  const secondPepper = `${'cd'.repeat(32)}`
+  const properties = memoryProperties({
+    ENVIRONMENT: 'DEV',
+    SPREADSHEET_ID: 'sheet-id',
+    DRIVE_ROOT_ID: 'drive-id',
+    TIMEZONE: 'Asia/Kuala_Lumpur',
+    AUTH_CREDENTIAL_PEPPER: firstPepper,
+  })
+  const app = keyedKdfBackend({ properties })
+  const first = app.store.issueCredential({ userId: 'user-1', username: 'staff@example.com', createdBy: 'owner-1' })
+  const counter = app.properties.getProperty('AUTH_KDF_COUNTER')
+  assert.equal(counter, '1')
+  properties.setProperty('AUTH_CREDENTIAL_PEPPER', secondPepper)
+  assert.equal(app.properties.getProperty('AUTH_KDF_COUNTER'), counter)
+  assert.equal(app.properties.getProperty('AUTH_KDF_INITIALIZED'), '1')
+  assert.equal(app.store.verifyCredential('staff@example.com', first.plaintext).ok, false)
+  const rotated = app.store.issueCredential({ userId: 'user-1', username: 'staff@example.com', createdBy: 'owner-1' })
+  assert.notEqual(rotated.plaintext, first.plaintext)
+  assert.equal(app.properties.getProperty('AUTH_KDF_COUNTER'), '2')
+  assert.equal(app.store.verifyCredential('staff@example.com', rotated.plaintext).ok, true)
+  assert.equal(app.store.verifyCredential('staff@example.com', first.plaintext).ok, false)
+})
+
+test('audit event reasons that look like secrets or pepper are redacted', () => {
+  const app = keyedKdfBackend()
+  app.store.ensureSheets()
+  app.repo.appendEvent(app.spreadsheet, {
+    id: 'e1',
+    timestamp: '2026-01-01T00:00:00.000Z',
+    actorUserId: '',
+    targetUserId: '',
+    eventType: 'test',
+    result: 'ok',
+    reason: 'pepper-material',
+    requestId: '',
+  })
+  app.repo.appendEvent(app.spreadsheet, {
+    id: 'e2',
+    timestamp: '2026-01-01T00:00:00.000Z',
+    actorUserId: '',
+    targetUserId: '',
+    eventType: 'test',
+    result: 'ok',
+    reason: 'ab'.repeat(32),
+    requestId: '',
+  })
+  const events = app.repo.readEvents(app.spreadsheet)
+  assert.equal(events[0].reason, 'redacted')
+  assert.equal(events[1].reason, 'redacted')
+})
+
 

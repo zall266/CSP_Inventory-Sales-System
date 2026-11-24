@@ -91,10 +91,18 @@ function createAuthRepository(sheetRepository) {
     var keys = Object.keys(record || {});
     for (var i = 0; i < keys.length; i += 1) {
       var key = keys[i].toLowerCase();
-      if (key === 'password' || key === 'plaintext' || key === 'secret' || key === 'token') {
+      if (key === 'password' || key === 'plaintext' || key === 'secret' || key === 'token' || key === 'pepper') {
         throw appError('INTERNAL_ERROR', 'The request could not be completed.');
       }
     }
+  }
+
+  function redactEventReason(reason) {
+    var text = String(reason || '');
+    if (!text) return '';
+    if (/pepper|password|plaintext|secret|token/i.test(text)) return 'redacted';
+    if (/[0-9a-fA-F]{32,}/.test(text)) return 'redacted';
+    return text;
   }
 
   function readCredentials(spreadsheet) {
@@ -123,9 +131,7 @@ function createAuthRepository(sheetRepository) {
     ensure(spreadsheet);
     assertNoSecret(record);
     var mapped = mapEvent(record);
-    if (mapped.reason && /password|secret|token|hash/i.test(mapped.reason) && mapped.reason.length > 80) {
-      mapped.reason = 'redacted';
-    }
+    mapped.reason = redactEventReason(mapped.reason);
     sheetRepository.appendObject(sheet(spreadsheet, 'AuthEvents'), mapped);
   }
 

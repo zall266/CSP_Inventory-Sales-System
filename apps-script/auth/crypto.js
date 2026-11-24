@@ -12,15 +12,25 @@
 // 2. Otherwise a NIST SP 800-108 HMAC-SHA256 KDF in counter mode, keyed by
 //    AUTH_CREDENTIAL_PEPPER with domain separation from the credential HMAC.
 //    This is deterministic and pepper-keyed. It is NOT a CSPRNG and NOT an
-//    SP 800-90A DRBG (no live entropy, no Instantiate/Reseed). HMAC_DRBG
-//    Update/Generate helpers exist only for known-answer tests.
-//    Security bound = min(pepper entropy, HMAC-SHA256 256-bit PRF, output
-//    length). Pepper is required at >= 32 hex chars, so the guaranteed floor
-//    is 128 bits. entropyBits reports that min(...) for the deployed pepper,
-//    not the 256-bit output length alone.
-//    AUTH_KDF_COUNTER advances only under a held script lock. The counter is
-//    a canonical positive safe integer; values at Number.MAX_SAFE_INTEGER
-//    fail closed because they cannot be incremented safely.
+//    SP 800-90A DRBG (no live entropy, no Instantiate/Reseed, no certification).
+//    HMAC_DRBG Update/Generate/Instantiate exist only for known-answer tests
+//    and are never called by production generation.
+//
+// Pepper provisioning (operator, outside Apps Script):
+// Generate 32 CSPRNG bytes and encode as 64 hex characters. Install that value
+// as Script Property AUTH_CREDENTIAL_PEPPER. This code never generates, logs,
+// prints, or auto-repairs a missing pepper. Hex length is not measured entropy:
+// a 64-hex string has 256 bits of length. Actual entropy exists only if the
+// operator used a CSPRNG as documented in auth/README.md.
+// securityBoundBits / entropyBits on the KDF path are that length-based bound
+// (min(pepper length bits, HMAC-SHA256 256, output bits)), not a lab measurement.
+// AUTH_MIN_ENTROPY_BITS (128) is the minimum accepted bound, not a guarantee
+// that a mis-provisioned pepper has 128 bits of entropy.
+//
+// AUTH_KDF_COUNTER advances only under a held script lock. The counter is a
+// canonical positive safe integer; values at Number.MAX_SAFE_INTEGER fail
+// closed because they cannot be incremented safely. Pepper rotation does not
+// reset the counter.
 // Utilities.getUuid() is not used for authentication secrets.
 
 var AUTH_SECRET_BYTES = 32;
@@ -28,7 +38,8 @@ var AUTH_MIN_ENTROPY_BITS = 128;
 var AUTH_ALGORITHM = 'hmac-sha256';
 var AUTH_HASH_HEX_LENGTH = 64;
 var AUTH_PEPPER_PROPERTY = 'AUTH_CREDENTIAL_PEPPER';
-var AUTH_PEPPER_MIN_HEX = 32;
+var AUTH_PEPPER_MIN_BYTES = 32;
+var AUTH_PEPPER_MIN_HEX = 64;
 var AUTH_KDF_COUNTER_PROPERTY = 'AUTH_KDF_COUNTER';
 var AUTH_KDF_INITIALIZED_PROPERTY = 'AUTH_KDF_INITIALIZED';
 var AUTH_KDF_LABEL = 'csp.auth.lookup-secret.v1';
@@ -145,6 +156,9 @@ function authU64be(value) {
   return out;
 }
 
+// TEST ONLY. Not an SP 800-90A production HMAC_DRBG. AUTH_NIST_800_90A_RBG is
+// false. authRandomBytes / authKeyedKdfBytes / authGenerateSecret never call
+// these helpers.
 function authHmacDrbgUpdate(key, value, data) {
   var provided = data && data.length ? data : new Uint8Array(0);
   var nextKey = authHmacSha256(key, authConcatBytes(value, new Uint8Array([0]), provided));
@@ -170,6 +184,7 @@ function authGetLastKeyedCounter() {
 }
 
 function authHmacDrbgInstantiate(entropy, nonce, personalization) {
+  // TEST ONLY. See authHmacDrbgUpdate.
   var seed = authConcatBytes(
     entropy,
     nonce,
@@ -180,6 +195,7 @@ function authHmacDrbgInstantiate(entropy, nonce, personalization) {
 }
 
 function authHmacDrbgGenerate(state, byteCount, additionalInput) {
+  // TEST ONLY. See authHmacDrbgUpdate.
   if (!state || !state.key || !state.value) {
     throw appError('INTERNAL_ERROR', 'A cryptographically secure random source is unavailable.');
   }
@@ -259,10 +275,21 @@ function authRequireSafeCount(value, emptyValue) {
   return value;
 }
 
-function authSecretEntropyBits(keyed, pepperBytes) {
+function authPepperLengthBits(pepperBytes) {
+  return pepperBytes.length * 8;
+}
+
+// Length-based theoretical bound, not measured entropy. On the KDF path this
+// equals min(pepper hex length in bits, HMAC-SHA256 PRF bits, output bits).
+// Actual pepper entropy is an operator-provisioning assumption.
+function authSecretSecurityBoundBits(keyed, pepperBytes) {
   var outputBits = AUTH_SECRET_BYTES * 8;
   if (!keyed) return outputBits;
-  return Math.min(pepperBytes.length * 8, AUTH_KDF_PRF_BITS, outputBits);
+  return Math.min(authPepperLengthBits(pepperBytes), AUTH_KDF_PRF_BITS, outputBits);
+}
+
+function authSecretEntropyBits(keyed, pepperBytes) {
+  return authSecretSecurityBoundBits(keyed, pepperBytes);
 }
 
 // NIST SP 800-108 Rev. 1 §4.1 counter mode:
@@ -388,16 +415,19 @@ function authReadPepper() {
 function authGenerateSecret(options) {
   var keyed = authKeyedKdfActive();
   var pepper = keyed ? authReadPepper() : null;
-  var entropyBits = authSecretEntropyBits(keyed, pepper);
-  if (entropyBits < AUTH_MIN_ENTROPY_BITS) authKdfUnavailable();
+  var securityBoundBits = authSecretSecurityBoundBits(keyed, pepper);
+  if (securityBoundBits < AUTH_MIN_ENTROPY_BITS) authKdfUnavailable();
   var raw = authRandomBytes(AUTH_SECRET_BYTES, options);
   return {
     plaintext: authBytesToHex(raw),
     raw: raw,
-    entropyBits: entropyBits,
+    entropyBits: securityBoundBits,
+    securityBoundBits: securityBoundBits,
     minEntropyBits: AUTH_MIN_ENTROPY_BITS,
     outputBits: AUTH_SECRET_BYTES * 8,
-    pepperEntropyBits: keyed ? pepper.length * 8 : 0,
+    pepperLengthBits: keyed ? authPepperLengthBits(pepper) : 0,
+    entropyMeasured: !keyed,
+    entropyAssumption: keyed ? 'pepper-length-if-csprng-provisioned' : 'web-crypto-csprng',
     source: keyed ? 'sp800-108-kdf' : 'web-crypto',
     counter: keyed ? authLastKeyedCounter : 0
   };

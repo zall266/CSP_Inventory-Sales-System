@@ -37,6 +37,8 @@ Set these Script Properties on that existing project. Keep the values out of Rea
 
 `14vIYpPSNQafvMnWgSEd1EGounerNjK3S` is the verified Drive root. A similar-looking id that ends in the Apps Script id is not the folder.
 
+Auth V1 also requires operator-provisioned `AUTH_CREDENTIAL_PEPPER`: 64 hexadecimal characters from 32 CSPRNG bytes generated **outside** Apps Script. It is not a `getConfig` key. The backend never generates, logs, or auto-repairs it, and pepper rotation does not reset KDF counters. See `auth/README.md`. Do not put the value in this README, in git, in sheet cells, or in Cursor chat.
+
 ## Foundation sheets
 
 `initializeFoundation()` creates only:

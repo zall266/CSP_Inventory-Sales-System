@@ -86,7 +86,7 @@ export function createNonReentrantScriptLock(options = {}) {
     getScriptLock() {
       events.push('get')
       return {
-        tryLock() {
+        tryLock(_timeoutMs) {
           events.push('try')
           if (options.lockFails) {
             events.push('failed')
