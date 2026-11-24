@@ -1,21 +1,26 @@
 // CSP Auth V1 credential cryptography.
-// Staff secrets are CSPRNG lookup secrets (>= 128 bits), not memorized passwords.
+// Staff secrets are lookup secrets, not memorized passwords.
 // OWASP ASVS 5.0 V6.5.2: a standard hash is allowed at >= 112 bits of entropy.
 // Do not use PBKDF2-HMAC-SHA256 at 12,000 iterations. That work factor is not
 // OWASP-compliant and is not used here.
 // Apps Script V8 has no crypto.subtle / Argon2 / scrypt / native PBKDF2.
 //
-// Randomness (fail-closed):
+// Secret generation (fail-closed). Two paths; only the first is a CSPRNG:
 // 1. Web Crypto crypto.getRandomValues, when present. W3C Web Cryptography and
-//    MDN document this as a CSPRNG. Google Issue 235538670 (Won't Fix) states
-//    the Web Crypto API is not available in Apps Script.
-// 2. Otherwise NIST SP 800-108 HMAC-SHA256 KDF in counter mode, keyed by
-//    AUTH_CREDENTIAL_PEPPER (>= 128 bits) with domain separation from the
-//    credential HMAC. The counter advances only under a held script lock.
-//    This is NOT a validated SP 800-90A HMAC_DRBG: GAS has no live entropy
-//    source for Instantiate/Reseed, and a one-shot instantiate-per-call with a
-//    resettable counter can repeat secrets. HMAC_DRBG Update/Generate helpers
-//    exist only for known-answer tests.
+//    MDN document this as a CSPRNG. 32-byte outputs have 256 bits of entropy.
+//    Google Issue 235538670 (Won't Fix) states Web Crypto is not in Apps Script.
+// 2. Otherwise a NIST SP 800-108 HMAC-SHA256 KDF in counter mode, keyed by
+//    AUTH_CREDENTIAL_PEPPER with domain separation from the credential HMAC.
+//    This is deterministic and pepper-keyed. It is NOT a CSPRNG and NOT an
+//    SP 800-90A DRBG (no live entropy, no Instantiate/Reseed). HMAC_DRBG
+//    Update/Generate helpers exist only for known-answer tests.
+//    Security bound = min(pepper entropy, HMAC-SHA256 256-bit PRF, output
+//    length). Pepper is required at >= 32 hex chars, so the guaranteed floor
+//    is 128 bits. entropyBits reports that min(...) for the deployed pepper,
+//    not the 256-bit output length alone.
+//    AUTH_KDF_COUNTER advances only under a held script lock. The counter is
+//    a canonical positive safe integer; values at Number.MAX_SAFE_INTEGER
+//    fail closed because they cannot be incremented safely.
 // Utilities.getUuid() is not used for authentication secrets.
 
 var AUTH_SECRET_BYTES = 32;
@@ -28,6 +33,7 @@ var AUTH_KDF_COUNTER_PROPERTY = 'AUTH_KDF_COUNTER';
 var AUTH_KDF_INITIALIZED_PROPERTY = 'AUTH_KDF_INITIALIZED';
 var AUTH_KDF_LABEL = 'csp.auth.lookup-secret.v1';
 var AUTH_KDF_KEY_LABEL = 'csp.auth.kdf.key.v1';
+var AUTH_KDF_PRF_BITS = 256;
 var AUTH_NIST_800_90A_RBG = false;
 var AUTH_DRBG_RESEED_INTERVAL = 10000;
 var AUTH_SESSION_ABSOLUTE_MS = 12 * 60 * 60 * 1000;
@@ -208,6 +214,60 @@ function authHmacDrbgGenerate(state, byteCount, additionalInput) {
   };
 }
 
+function authKdfUnavailable() {
+  throw appError('INTERNAL_ERROR', 'A cryptographically secure random source is unavailable.');
+}
+
+function authMaxSafeInteger() {
+  return typeof Number.MAX_SAFE_INTEGER === 'number' ? Number.MAX_SAFE_INTEGER : 9007199254740991;
+}
+
+function authIsCanonicalIntegerString(text) {
+  return text === '0' || /^[1-9][0-9]*$/.test(text);
+}
+
+function authParseCanonicalCounter(raw, options) {
+  var settings = options || {};
+  if (raw === null || raw === undefined) {
+    if (settings.emptyAllowed) return 0;
+    authKdfUnavailable();
+  }
+  var text = String(raw);
+  if (text === '') {
+    if (settings.emptyAllowed) return 0;
+    authKdfUnavailable();
+  }
+  if (!authIsCanonicalIntegerString(text) || text.length > 16) authKdfUnavailable();
+  var n = Number(text);
+  var max = authMaxSafeInteger();
+  if (n !== n || n < 0 || n > max || Math.floor(n) !== n || String(n) !== text) {
+    authKdfUnavailable();
+  }
+  if (n === 0 && !settings.zeroAllowed) authKdfUnavailable();
+  return n;
+}
+
+function authRequireSafeCount(value, emptyValue) {
+  if (value === undefined || value === null || value === '') return emptyValue;
+  if (typeof value === 'string') {
+    return authParseCanonicalCounter(value, { emptyAllowed: false, zeroAllowed: true });
+  }
+  if (typeof value !== 'number' || value !== value || Math.floor(value) !== value) {
+    authKdfUnavailable();
+  }
+  if (value < 0 || value > authMaxSafeInteger()) authKdfUnavailable();
+  return value;
+}
+
+function authSecretEntropyBits(keyed, pepperBytes) {
+  var outputBits = AUTH_SECRET_BYTES * 8;
+  if (!keyed) return outputBits;
+  return Math.min(pepperBytes.length * 8, AUTH_KDF_PRF_BITS, outputBits);
+}
+
+// NIST SP 800-108 Rev. 1 §4.1 counter mode:
+//   K(i) := PRF(K_in, [i] || Label || 0x00 || Context || [L])
+// [i] and [L] are 32-bit big-endian. L is the total KO length in bits.
 function authSp800108Block(key, counter, label, context, bits) {
   return authHmacSha256(
     key,
@@ -216,38 +276,35 @@ function authSp800108Block(key, counter, label, context, bits) {
 }
 
 function authKeyedKdfBytes(size, options) {
-  if (typeof scriptLockDepth !== 'number' || scriptLockDepth < 1) {
-    throw appError('INTERNAL_ERROR', 'A cryptographically secure random source is unavailable.');
-  }
+  if (typeof scriptLockDepth !== 'number' || scriptLockDepth < 1) authKdfUnavailable();
   var settings = options || {};
-  var minCounter = Number(settings.minCounter) || 0;
-  var existingOutputs = Number(settings.existingOutputs) || 0;
+  var minCounter = authRequireSafeCount(settings.minCounter, 0);
+  var existingOutputs = authRequireSafeCount(settings.existingOutputs, 0);
   var pepper = authReadPepper();
   if (typeof PropertiesService === 'undefined' || !PropertiesService.getScriptProperties) {
-    throw appError('INTERNAL_ERROR', 'A cryptographically secure random source is unavailable.');
+    authKdfUnavailable();
   }
   var props = PropertiesService.getScriptProperties();
   var initialized = String(props.getProperty(AUTH_KDF_INITIALIZED_PROPERTY) || '') === '1';
   var storedRaw = props.getProperty(AUTH_KDF_COUNTER_PROPERTY);
-  var stored = parseInt(storedRaw || '', 10);
+  var stored = initialized
+    ? authParseCanonicalCounter(storedRaw, { emptyAllowed: false, zeroAllowed: false })
+    : authParseCanonicalCounter(storedRaw, { emptyAllowed: true, zeroAllowed: true });
   if (initialized) {
-    if (!storedRaw || !isFinite(stored) || stored < 1) {
-      throw appError('INTERNAL_ERROR', 'A cryptographically secure random source is unavailable.');
-    }
-    if (stored < minCounter) {
-      throw appError('INTERNAL_ERROR', 'A cryptographically secure random source is unavailable.');
-    }
+    if (stored < minCounter) authKdfUnavailable();
   } else if (minCounter > 0 || existingOutputs > 0) {
-    throw appError('INTERNAL_ERROR', 'A cryptographically secure random source is unavailable.');
+    authKdfUnavailable();
   }
-  var next = Math.max(isFinite(stored) ? stored : 0, minCounter) + 1;
+  var next = Math.max(stored, minCounter) + 1;
+  if (next < 1 || next > authMaxSafeInteger()) authKdfUnavailable();
   var prk = authHmacSha256(pepper, authToBytes(AUTH_KDF_KEY_LABEL));
   var context = authU64be(next);
   var out = new Uint8Array(size);
   var offset = 0;
   var blockIndex = 1;
+  var bits = size * 8;
   while (offset < size) {
-    var block = authSp800108Block(prk, blockIndex, AUTH_KDF_LABEL, context, size * 8);
+    var block = authSp800108Block(prk, blockIndex, AUTH_KDF_LABEL, context, bits);
     var i = 0;
     while (i < block.length && offset < size) {
       out[offset] = block[i];
@@ -329,13 +386,20 @@ function authReadPepper() {
 }
 
 function authGenerateSecret(options) {
+  var keyed = authKeyedKdfActive();
+  var pepper = keyed ? authReadPepper() : null;
+  var entropyBits = authSecretEntropyBits(keyed, pepper);
+  if (entropyBits < AUTH_MIN_ENTROPY_BITS) authKdfUnavailable();
   var raw = authRandomBytes(AUTH_SECRET_BYTES, options);
   return {
     plaintext: authBytesToHex(raw),
     raw: raw,
-    entropyBits: AUTH_SECRET_BYTES * 8,
+    entropyBits: entropyBits,
     minEntropyBits: AUTH_MIN_ENTROPY_BITS,
-    counter: authLastKeyedCounter
+    outputBits: AUTH_SECRET_BYTES * 8,
+    pepperEntropyBits: keyed ? pepper.length * 8 : 0,
+    source: keyed ? 'sp800-108-kdf' : 'web-crypto',
+    counter: keyed ? authLastKeyedCounter : 0
   };
 }
 

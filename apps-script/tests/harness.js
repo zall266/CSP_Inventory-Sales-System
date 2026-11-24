@@ -207,7 +207,7 @@ export function authDevProperties() {
   })
 }
 
-export function createFakeSpreadsheet(seed = {}) {
+export function createFakeSpreadsheet(seed = {}, hooks = {}) {
   const store = { Sheet1: [['']], ...seed }
   function makeSheet(name) {
     return {
@@ -236,6 +236,7 @@ export function createFakeSpreadsheet(seed = {}) {
             return values
           },
           setValues(values) {
+            if (typeof hooks.beforeSetValues === 'function') hooks.beforeSetValues(name, row, values)
             for (let r = 0; r < values.length; r += 1) {
               if (!store[name][row - 1 + r]) store[name][row - 1 + r] = []
               for (let c = 0; c < values[r].length; c += 1) {
@@ -244,6 +245,7 @@ export function createFakeSpreadsheet(seed = {}) {
             }
           },
           clearContent() {
+            if (typeof hooks.beforeClearContent === 'function') hooks.beforeClearContent(name, row)
             for (let r = 0; r < numRows; r += 1) {
               const source = store[name][row - 1 + r]
               if (!source) continue
@@ -253,6 +255,7 @@ export function createFakeSpreadsheet(seed = {}) {
         }
       },
       appendRow(row) {
+        if (typeof hooks.beforeAppendRow === 'function') hooks.beforeAppendRow(name, row)
         store[name].push(row.slice())
       },
     }

@@ -36,8 +36,8 @@ function createAuthStore(dependencies) {
     var i;
     for (i = 0; i < events.length; i += 1) {
       if (events[i].eventType !== 'kdf_advance') continue;
-      var n = parseInt(events[i].reason, 10);
-      if (isFinite(n) && n > max) max = n;
+      var n = authParseCanonicalCounter(events[i].reason, { emptyAllowed: false, zeroAllowed: false });
+      if (n > max) max = n;
     }
     return max;
   }
@@ -53,6 +53,14 @@ function createAuthStore(dependencies) {
     };
   }
 
+  // Persistence is ordered, not atomic across Script Properties and Sheets:
+  // 1. AUTH_KDF_COUNTER / AUTH_KDF_INITIALIZED are written inside the KDF.
+  // 2. AuthEvents kdf_advance is appended next (this function).
+  // 3. Credential or session rows are written last.
+  // A crash after (1) leaves the property counter ahead of the sheet. Recovery
+  // uses max(property, sheet high-water)+1 and skips the used counter; it does
+  // not reuse it. A crash after (2) before (3) leaves an unused hole. Missing
+  // INITIALIZED after any outputs or sheet high-water still fails closed.
   function recordKdfAdvance(spreadsheet) {
     if (!authKeyedKdfActive()) return;
     repo.appendEvent(spreadsheet, {
@@ -76,9 +84,6 @@ function createAuthStore(dependencies) {
       if (!userId || !username) throw appError('VALIDATION_ERROR', 'User is not valid.');
       var secret = authGenerateSecret(keyedOptions(spreadsheet));
       recordKdfAdvance(spreadsheet);
-      if (secret.minEntropyBits < AUTH_MIN_ENTROPY_BITS || secret.entropyBits < AUTH_MIN_ENTROPY_BITS) {
-        throw appError('INTERNAL_ERROR', 'The request could not be completed.');
-      }
       var hashed = authHashSecret(secret.plaintext);
       var affectedUsers = {};
       affectedUsers[userId] = true;

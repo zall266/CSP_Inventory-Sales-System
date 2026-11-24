@@ -43,11 +43,22 @@ function backend(options = {}) {
   }
 }
 
-function hmacDrbgBackend(options = {}) {
+function keyedKdfBackend(options = {}) {
   return backend({
     ...options,
     globals: { crypto: {}, ...(options.globals || {}) },
   })
+}
+
+function hmacDrbgBackend(options = {}) {
+  return keyedKdfBackend(options)
+}
+
+function persistError(message) {
+  const error = new Error(message)
+  error.code = 'INTERNAL_ERROR'
+  error.expose = true
+  return error
 }
 
 test('Phase 1 uses HMAC-SHA256 lookup-secret hashing, not PBKDF2-12k', () => {
@@ -58,6 +69,7 @@ test('Phase 1 uses HMAC-SHA256 lookup-secret hashing, not PBKDF2-12k', () => {
   assert.equal(app.context.AUTH_SECRET_BYTES * 8 >= app.context.AUTH_MIN_ENTROPY_BITS, true)
   assert.equal(app.context.AUTH_PBKDF2_ITERATIONS, undefined)
   assert.equal(app.context.AUTH_NIST_800_90A_RBG, false)
+  assert.equal(app.context.AUTH_KDF_PRF_BITS, 256)
   assert.equal(typeof app.context.authPbkdf2, 'undefined')
   assert.equal(typeof app.context.authHashSecret, 'function')
   assert.equal(typeof app.context.authHmacSha256, 'function')
@@ -88,6 +100,8 @@ test('CSPRNG generates 32-byte secrets and fails closed without a secure source'
   assert.match(first.plaintext, /^[0-9a-f]{64}$/)
   assert.equal(first.entropyBits, 256)
   assert.equal(first.minEntropyBits, 128)
+  assert.equal(first.outputBits, 256)
+  assert.equal(first.source, 'web-crypto')
   assert.notEqual(first.plaintext, second.plaintext)
 
   const closed = loadBackend({
@@ -102,7 +116,7 @@ test('CSPRNG generates 32-byte secrets and fails closed without a secure source'
   })
 })
 
-test('HMAC-DRBG is used when Web Crypto is absent and getUuid is never consulted', () => {
+test('SP 800-108 KDF is used when Web Crypto is absent and getUuid is never consulted', () => {
   let uuidCalls = 0
   let mathCalls = 0
   const mathRandom = Math.random
@@ -132,6 +146,11 @@ test('HMAC-DRBG is used when Web Crypto is absent and getUuid is never consulted
     assert.equal(mathCalls, 0)
     assert.equal(first.raw.length, 32)
     assert.match(first.plaintext, /^[0-9a-f]{64}$/)
+    assert.equal(first.source, 'sp800-108-kdf')
+    assert.equal(first.minEntropyBits, 128)
+    assert.equal(first.pepperEntropyBits, 256)
+    assert.equal(first.entropyBits, 256)
+    assert.equal(first.outputBits, 256)
     assert.notEqual(first.plaintext, second.plaintext)
     assert.equal(Number(properties.getProperty('AUTH_KDF_COUNTER')) >= 2, true)
   } finally {
@@ -139,7 +158,7 @@ test('HMAC-DRBG is used when Web Crypto is absent and getUuid is never consulted
   }
 })
 
-test('HMAC-DRBG fails closed without pepper or HMAC and does not use Math.random', () => {
+test('keyed KDF fails closed without pepper or HMAC and does not use Math.random', () => {
   const noPepper = loadBackend({
     crypto: {},
     LockService: dummyLocks(),
@@ -430,7 +449,7 @@ test('Apps Script script lock rejects nested tryLock in the same execution', () 
   lock.releaseLock()
 })
 
-test('HMAC-DRBG never reacquires the caller lock during issue, rotate, and session', () => {
+test('keyed KDF never reacquires the caller lock during issue, rotate, and session', () => {
   const app = hmacDrbgBackend()
   const issued = app.store.issueCredential({
     userId: 'user-1',
@@ -551,3 +570,175 @@ test('keyed KDF fails closed on counter reset, property deletion, and reinitiali
   )
   assert.equal(app.store.verifyCredential('other@example.com', second.plaintext).ok, true)
 })
+
+test('keyed KDF entropyBits is min(pepper, PRF, output), not a 256-bit CSPRNG claim', () => {
+  const properties = memoryProperties({
+    ENVIRONMENT: 'DEV',
+    SPREADSHEET_ID: 'sheet-id',
+    DRIVE_ROOT_ID: 'drive-id',
+    TIMEZONE: 'Asia/Kuala_Lumpur',
+    AUTH_CREDENTIAL_PEPPER: '0123456789abcdef0123456789abcdef',
+  })
+  const app = keyedKdfBackend({ properties })
+  const issued = app.store.issueCredential({
+    userId: 'user-1',
+    username: 'staff@example.com',
+    createdBy: 'owner-1',
+  })
+  assert.equal(issued.entropyBits, 128)
+  const secret = app.context.withScriptLock(() => app.context.authGenerateSecret())
+  assert.equal(secret.source, 'sp800-108-kdf')
+  assert.equal(secret.pepperEntropyBits, 128)
+  assert.equal(secret.outputBits, 256)
+  assert.equal(secret.minEntropyBits, 128)
+  assert.equal(secret.entropyBits, 128)
+  assert.notEqual(secret.source, 'csprng')
+})
+
+test('SP 800-108 counter-mode PRF input is [i] || Label || 0x00 || Context || [L]', () => {
+  const app = keyedKdfBackend()
+  const label = 'csp.auth.lookup-secret.v1'
+  const labelBytes = Buffer.from(label, 'utf8')
+  const message = app.context.authConcatBytes(
+    app.context.authU32be(1),
+    app.context.authToBytes(label),
+    new Uint8Array([0]),
+    app.context.authU64be(1),
+    app.context.authU32be(256),
+  )
+  assert.equal(message.length, 4 + labelBytes.length + 1 + 8 + 4)
+  assert.deepEqual([...message.slice(0, 4)], [0, 0, 0, 1])
+  assert.deepEqual([...message.slice(4, 4 + labelBytes.length)], [...labelBytes])
+  assert.equal(message[4 + labelBytes.length], 0)
+  const afterSep = 4 + labelBytes.length + 1
+  assert.deepEqual([...message.slice(afterSep, afterSep + 8)], [0, 0, 0, 0, 0, 0, 0, 1])
+  assert.deepEqual([...message.slice(afterSep + 8)], [0, 0, 1, 0])
+
+  const prk = app.context.authHmacSha256(
+    app.context.authReadPepper(),
+    app.context.authToBytes('csp.auth.kdf.key.v1'),
+  )
+  const expected = app.context.authSp800108Block(
+    prk,
+    1,
+    label,
+    app.context.authU64be(1),
+    256,
+  )
+  const actual = app.context.withScriptLock(() => app.context.authKeyedKdfBytes(32))
+  assert.deepEqual([...actual], [...expected])
+})
+
+test('keyed KDF rejects malformed counters and fails closed at MAX_SAFE_INTEGER', () => {
+  const malformed = ['0', '01', '1e2', '1.5', '1abc', '-1', '+1', '0x10', '1 ', ' 1', '1.0', '9007199254740992', '9007199254740993']
+  for (const value of malformed) {
+    const app = keyedKdfBackend()
+    app.properties.setProperty('AUTH_KDF_INITIALIZED', '1')
+    app.properties.setProperty('AUTH_KDF_COUNTER', value)
+    assert.throws(
+      () => app.store.issueCredential({ userId: 'user-1', username: 'staff@example.com', createdBy: 'owner-1' }),
+      (error) => error.code === 'INTERNAL_ERROR',
+      `should reject ${JSON.stringify(value)}`,
+    )
+    assert.equal(app.properties.getProperty('AUTH_KDF_COUNTER'), value)
+  }
+
+  const missing = keyedKdfBackend()
+  missing.properties.setProperty('AUTH_KDF_INITIALIZED', '1')
+  assert.throws(
+    () => missing.store.issueCredential({ userId: 'user-1', username: 'staff@example.com', createdBy: 'owner-1' }),
+    (error) => error.code === 'INTERNAL_ERROR',
+  )
+
+  const atMax = keyedKdfBackend()
+  atMax.properties.setProperty('AUTH_KDF_INITIALIZED', '1')
+  atMax.properties.setProperty('AUTH_KDF_COUNTER', String(Number.MAX_SAFE_INTEGER))
+  assert.throws(
+    () => atMax.store.issueCredential({ userId: 'user-1', username: 'staff@example.com', createdBy: 'owner-1' }),
+    (error) => error.code === 'INTERNAL_ERROR',
+  )
+  assert.equal(atMax.properties.getProperty('AUTH_KDF_COUNTER'), String(Number.MAX_SAFE_INTEGER))
+
+  const last = keyedKdfBackend()
+  last.properties.setProperty('AUTH_KDF_INITIALIZED', '1')
+  last.properties.setProperty('AUTH_KDF_COUNTER', String(Number.MAX_SAFE_INTEGER - 1))
+  const issued = last.store.issueCredential({ userId: 'user-1', username: 'staff@example.com', createdBy: 'owner-1' })
+  assert.equal(issued.plaintext.length, 64)
+  assert.equal(last.properties.getProperty('AUTH_KDF_COUNTER'), String(Number.MAX_SAFE_INTEGER))
+  assert.throws(
+    () => last.store.issueCredential({ userId: 'user-2', username: 'other@example.com', createdBy: 'owner-1' }),
+    (error) => error.code === 'INTERNAL_ERROR',
+  )
+  assert.equal(last.store.verifyCredential('staff@example.com', issued.plaintext).ok, true)
+})
+
+test('kdf_advance high-water rejects malformed reasons fail-closed', () => {
+  const app = keyedKdfBackend()
+  app.store.issueCredential({ userId: 'user-1', username: 'staff@example.com', createdBy: 'owner-1' })
+  const row = app.spreadsheet.store.AuthEvents.find((item, index) => index > 0 && item[4] === 'kdf_advance')
+  assert.equal(Boolean(row), true)
+  row[6] = '01'
+  assert.throws(
+    () => app.store.issueCredential({ userId: 'user-2', username: 'other@example.com', createdBy: 'owner-1' }),
+    (error) => error.code === 'INTERNAL_ERROR',
+  )
+  assert.equal(app.properties.getProperty('AUTH_KDF_COUNTER'), '1')
+})
+
+test('partial failure after counter persist skips the used counter and recovers', () => {
+  let failAdvance = true
+  const spreadsheet = createFakeSpreadsheet({}, {
+    beforeAppendRow(name, row) {
+      if (failAdvance && name === 'AuthEvents' && row[4] === 'kdf_advance') {
+        failAdvance = false
+        throw persistError('AuthEvents append failed')
+      }
+    },
+  })
+  const app = keyedKdfBackend({ spreadsheet })
+  assert.throws(
+    () => app.store.issueCredential({ userId: 'user-1', username: 'staff@example.com', createdBy: 'owner-1' }),
+    (error) => error.code === 'INTERNAL_ERROR',
+  )
+  assert.equal(app.properties.getProperty('AUTH_KDF_COUNTER'), '1')
+  assert.equal(app.properties.getProperty('AUTH_KDF_INITIALIZED'), '1')
+  const firstEvents = app.spreadsheet.store.AuthEvents || [['']]
+  assert.equal(firstEvents.filter((row, index) => index > 0 && row[4] === 'kdf_advance').length, 0)
+
+  const issued = app.store.issueCredential({ userId: 'user-1', username: 'staff@example.com', createdBy: 'owner-1' })
+  assert.equal(app.properties.getProperty('AUTH_KDF_COUNTER'), '2')
+  assert.equal(app.store.verifyCredential('staff@example.com', issued.plaintext).ok, true)
+  const recovered = app.store.readEvents().filter((item) => item.eventType === 'kdf_advance')
+  assert.deepEqual(recovered.map((item) => item.reason), ['2'])
+})
+
+test('partial failure after kdf_advance before credential persist recovers without repeating the counter', () => {
+  let failWrite = false
+  const spreadsheet = createFakeSpreadsheet({}, {
+    beforeClearContent(name, row) {
+      if (failWrite && name === 'AuthCredentials' && row === 2) {
+        failWrite = false
+        throw persistError('credential write failed')
+      }
+    },
+  })
+  const app = keyedKdfBackend({ spreadsheet })
+  const first = app.store.issueCredential({ userId: 'user-1', username: 'staff@example.com', createdBy: 'owner-1' })
+  failWrite = true
+  assert.throws(
+    () => app.store.issueCredential({ userId: 'user-2', username: 'other@example.com', createdBy: 'owner-1' }),
+    (error) => error.code === 'INTERNAL_ERROR',
+  )
+  assert.equal(app.properties.getProperty('AUTH_KDF_COUNTER'), '2')
+  const advances = app.store.readEvents().filter((item) => item.eventType === 'kdf_advance').map((item) => item.reason)
+  assert.deepEqual(advances, ['1', '2'])
+  assert.equal(app.store.verifyCredential('staff@example.com', first.plaintext).ok, true)
+  assert.equal(app.store.verifyCredential('other@example.com', first.plaintext).ok, false)
+
+  const recovered = app.store.issueCredential({ userId: 'user-2', username: 'other@example.com', createdBy: 'owner-1' })
+  assert.notEqual(recovered.plaintext, first.plaintext)
+  assert.equal(app.properties.getProperty('AUTH_KDF_COUNTER'), '3')
+  assert.equal(app.store.verifyCredential('other@example.com', recovered.plaintext).ok, true)
+  assert.equal(app.store.verifyCredential('staff@example.com', first.plaintext).ok, true)
+})
+
