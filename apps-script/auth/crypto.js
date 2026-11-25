@@ -39,9 +39,11 @@ var AUTH_ALGORITHM = 'hmac-sha256';
 var AUTH_HASH_HEX_LENGTH = 64;
 var AUTH_PEPPER_PROPERTY = 'AUTH_CREDENTIAL_PEPPER';
 var AUTH_PEPPER_MIN_BYTES = 32;
+var AUTH_PEPPER_HEX_LENGTH = 64;
 var AUTH_PEPPER_MIN_HEX = 64;
 var AUTH_KDF_COUNTER_PROPERTY = 'AUTH_KDF_COUNTER';
 var AUTH_KDF_INITIALIZED_PROPERTY = 'AUTH_KDF_INITIALIZED';
+var AUTH_KDF_INITIALIZED_VALUE = '1';
 var AUTH_KDF_LABEL = 'csp.auth.lookup-secret.v1';
 var AUTH_KDF_KEY_LABEL = 'csp.auth.kdf.key.v1';
 var AUTH_KDF_PRF_BITS = 256;
@@ -302,6 +304,14 @@ function authSp800108Block(key, counter, label, context, bits) {
   );
 }
 
+function authParseInitializedFlag(raw) {
+  if (raw === null || raw === undefined) return false;
+  var text = String(raw);
+  if (text === '') return false;
+  if (text === AUTH_KDF_INITIALIZED_VALUE) return true;
+  authKdfUnavailable();
+}
+
 function authKeyedKdfBytes(size, options) {
   if (typeof scriptLockDepth !== 'number' || scriptLockDepth < 1) authKdfUnavailable();
   var settings = options || {};
@@ -312,15 +322,17 @@ function authKeyedKdfBytes(size, options) {
     authKdfUnavailable();
   }
   var props = PropertiesService.getScriptProperties();
-  var initialized = String(props.getProperty(AUTH_KDF_INITIALIZED_PROPERTY) || '') === '1';
+  var initializedRaw = props.getProperty(AUTH_KDF_INITIALIZED_PROPERTY);
+  var initialized = authParseInitializedFlag(initializedRaw);
   var storedRaw = props.getProperty(AUTH_KDF_COUNTER_PROPERTY);
-  var stored = initialized
-    ? authParseCanonicalCounter(storedRaw, { emptyAllowed: false, zeroAllowed: false })
-    : authParseCanonicalCounter(storedRaw, { emptyAllowed: true, zeroAllowed: true });
+  var stored;
   if (initialized) {
+    stored = authParseCanonicalCounter(storedRaw, { emptyAllowed: false, zeroAllowed: false });
     if (stored < minCounter) authKdfUnavailable();
-  } else if (minCounter > 0 || existingOutputs > 0) {
-    authKdfUnavailable();
+  } else {
+    if (storedRaw !== null && storedRaw !== undefined && String(storedRaw) !== '') authKdfUnavailable();
+    if (minCounter > 0 || existingOutputs > 0) authKdfUnavailable();
+    stored = 0;
   }
   var next = Math.max(stored, minCounter) + 1;
   if (next < 1 || next > authMaxSafeInteger()) authKdfUnavailable();
@@ -405,11 +417,14 @@ function authReadPepper() {
     throw appError('INTERNAL_ERROR', 'Backend configuration is incomplete.');
   }
   var raw = PropertiesService.getScriptProperties().getProperty(AUTH_PEPPER_PROPERTY);
-  var hex = String(raw || '').trim().toLowerCase();
-  if (hex.length < AUTH_PEPPER_MIN_HEX || hex.length % 2 || !/^[0-9a-f]+$/.test(hex)) {
+  if (raw === null || raw === undefined) {
     throw appError('INTERNAL_ERROR', 'Backend configuration is incomplete.');
   }
-  return authHexToBytes(hex);
+  var hex = String(raw);
+  if (hex.length !== AUTH_PEPPER_HEX_LENGTH || !/^[0-9a-fA-F]+$/.test(hex)) {
+    throw appError('INTERNAL_ERROR', 'Backend configuration is incomplete.');
+  }
+  return authHexToBytes(hex.toLowerCase());
 }
 
 function authGenerateSecret(options) {

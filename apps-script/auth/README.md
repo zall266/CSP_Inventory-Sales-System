@@ -41,7 +41,7 @@ python3 -c "import secrets; print(secrets.token_hex(32))"
 
 Do not use `Math.random()`, `Utilities.getUuid()`, wall-clock timestamps, or a typed passphrase.
 
-The result must be exactly 64 hexadecimal characters (`[0-9a-f]{64}`). Shorter values, odd-length hex, and non-hex are rejected.
+The result must be exactly 64 hexadecimal characters (`[0-9a-fA-F]{64}`). Shorter values, longer values, odd-length hex, whitespace (including padded 64-hex), and non-hex are rejected. The backend does not trim or otherwise normalize invalid input.
 
 ### Install on DEV
 
@@ -79,7 +79,8 @@ Under the script lock, persistence order is:
 Script Properties and Sheets are **not** one transaction.
 
 - Canonical counters only (`/^[1-9][0-9]*$/` that round-trip through `Number`). Reject `01`, `1e2`, floats, hex, whitespace, negatives.
-- Missing `INITIALIZED` after any credential/session rows or sheet high-water fails closed.
+- `AUTH_KDF_INITIALIZED` must be empty/missing or the exact string `1`. Any other non-empty value (`0`, `true`, `invalid`, padded `1`) fails closed.
+- Empty/missing `INITIALIZED` is first boot only when there is no previous counter, sheet high-water, credential, or session. Otherwise it fails closed.
 - Missing counter after initialization fails closed.
 - Property counter below sheet high-water fails closed.
 - Malformed `kdf_advance` reasons fail closed.
