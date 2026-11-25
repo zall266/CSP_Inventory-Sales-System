@@ -1,6 +1,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import vm from 'node:vm'
+import nodeCrypto from 'node:crypto'
 import { fileURLToPath } from 'node:url'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
@@ -16,7 +17,9 @@ const files = [
   'utils/log.js',
   'config/config.js',
   'auth/boundary.js',
+  'auth/crypto.js',
   'repositories/sheetRepository.js',
+  'repositories/authRepository.js',
   'repositories/auditRepository.js',
   'repositories/idempotencyRepository.js',
   'repositories/counterRepository.js',
@@ -52,6 +55,7 @@ const files = [
   'services/counterService.js',
   'services/systemService.js',
   'services/foundationService.js',
+  'services/authStore.js',
   'services/identityService.js',
   'services/masterService.js',
   'services/productService.js',
@@ -72,6 +76,64 @@ const files = [
   'app/router.js',
   'app/main.js',
 ]
+
+export function createNonReentrantScriptLock(options = {}) {
+  const events = options.events || []
+  const state = options.state || { held: false }
+  return {
+    events,
+    state,
+    getScriptLock() {
+      events.push('get')
+      return {
+        tryLock(_timeoutMs) {
+          events.push('try')
+          if (options.lockFails) {
+            events.push('failed')
+            return false
+          }
+          if (state.held) {
+            events.push('nested-rejected')
+            return false
+          }
+          state.held = true
+          events.push('acquired')
+          return true
+        },
+        releaseLock() {
+          state.held = false
+          events.push('released')
+        },
+      }
+    },
+  }
+}
+
+export function gasUtilities() {
+  return {
+    getUuid() {
+      return nodeCrypto.randomUUID()
+    },
+    computeHmacSha256Signature(value, key) {
+      const hmac = nodeCrypto.createHmac('sha256', Buffer.from(valueToBytes(key)))
+      hmac.update(Buffer.from(valueToBytes(value)))
+      return Array.from(hmac.digest())
+    },
+    DigestAlgorithm: { SHA_256: 'SHA_256' },
+    computeDigest(algorithm, value) {
+      if (algorithm !== 'SHA_256') throw new Error('unsupported digest')
+      return Array.from(nodeCrypto.createHash('sha256').update(Buffer.from(valueToBytes(value))).digest())
+    },
+  }
+}
+
+function valueToBytes(value) {
+  if (typeof value === 'string') return Buffer.from(value, 'utf8')
+  if (value instanceof Uint8Array) return value
+  if (Buffer.isBuffer(value)) return value
+  if (Array.isArray(value)) return Uint8Array.from(value.map((item) => item & 255))
+  return Buffer.from(String(value || ''), 'utf8')
+}
 
 export function loadBackend(globals = {}) {
   const context = {
@@ -97,6 +159,10 @@ export function loadBackend(globals = {}) {
     parseFloat,
     isNaN,
     isFinite,
+    encodeURIComponent,
+    decodeURIComponent,
+    unescape,
+    Utilities: gasUtilities(),
     ...globals,
   }
   context.globalThis = context
@@ -111,10 +177,14 @@ export function memoryProperties(initial) {
   const store = { ...initial }
   return {
     getProperty(key) {
-      return store[key] || null
+      if (!Object.prototype.hasOwnProperty.call(store, key)) return null
+      return store[key]
     },
     setProperty(key, value) {
       store[key] = String(value)
+    },
+    deleteProperty(key) {
+      delete store[key]
     },
   }
 }
@@ -128,7 +198,17 @@ export function devProperties() {
   })
 }
 
-export function createFakeSpreadsheet(seed = {}) {
+export function authDevProperties() {
+  return memoryProperties({
+    ENVIRONMENT: 'DEV',
+    SPREADSHEET_ID: 'sheet-id',
+    DRIVE_ROOT_ID: 'drive-id',
+    TIMEZONE: 'Asia/Kuala_Lumpur',
+    AUTH_CREDENTIAL_PEPPER: '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef',
+  })
+}
+
+export function createFakeSpreadsheet(seed = {}, hooks = {}) {
   const store = { Sheet1: [['']], ...seed }
   function makeSheet(name) {
     return {
@@ -157,6 +237,7 @@ export function createFakeSpreadsheet(seed = {}) {
             return values
           },
           setValues(values) {
+            if (typeof hooks.beforeSetValues === 'function') hooks.beforeSetValues(name, row, values)
             for (let r = 0; r < values.length; r += 1) {
               if (!store[name][row - 1 + r]) store[name][row - 1 + r] = []
               for (let c = 0; c < values[r].length; c += 1) {
@@ -165,6 +246,7 @@ export function createFakeSpreadsheet(seed = {}) {
             }
           },
           clearContent() {
+            if (typeof hooks.beforeClearContent === 'function') hooks.beforeClearContent(name, row)
             for (let r = 0; r < numRows; r += 1) {
               const source = store[name][row - 1 + r]
               if (!source) continue
@@ -174,6 +256,7 @@ export function createFakeSpreadsheet(seed = {}) {
         }
       },
       appendRow(row) {
+        if (typeof hooks.beforeAppendRow === 'function') hooks.beforeAppendRow(name, row)
         store[name].push(row.slice())
       },
     }

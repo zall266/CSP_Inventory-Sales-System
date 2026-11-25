@@ -1,7 +1,9 @@
-// Apps Script script locks are not reentrant. Identity writes can run inside
-// the existing idempotency lock, so a nested call reuses the lock already held
-// by this execution. Each execution has its own depth; LockService still
-// serializes different executions.
+// Apps Script LockService.getScriptLock().tryLock(timeoutMs) is not reentrant
+// for the same execution: a nested tryLock returns false even with a timeout.
+// Identity writes can run inside the existing idempotency lock, so a nested
+// call reuses the lock already held by this execution via scriptLockDepth.
+// LockService still serializes different executions. The finally block always
+// releases after success or throw; a killed execution is released by GAS.
 var scriptLockDepth = 0;
 
 function withScriptLock(fn, timeoutMs) {
