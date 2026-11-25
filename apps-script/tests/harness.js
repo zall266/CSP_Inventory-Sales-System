@@ -177,7 +177,8 @@ export function memoryProperties(initial) {
   const store = { ...initial }
   return {
     getProperty(key) {
-      return store[key] || null
+      if (!Object.prototype.hasOwnProperty.call(store, key)) return null
+      return store[key]
     },
     setProperty(key, value) {
       store[key] = String(value)

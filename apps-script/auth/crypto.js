@@ -330,7 +330,7 @@ function authKeyedKdfBytes(size, options) {
     stored = authParseCanonicalCounter(storedRaw, { emptyAllowed: false, zeroAllowed: false });
     if (stored < minCounter) authKdfUnavailable();
   } else {
-    if (storedRaw !== null && storedRaw !== undefined && String(storedRaw) !== '') authKdfUnavailable();
+    if (storedRaw !== null && storedRaw !== undefined) authKdfUnavailable();
     if (minCounter > 0 || existingOutputs > 0) authKdfUnavailable();
     stored = 0;
   }

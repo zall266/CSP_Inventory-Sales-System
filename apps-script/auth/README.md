@@ -80,7 +80,7 @@ Script Properties and Sheets are **not** one transaction.
 
 - Canonical counters only (`/^[1-9][0-9]*$/` that round-trip through `Number`). Reject `01`, `1e2`, floats, hex, whitespace, negatives.
 - `AUTH_KDF_INITIALIZED` must be empty/missing or the exact string `1`. Any other non-empty value (`0`, `true`, `invalid`, padded `1`) fails closed.
-- Empty/missing `INITIALIZED` is first boot only when there is no previous counter, sheet high-water, credential, or session. Otherwise it fails closed.
+- Empty/missing `INITIALIZED` is first boot only when the counter property is genuinely absent (not an empty string), and there is no sheet high-water, credential, or session. An existing `AUTH_KDF_COUNTER` key, including `''`, fails closed.
 - Missing counter after initialization fails closed.
 - Property counter below sheet high-water fails closed.
 - Malformed `kdf_advance` reasons fail closed.

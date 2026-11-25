@@ -869,6 +869,22 @@ test('AUTH_KDF_INITIALIZED accepts only missing/empty or exact 1 and fail-closes
   assert.equal(firstBoot.store.verifyCredential('fresh@example.com', minted.plaintext).ok, true)
 })
 
+test('first boot fails closed when AUTH_KDF_COUNTER exists as an empty string', () => {
+  const app = keyedKdfBackend()
+  app.properties.setProperty('AUTH_KDF_COUNTER', '')
+  assert.equal(app.properties.getProperty('AUTH_KDF_INITIALIZED'), null)
+  assert.equal(app.properties.getProperty('AUTH_KDF_COUNTER'), '')
+  assert.equal(app.store.readCredentials().length, 0)
+  assert.equal(app.repo.readSessions(app.spreadsheet).length, 0)
+  assert.throws(
+    () => app.store.issueCredential({ userId: 'u1', username: 'staff@example.com', createdBy: 'owner-1' }),
+    (error) => error.code === 'INTERNAL_ERROR',
+  )
+  assert.equal(app.properties.getProperty('AUTH_KDF_COUNTER'), '')
+  assert.equal(app.properties.getProperty('AUTH_KDF_INITIALIZED'), null)
+  assert.equal(app.store.readCredentials().length, 0)
+})
+
 test('a 32-byte CSPRNG pepper is accepted and never leaks into sheets, events, or errors', () => {
   const pepper = nodeCrypto.randomBytes(32).toString('hex')
   assert.equal(pepper.length, 64)
