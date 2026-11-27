@@ -1,6 +1,7 @@
-// Module 1 identity writes. actorUserId is the existing prototype switcher
-// (ui.currentUserId). It is not a session provider and it is not Phase 2 auth.
-// authenticate() is unchanged. Business rules still run here.
+// Module 1 identity writes. AUTH-1 still allows unauthenticated identity
+// calls when no sessionToken is sent (prototype SPA). When a session is
+// present, the router overwrites payload.actorUserId from the session.
+// AUTH-2 will require a session on every identity and business action.
 
 var IDENTITY_ACTIONS = {
   'identity.get': true,

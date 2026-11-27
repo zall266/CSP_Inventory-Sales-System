@@ -181,12 +181,15 @@ function createAuthStore(dependencies) {
   }
 
   function verifyCredential(username, plaintext) {
-    var spreadsheet = open();
-    var records = repo.readCredentials(spreadsheet);
-    var record = findCredentialByUsername(records, username);
-    if (!record) return { ok: false, userId: '' };
-    if (!authVerifySecret(plaintext, record)) return { ok: false, userId: record.userId };
-    return { ok: true, userId: record.userId };
+    return withScriptLock(function () {
+      authReadPepper();
+      var spreadsheet = open();
+      var records = repo.readCredentials(spreadsheet);
+      var record = findCredentialByUsername(records, username);
+      if (!record) return { ok: false, userId: '' };
+      if (!authVerifySecret(plaintext, record)) return { ok: false, userId: record.userId };
+      return { ok: true, userId: record.userId };
+    });
   }
 
   function issueSession(input) {
@@ -269,6 +272,31 @@ function createAuthStore(dependencies) {
     });
   }
 
+  // Logout revokes only the presented session. Other sessions for the same
+  // user stay valid. Credential replace/rotate still uses revokeUserSessions.
+  function revokeCurrentSession(token, reason) {
+    var raw = token === undefined || token === null ? '' : String(token);
+    if (!raw) return { ok: true, revoked: false };
+    return withScriptLock(function () {
+      var spreadsheet = open();
+      var hash = authHashToken(raw);
+      var sessions = repo.readSessions(spreadsheet);
+      var now = stamp();
+      var revoked = false;
+      var next = sessions.map(function (item) {
+        if (item.revokedAt) return item;
+        if (!authTimingSafeEqual(authHexToBytes(item.tokenHash), authHexToBytes(hash))) return item;
+        revoked = true;
+        return Object.assign({}, item, {
+          revokedAt: now,
+          revokedReason: String(reason || 'logout')
+        });
+      });
+      if (revoked) repo.writeSessions(spreadsheet, next);
+      return { ok: true, revoked: revoked };
+    });
+  }
+
   function ensureSheets() {
     return withScriptLock(function () {
       repo.ensure(open());
@@ -291,6 +319,7 @@ function createAuthStore(dependencies) {
     verifyCredential: verifyCredential,
     issueSession: issueSession,
     validateSession: validateSession,
+    revokeCurrentSession: revokeCurrentSession,
     revokeUserSessions: revokeUserSessions,
     readEvents: readEvents,
     readCredentials: readCredentials
