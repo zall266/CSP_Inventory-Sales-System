@@ -56,6 +56,7 @@ const files = [
   'services/systemService.js',
   'services/foundationService.js',
   'services/authStore.js',
+  'services/authService.js',
   'services/identityService.js',
   'services/masterService.js',
   'services/productService.js',

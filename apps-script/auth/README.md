@@ -1,8 +1,32 @@
 # Auth V1 credential store (DEV)
 
-Phase 1 HMAC-SHA256 lookup-secret store for the DEV Apps Script + Sheets stack. This is not a login UI, registration flow, or production deployment.
+Phase 1 HMAC-SHA256 lookup-secret store plus AUTH-1 login/session HTTP actions for the DEV Apps Script + Sheets stack. This is not a login UI, registration flow, Owner bootstrap, or production deployment.
 
 Do not merge, clasp-push, or change PROD from this document. Do not put a real pepper in git, logs, sheet cells, or chat.
+
+## AUTH-1 login and sessions
+
+Envelope field `sessionToken` (not `payload`). Actions:
+
+| Action | Token required | Behaviour |
+| --- | --- | --- |
+| `auth.login` | no | Email + generated secret. Generic `UNAUTHORIZED` on failure. Returns `{ token, sessionId, expiresAt, idleExpiresAt, user: { id, name, email, roleId } }`. |
+| `auth.logout` | yes | Revokes **this** session only. |
+| `auth.session` | yes | Returns the authenticated user. No token, hashes, or pepper. |
+
+`issueCredential`, `rotateCredential`, `readCredentials`, and sheet hashes are **not** HTTP actions.
+
+A missing `sessionToken` still yields an unauthenticated principal so the prototype SPA keeps working. AUTH-2 will require a session on every business action, including reads, exports, images, and Drive files. A **presented** invalid, expired, idle, or revoked token fails closed on every action except `auth.login`, `system.health`, and `system.ping`.
+
+When a session is valid, the router overwrites `payload.actorUserId` from the session. Client role, department, and permissions are never read for authentication.
+
+`auth.*` responses are never written to Idempotency (the login body contains the raw token). Request logs record only requestId, action, status, errorCode, durationMs.
+
+Session lifetime: 12 hours absolute, 2 hours idle, sliding idle never extends absolute. Store SHA-256(token) only.
+
+Client storage: AUTH-1 does not write `sessionToken` to `localStorage`. AUTH-4 will hold it in `sessionStorage` only.
+
+Owner bootstrap secret must never enter frontend code, browser storage, logs, or ordinary API responses. There is no public Owner registration in AUTH-1.
 
 ## Secret generation
 

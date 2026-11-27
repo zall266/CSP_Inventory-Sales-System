@@ -380,6 +380,29 @@ test('issueCredential replacement revokes that user sessions and leaves other us
   assert.equal(serialized.includes(replacement.plaintext), false)
 })
 
+test('revokeCurrentSession revokes only that token and leaves other sessions valid', () => {
+  const app = backend()
+  app.store.issueCredential({ userId: 'user-1', username: 'staff@example.com', createdBy: 'owner-1' })
+  app.store.issueCredential({ userId: 'user-2', username: 'other@example.com', createdBy: 'owner-1' })
+  const first = app.store.issueSession({ userId: 'user-1' })
+  const sibling = app.store.issueSession({ userId: 'user-1' })
+  const other = app.store.issueSession({ userId: 'user-2' })
+  const result = app.store.revokeCurrentSession(first.token, 'logout')
+  assert.equal(result.ok, true)
+  assert.equal(result.revoked, true)
+  assert.equal(app.store.validateSession(first.token), null)
+  assert.equal(Boolean(app.store.validateSession(sibling.token)), true)
+  assert.equal(Boolean(app.store.validateSession(other.token)), true)
+  const rows = app.repo.readSessions(app.spreadsheet)
+  const revoked = rows.find((item) => item.tokenHash === app.context.authHashToken(first.token))
+  assert.equal(revoked.revokedReason, 'logout')
+  assert.equal(app.store.revokeCurrentSession('').revoked, false)
+  assert.equal(app.store.revokeCurrentSession(first.token).revoked, false)
+  const serialized = JSON.stringify(app.spreadsheet.store)
+  assert.equal(serialized.includes(first.token), false)
+  assert.equal(app.locks.filter((item) => item === 'acquired').length > 0, true)
+})
+
 test('validateSession slides idle expiry, never extends absolute expiry, and keeps expired or revoked sessions invalid', () => {
   let current = Date.parse('2026-01-01T00:00:00.000Z')
   const app = backend({ now: () => new Date(current) })
@@ -479,8 +502,9 @@ test('keyed KDF never reacquires the caller lock during issue, rotate, and sessi
     createdBy: 'owner-1',
   })
   assert.equal(issued.plaintext.length, 64)
-  assert.equal(app.store.verifyCredential('staff@example.com', issued.plaintext).ok, true)
   assert.equal(app.locks.filter((item) => item === 'acquired').length, 1)
+  assert.equal(app.store.verifyCredential('staff@example.com', issued.plaintext).ok, true)
+  assert.equal(app.locks.filter((item) => item === 'acquired').length, 2)
   assert.equal(app.locks.filter((item) => item === 'nested-rejected').length, 0)
   assert.equal(app.lockState.held, false)
 

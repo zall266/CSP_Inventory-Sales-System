@@ -1,13 +1,19 @@
 function defaultBackend() {
   var sheets = createSheetRepository();
   var drive = createDriveStorage();
+  var authStore = createAuthStore({ sheetRepository: sheets });
   return {
     sheets: sheets,
     drive: drive,
     system: createSystemService({ sheetRepository: sheets, driveStorage: drive }),
     idempotency: createIdempotencyService(sheets),
     foundation: createFoundationService(sheets),
-    authStore: createAuthStore({ sheetRepository: sheets }),
+    authStore: authStore,
+    auth: createAuthService({
+      sheetRepository: sheets,
+      driveStorage: drive,
+      authStore: authStore
+    }),
     identity: createIdentityService({ sheetRepository: sheets, driveStorage: drive }),
     masters: createMasterService({ sheetRepository: sheets }),
     products: createProductService({ sheetRepository: sheets, driveStorage: drive }),
@@ -40,7 +46,9 @@ function handleRequest(request, backend) {
   try {
     var router = createRouter(resolved);
     var key = request && request.idempotencyKey ? String(request.idempotencyKey).trim() : '';
-    var response = key
+    // Never persist auth.login responses: they contain the raw session token.
+    var authAction = action.indexOf('auth.') === 0;
+    var response = key && !authAction
       ? resolved.idempotency.execute(key, request, function () { return router.dispatch(request); })
       : router.dispatch(request);
     logRequest({

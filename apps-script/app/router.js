@@ -1,5 +1,6 @@
 function createRouter(backend) {
   var system = backend && typeof backend.health === 'function' ? backend : backend.system;
+  var auth = backend && backend.auth ? backend.auth : null;
   var identity = backend && backend.identity ? backend.identity : null;
   var masters = backend && backend.masters ? backend.masters : null;
   var products = backend && backend.products ? backend.products : null;
@@ -27,11 +28,23 @@ function createRouter(backend) {
     if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
       return errorEnvelope('INVALID_REQUEST', 'Request envelope is invalid.', { requestId: requestId });
     }
-    // Phase 1 boundary stays in place. authenticate() is still not a session.
+    // AUTH-1: a presented sessionToken is validated fail-closed. Missing token
+    // still yields an unauthenticated principal (AUTH-2 will require a session
+    // on every business action). Login skips token validation so a stale token
+    // cannot block a new login. Authenticated requests overwrite actorUserId.
     var principal = authenticate();
+    if (!isUnauthenticatedAuthAction(request.action)) {
+      principal = auth && typeof auth.resolvePrincipal === 'function'
+        ? auth.resolvePrincipal(request)
+        : authenticate();
+    }
     authorize(principal, '');
+    if (principal && principal.authenticated) {
+      payload.actorUserId = principal.userId;
+    }
     if (request.action === 'system.health') return system.health(request);
     if (request.action === 'system.ping') return system.ping(request);
+    if (auth && auth.canHandle(request.action)) return auth.dispatch(request, principal);
     if (identity && identity.canHandle(request.action)) return identity.dispatch(request);
     if (masters && masters.canHandle(request.action)) return masters.dispatch(request);
     if (products && products.canHandle(request.action)) return products.dispatch(request);
