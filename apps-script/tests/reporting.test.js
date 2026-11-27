@@ -5,6 +5,8 @@ import {
   createFakeSpreadsheet,
   devProperties,
   loadBackend,
+  attachAuthServices,
+  seedIdentity,
 } from './harness.js'
 
 function app() {
@@ -32,7 +34,7 @@ function app() {
     getRoot: () => drive.getFolderById('drive-id'),
     getFileById: (id) => drive.getFileById(id),
   })
-  return {
+  return attachAuthServices({
     sheets,
     spreadsheet,
     context,
@@ -43,15 +45,22 @@ function app() {
     masters: context.createMasterService({ sheetRepository: sheets }),
     inventory: context.createInventoryService({ sheetRepository: sheets }),
     reporting: context.createReportingService({ sheetRepository: sheets }),
-  }
+  })
 }
 
 function request(action, payload, extra = {}) {
-  return { v: 1, requestId: extra.requestId || action, action, payload, idempotencyKey: extra.idempotencyKey }
+  return { v: 1, requestId: extra.requestId || action, action, payload, idempotencyKey: extra.idempotencyKey, sessionToken: extra.sessionToken }
 }
 
-function call(backend, action, payload, extra) {
-  return backend.context.handleRequest(request(action, payload, extra), backend)
+function call(backend, action, payload, extra = {}) {
+  const next = { ...extra }
+  if (next.anonymous) {
+    if (next.sessionToken === undefined) next.sessionToken = ''
+  } else if (next.sessionToken === undefined) {
+    const actor = next.asUser || (payload && payload.actorUserId) || backend.defaultActorId || 'u-aina'
+    next.sessionToken = backend.sessionFor ? backend.sessionFor(actor) : ''
+  }
+  return backend.context.handleRequest(request(action, payload, next), backend)
 }
 
 function identityPayload() {
@@ -87,7 +96,7 @@ function identityPayload() {
 function ready() {
   const backend = app()
   backend.foundation.initialize()
-  assert.equal(call(backend, 'identity.bootstrap', identityPayload()).ok, true)
+  seedIdentity(backend, identityPayload())
   assert.equal(call(backend, 'masters.bootstrap', {
     warehouses: [{ id: 'wh-main', name: 'Main Warehouse', code: 'MAIN', kind: 'company' }],
     categories: [{ id: 'cat-ing', name: 'Ingredients' }],
@@ -113,16 +122,16 @@ test('cashier cannot view dashboard, reports, PJKM, or BMR', () => {
   const backend = ready()
   const dashboard = call(backend, 'dashboard.get', { actorUserId: 'u-siti', today: TODAY, preset: '30d' })
   assert.equal(dashboard.error.code, 'FORBIDDEN')
-  assert.equal(dashboard.error.message, 'You cannot view the dashboard.')
+  assert.equal(dashboard.error.message, 'You do not have permission.')
   const reports = call(backend, 'reports.sales', { actorUserId: 'u-siti', today: TODAY, preset: '30d' })
   assert.equal(reports.error.code, 'FORBIDDEN')
-  assert.equal(reports.error.message, 'You cannot view reports.')
+  assert.equal(reports.error.message, 'You do not have permission.')
   const pjkm = call(backend, 'pjkm.511', { actorUserId: 'u-siti', month: '2026-09' })
   assert.equal(pjkm.error.code, 'FORBIDDEN')
-  assert.equal(pjkm.error.message, 'You do not have permission to view receiving.')
+  assert.equal(pjkm.error.message, 'You do not have permission.')
   const bmr = call(backend, 'bmr.list', { actorUserId: 'u-siti', today: TODAY })
   assert.equal(bmr.error.code, 'FORBIDDEN')
-  assert.equal(bmr.error.message, 'You do not have permission to view completed production.')
+  assert.equal(bmr.error.message, 'You do not have permission.')
 })
 
 test('empty dashboard and reports are zeros and PJKM empty month has no rows', () => {

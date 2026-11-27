@@ -34,11 +34,22 @@ var AUTH_EVENT_HEADERS = [
   'requestId'
 ];
 
+var AUTH_LOGIN_ATTEMPT_HEADERS = [
+  'id',
+  'emailHash',
+  'failedCount',
+  'windowStartedAt',
+  'cooldownUntil',
+  'lastAttemptAt',
+  'updatedAt'
+];
+
 function createAuthRepository(sheetRepository) {
   function ensure(spreadsheet) {
     sheetRepository.ensureSheet(spreadsheet, 'AuthCredentials', AUTH_CREDENTIAL_HEADERS);
     sheetRepository.ensureSheet(spreadsheet, 'AuthSessions', AUTH_SESSION_HEADERS);
     sheetRepository.ensureSheet(spreadsheet, 'AuthEvents', AUTH_EVENT_HEADERS);
+    sheetRepository.ensureSheet(spreadsheet, 'AuthLoginAttempts', AUTH_LOGIN_ATTEMPT_HEADERS);
   }
 
   function sheet(spreadsheet, name) {
@@ -140,11 +151,35 @@ function createAuthRepository(sheetRepository) {
     return sheetRepository.readObjects(sheet(spreadsheet, 'AuthEvents')).map(mapEvent);
   }
 
+  function mapLoginAttempt(record) {
+    return {
+      id: String(record.id || ''),
+      emailHash: String(record.emailHash || ''),
+      failedCount: Number(record.failedCount || 0),
+      windowStartedAt: String(record.windowStartedAt || ''),
+      cooldownUntil: String(record.cooldownUntil || ''),
+      lastAttemptAt: String(record.lastAttemptAt || ''),
+      updatedAt: String(record.updatedAt || '')
+    };
+  }
+
+  function readLoginAttempts(spreadsheet) {
+    ensure(spreadsheet);
+    return sheetRepository.readObjects(sheet(spreadsheet, 'AuthLoginAttempts')).map(mapLoginAttempt);
+  }
+
+  function writeLoginAttempts(spreadsheet, records) {
+    ensure(spreadsheet);
+    records.forEach(assertNoSecret);
+    sheetRepository.replaceObjects(sheet(spreadsheet, 'AuthLoginAttempts'), records);
+  }
+
   return {
     headers: {
       credentials: AUTH_CREDENTIAL_HEADERS,
       sessions: AUTH_SESSION_HEADERS,
-      events: AUTH_EVENT_HEADERS
+      events: AUTH_EVENT_HEADERS,
+      loginAttempts: AUTH_LOGIN_ATTEMPT_HEADERS
     },
     ensure: ensure,
     readCredentials: readCredentials,
@@ -152,6 +187,8 @@ function createAuthRepository(sheetRepository) {
     readSessions: readSessions,
     writeSessions: writeSessions,
     appendEvent: appendEvent,
-    readEvents: readEvents
+    readEvents: readEvents,
+    readLoginAttempts: readLoginAttempts,
+    writeLoginAttempts: writeLoginAttempts
   };
 }

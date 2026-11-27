@@ -4,7 +4,10 @@ import {
   createFakeDrive,
   createFakeSpreadsheet,
   devProperties,
+  gasUtilities,
   loadBackend,
+  attachAuthServices,
+  seedIdentity,
 } from './harness.js'
 
 function app() {
@@ -21,6 +24,7 @@ function app() {
     SpreadsheetApp: { openById: () => spreadsheet },
     DriveApp: drive,
     Utilities: {
+      ...gasUtilities(),
       base64Decode(value) {
         return Buffer.from(String(value), 'base64')
       },
@@ -40,7 +44,7 @@ function app() {
     getRoot: () => drive.getFolderById('drive-id'),
     getFileById: (id) => drive.getFileById(id),
   })
-  return {
+  return attachAuthServices({
     sheets,
     spreadsheet,
     context,
@@ -57,15 +61,22 @@ function app() {
     openingBalances: context.createOpeningBalanceService({ sheetRepository: sheets }),
     purchases: context.createPurchaseService({ sheetRepository: sheets }),
     receivings: context.createReceivingService({ sheetRepository: sheets, driveStorage }),
-  }
+  })
 }
 
 function request(action, payload, extra = {}) {
-  return { v: 1, requestId: extra.requestId || action, action, payload, idempotencyKey: extra.idempotencyKey }
+  return { v: 1, requestId: extra.requestId || action, action, payload, idempotencyKey: extra.idempotencyKey, sessionToken: extra.sessionToken }
 }
 
-function call(backend, action, payload, extra) {
-  return backend.context.handleRequest(request(action, payload, extra), backend)
+function call(backend, action, payload, extra = {}) {
+  const next = { ...extra }
+  if (next.anonymous) {
+    if (next.sessionToken === undefined) next.sessionToken = ''
+  } else if (next.sessionToken === undefined) {
+    const actor = next.asUser || (payload && payload.actorUserId) || backend.defaultActorId || 'u-aina'
+    next.sessionToken = backend.sessionFor ? backend.sessionFor(actor) : ''
+  }
+  return backend.context.handleRequest(request(action, payload, next), backend)
 }
 
 let keySeq = 0
@@ -122,7 +133,7 @@ function partyPayload() {
 function ready() {
   const backend = app()
   backend.foundation.initialize()
-  assert.equal(call(backend, 'identity.bootstrap', identityPayload()).ok, true)
+  seedIdentity(backend, identityPayload())
   assert.equal(call(backend, 'masters.bootstrap', masterPayload()).ok, true)
   assert.equal(call(backend, 'parties.bootstrap', partyPayload()).ok, true)
   assert.equal(call(backend, 'products.create', {
@@ -273,7 +284,8 @@ function addKgProduct(backend, id, name) {
 }
 
 function storeFingerprint(backend) {
-  return JSON.stringify(backend.spreadsheet.store)
+  const { AuthSessions, AuthCredentials, AuthEvents, AuthLoginAttempts, ...rest } = backend.spreadsheet.store
+  return JSON.stringify(rest)
 }
 
 test('purchases.create with receivingId rejects mismatched products before writes', () => {

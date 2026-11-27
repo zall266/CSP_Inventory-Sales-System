@@ -7,7 +7,10 @@ import {
   createFakeDrive,
   createFakeSpreadsheet,
   devProperties,
+  gasUtilities,
   loadBackend,
+  attachAuthServices,
+  seedIdentity,
 } from './harness.js'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
@@ -26,6 +29,7 @@ function app() {
     SpreadsheetApp: { openById: () => spreadsheet },
     DriveApp: drive,
     Utilities: {
+      ...gasUtilities(),
       base64Decode(value) {
         return Buffer.from(String(value), 'base64')
       },
@@ -45,7 +49,7 @@ function app() {
     getRoot: () => drive.getFolderById('drive-id'),
     getFileById: (id) => drive.getFileById(id),
   })
-  return {
+  return attachAuthServices({
     sheets,
     spreadsheet,
     context,
@@ -62,15 +66,22 @@ function app() {
     openingBalances: context.createOpeningBalanceService({ sheetRepository: sheets }),
     purchases: context.createPurchaseService({ sheetRepository: sheets }),
     receivings: context.createReceivingService({ sheetRepository: sheets, driveStorage }),
-  }
+  })
 }
 
 function request(action, payload, extra = {}) {
-  return { v: 1, requestId: extra.requestId || action, action, payload, idempotencyKey: extra.idempotencyKey }
+  return { v: 1, requestId: extra.requestId || action, action, payload, idempotencyKey: extra.idempotencyKey, sessionToken: extra.sessionToken }
 }
 
-function call(backend, action, payload, extra) {
-  return backend.context.handleRequest(request(action, payload, extra), backend)
+function call(backend, action, payload, extra = {}) {
+  const next = { ...extra }
+  if (next.anonymous) {
+    if (next.sessionToken === undefined) next.sessionToken = ''
+  } else if (next.sessionToken === undefined) {
+    const actor = next.asUser || (payload && payload.actorUserId) || backend.defaultActorId || 'u-aina'
+    next.sessionToken = backend.sessionFor ? backend.sessionFor(actor) : ''
+  }
+  return backend.context.handleRequest(request(action, payload, next), backend)
 }
 
 let keySeq = 0
@@ -129,7 +140,7 @@ function partyPayload() {
 function ready() {
   const backend = app()
   backend.foundation.initialize()
-  assert.equal(call(backend, 'identity.bootstrap', identityPayload()).ok, true)
+  seedIdentity(backend, identityPayload())
   assert.equal(call(backend, 'masters.bootstrap', masterPayload()).ok, true)
   assert.equal(call(backend, 'parties.bootstrap', partyPayload()).ok, true)
   assert.equal(call(backend, 'products.create', {
@@ -269,13 +280,19 @@ function faultReady() {
 
 function countWrites(backend, failAt) {
   const state = { writes: 0, failed: false }
+  const authSheet = (sheet) => {
+    const name = sheet && typeof sheet.getName === 'function' ? sheet.getName() : ''
+    return String(name).startsWith('Auth')
+  }
   for (const name of ['appendObject', 'replaceObjects']) {
     const original = backend.sheets[name]
     backend.sheets[name] = (...args) => {
-      state.writes += 1
-      if (failAt && state.writes === failAt && !state.failed) {
-        state.failed = true
-        throw new Error('simulated write failure')
+      if (!authSheet(args[0])) {
+        state.writes += 1
+        if (failAt && state.writes === failAt && !state.failed) {
+          state.failed = true
+          throw new Error('simulated write failure')
+        }
       }
       return original(...args)
     }
@@ -467,7 +484,12 @@ const SERVER_DATE = '2026-11-06T05:30:00.000Z'
 const LATER_DATE = '2026-11-06T08:00:00.000Z'
 
 function setClock(backend, iso) {
-  backend.context.nowIso = () => iso
+  const original = backend._originalNowIso || backend.context.nowIso
+  backend._originalNowIso = original
+  backend.context.nowIso = (value) => {
+    if (value instanceof Date) return original(value)
+    return iso
+  }
 }
 
 function receivingDates(backend, payload) {
@@ -560,7 +582,8 @@ function addKgProduct(backend, id, name) {
 }
 
 function storeFingerprint(backend) {
-  return JSON.stringify(backend.spreadsheet.store)
+  const { AuthSessions, AuthCredentials, AuthEvents, AuthLoginAttempts, ...rest } = backend.spreadsheet.store
+  return JSON.stringify(rest)
 }
 
 function createReceivingDoc(backend, overrides = {}) {

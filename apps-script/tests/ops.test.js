@@ -7,7 +7,10 @@ import {
   createFakeDrive,
   createFakeSpreadsheet,
   devProperties,
+  gasUtilities,
   loadBackend,
+  attachAuthServices,
+  seedIdentity,
 } from './harness.js'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
@@ -29,6 +32,7 @@ function app() {
     SpreadsheetApp: { openById: () => spreadsheet },
     DriveApp: drive,
     Utilities: {
+      ...gasUtilities(),
       base64Decode(value) {
         return Buffer.from(String(value), 'base64')
       },
@@ -54,7 +58,7 @@ function app() {
     getRoot: () => drive.getFolderById('drive-id'),
     getFileById: (id) => drive.getFileById(id),
   })
-  return {
+  return attachAuthServices({
     sheets,
     spreadsheet,
     drive,
@@ -66,15 +70,22 @@ function app() {
     masters: context.createMasterService({ sheetRepository: sheets }),
     products: context.createProductService({ sheetRepository: sheets }),
     ops: context.createOpsService({ sheetRepository: sheets, driveStorage }),
-  }
+  })
 }
 
 function request(action, payload, extra = {}) {
-  return { v: 1, requestId: extra.requestId || action, action, payload, idempotencyKey: extra.idempotencyKey }
+  return { v: 1, requestId: extra.requestId || action, action, payload, idempotencyKey: extra.idempotencyKey, sessionToken: extra.sessionToken }
 }
 
-function call(backend, action, payload, extra) {
-  return backend.context.handleRequest(request(action, payload, extra), backend)
+function call(backend, action, payload, extra = {}) {
+  const next = { ...extra }
+  if (next.anonymous) {
+    if (next.sessionToken === undefined) next.sessionToken = ''
+  } else if (next.sessionToken === undefined) {
+    const actor = next.asUser || (payload && payload.actorUserId) || backend.defaultActorId || 'u-aina'
+    next.sessionToken = backend.sessionFor ? backend.sessionFor(actor) : ''
+  }
+  return backend.context.handleRequest(request(action, payload, next), backend)
 }
 
 let keySeq = 0
@@ -112,7 +123,7 @@ function identityPayload() {
 function ready() {
   const backend = app()
   backend.foundation.initialize()
-  assert.equal(call(backend, 'identity.bootstrap', identityPayload()).ok, true)
+  seedIdentity(backend, identityPayload())
   assert.equal(call(backend, 'masters.bootstrap', {
     warehouses: [{ id: 'wh-main', name: 'Main Warehouse', code: 'MAIN', kind: 'company' }],
     categories: [{ id: 'cat-ing', name: 'Ingredients' }],
@@ -135,12 +146,12 @@ test('staff cannot manage halal or expenses', () => {
   const backend = ready()
   const deniedHalal = call(backend, 'halal.saveManufacturer', { actorUserId: 'u-mei', name: 'Acme' })
   assert.equal(deniedHalal.error.code, 'FORBIDDEN')
-  assert.equal(deniedHalal.error.message, 'You cannot manage Halal Compliance.')
+  assert.equal(deniedHalal.error.message, 'You do not have permission.')
   const deniedExp = call(backend, 'expenses.create', {
     actorUserId: 'u-mei', category: 'Rent', description: 'Office', amount: 10, paymentMethod: 'cash',
   })
   assert.equal(deniedExp.error.code, 'FORBIDDEN')
-  assert.equal(deniedExp.error.message, 'You cannot manage expenses.')
+  assert.equal(deniedExp.error.message, 'You do not have permission.')
 })
 
 test('halal manufacturer and compliance upload a Drive file', () => {

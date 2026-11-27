@@ -5,6 +5,8 @@ import {
   createFakeSpreadsheet,
   devProperties,
   loadBackend,
+  attachAuthServices,
+  seedIdentity,
 } from './harness.js'
 
 function app(lock) {
@@ -32,7 +34,7 @@ function app(lock) {
     getRoot: () => drive.getFolderById('drive-id'),
     getFileById: (id) => drive.getFileById(id),
   })
-  return {
+  return attachAuthServices({
     sheets,
     spreadsheet,
     context,
@@ -44,15 +46,22 @@ function app(lock) {
     products: context.createProductService({ sheetRepository: sheets }),
     inventory: context.createInventoryService({ sheetRepository: sheets }),
     warehouse: context.createWarehouseService({ sheetRepository: sheets }),
-  }
+  })
 }
 
 function request(action, payload, extra = {}) {
-  return { v: 1, requestId: extra.requestId || action, action, payload, idempotencyKey: extra.idempotencyKey }
+  return { v: 1, requestId: extra.requestId || action, action, payload, idempotencyKey: extra.idempotencyKey, sessionToken: extra.sessionToken }
 }
 
-function call(backend, action, payload, extra) {
-  return backend.context.handleRequest(request(action, payload, extra), backend)
+function call(backend, action, payload, extra = {}) {
+  const next = { ...extra }
+  if (next.anonymous) {
+    if (next.sessionToken === undefined) next.sessionToken = ''
+  } else if (next.sessionToken === undefined) {
+    const actor = next.asUser || (payload && payload.actorUserId) || backend.defaultActorId || 'u-aina'
+    next.sessionToken = backend.sessionFor ? backend.sessionFor(actor) : ''
+  }
+  return backend.context.handleRequest(request(action, payload, next), backend)
 }
 
 let keySeq = 0
@@ -103,7 +112,7 @@ function masterPayload() {
 function ready() {
   const backend = app()
   backend.foundation.initialize()
-  assert.equal(call(backend, 'identity.bootstrap', identityPayload()).ok, true)
+  seedIdentity(backend, identityPayload())
   assert.equal(call(backend, 'masters.bootstrap', masterPayload()).ok, true)
   assert.equal(call(backend, 'products.create', {
     actorUserId: 'u-mei', id: 'prd-pack', name: 'UAT Pack', categoryId: 'cat-pack', unit: 'packs',
@@ -156,9 +165,9 @@ test('map read, seed bootstrap, and warehouse isolation', () => {
   const backend = ready()
   const denied = call(backend, 'warehouse.get', { actorUserId: 'u-mei' })
   assert.equal(denied.error.code, 'FORBIDDEN')
-  assert.equal(denied.error.message, 'You do not have permission to view the warehouse map.')
+  assert.equal(denied.error.message, 'You do not have permission.')
   const inactive = call(backend, 'warehouse.get', { actorUserId: 'u-off' })
-  assert.equal(inactive.error.code, 'FORBIDDEN')
+  assert.equal(inactive.error.code, 'UNAUTHORIZED')
   const empty = call(backend, 'warehouse.get', { actorUserId: 'u-aina' })
   assert.equal(empty.ok, true)
   assert.equal(empty.data.storageLocations.length, 0)
@@ -374,11 +383,11 @@ test('permissions, inactive actors, idempotency, and lock failure', () => {
   const staff = post(backend, 'warehouse.move', {
     actorUserId: 'u-mei', fromSlotId: SOURCE, toSlotId: EMPTY, qty: 20,
   })
-  assert.equal(staff.error.message, 'You cannot move warehouse stock.')
+  assert.equal(staff.error.message, 'You do not have permission.')
   const inactive = post(backend, 'warehouse.move', {
     actorUserId: 'u-off', fromSlotId: SOURCE, toSlotId: EMPTY, qty: 20,
   })
-  assert.equal(inactive.error.code, 'FORBIDDEN')
+  assert.equal(inactive.error.code, 'UNAUTHORIZED')
   const agent = post(backend, 'warehouse.createTemporary', {
     actorUserId: 'u-aina', name: 'Agent Floor', type: 'FLOOR', warehouseId: 'wh-agent', slotCount: 1,
   })
@@ -411,7 +420,7 @@ test('a lock failure does not move the carton', () => {
   let open = true
   const backend = app(() => open)
   backend.foundation.initialize()
-  assert.equal(call(backend, 'identity.bootstrap', identityPayload()).ok, true)
+  seedIdentity(backend, identityPayload())
   assert.equal(call(backend, 'masters.bootstrap', masterPayload()).ok, true)
   assert.equal(call(backend, 'warehouse.bootstrap', { actorUserId: 'u-aina' }).ok, true)
   const before = JSON.stringify(backend.spreadsheet.store.SlotOccupancies)

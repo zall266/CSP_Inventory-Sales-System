@@ -28,41 +28,76 @@ function createRouter(backend) {
     if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
       return errorEnvelope('INVALID_REQUEST', 'Request envelope is invalid.', { requestId: requestId });
     }
-    // AUTH-1: a presented sessionToken is validated fail-closed. Missing token
-    // still yields an unauthenticated principal (AUTH-2 will require a session
-    // on every business action). Login skips token validation so a stale token
-    // cannot block a new login. Authenticated requests overwrite actorUserId.
+    var action = request.action;
+    var spec = getActionAuthorization(action);
     var principal = authenticate();
-    if (!isUnauthenticatedAuthAction(request.action)) {
-      principal = auth && typeof auth.resolvePrincipal === 'function'
-        ? auth.resolvePrincipal(request)
-        : authenticate();
+    if (spec && spec.access === 'public') {
+      authorize(principal, '');
+      if (action === 'system.health') return system.health(request);
+      if (action === 'system.ping') return system.ping(request);
+      if (auth && auth.canHandle(action)) return auth.dispatch(request, principal);
+      return errorEnvelope('UNKNOWN_ACTION', 'The action is not available.', { requestId: requestId });
     }
-    authorize(principal, '');
-    if (principal && principal.authenticated) {
-      payload.actorUserId = principal.userId;
+
+    if (!auth || typeof auth.resolvePrincipal !== 'function') {
+      throw appError('UNAUTHORIZED', 'The session is not valid.');
     }
-    if (request.action === 'system.health') return system.health(request);
-    if (request.action === 'system.ping') return system.ping(request);
-    if (auth && auth.canHandle(request.action)) return auth.dispatch(request, principal);
-    if (identity && identity.canHandle(request.action)) return identity.dispatch(request);
-    if (masters && masters.canHandle(request.action)) return masters.dispatch(request);
-    if (products && products.canHandle(request.action)) return products.dispatch(request);
-    if (parties && parties.canHandle(request.action)) return parties.dispatch(request);
-    if (inventory && inventory.canHandle(request.action)) return inventory.dispatch(request);
-    if (warehouse && warehouse.canHandle(request.action)) return warehouse.dispatch(request);
-    if (boms && boms.canHandle(request.action)) return boms.dispatch(request);
-    if (openingBalances && openingBalances.canHandle(request.action)) return openingBalances.dispatch(request);
-    if (purchases && purchases.canHandle(request.action)) return purchases.dispatch(request);
-    if (receivings && receivings.canHandle(request.action)) return receivings.dispatch(request);
-    if (manufacturing && manufacturing.canHandle(request.action)) return manufacturing.dispatch(request);
-    if (sales && sales.canHandle(request.action)) return sales.dispatch(request);
-    if (salesReturns && salesReturns.canHandle(request.action)) return salesReturns.dispatch(request);
-    if (salesImport && salesImport.canHandle(request.action)) return salesImport.dispatch(request);
-    if (dispatchMod && dispatchMod.canHandle(request.action)) return dispatchMod.dispatch(request);
-    if (ops && ops.canHandle(request.action)) return ops.dispatch(request);
-    if (reporting && reporting.canHandle(request.action)) return reporting.dispatch(request);
+    principal = auth.resolvePrincipal(request);
+    if (!principal || !principal.authenticated) {
+      throw appError('UNAUTHORIZED', 'The session is not valid.');
+    }
+    payload.actorUserId = principal.userId;
+    if (!spec) {
+      if (serviceCanHandle(action)) {
+        throw appError('FORBIDDEN', 'You do not have permission.');
+      }
+      return errorEnvelope('UNKNOWN_ACTION', 'The action is not available.', { requestId: requestId });
+    }
+    if (!principalMay(principal.snapshot, principal.user, spec)) {
+      throw appError('FORBIDDEN', 'You do not have permission.');
+    }
+    authorize(principal, spec.permissions && spec.permissions[0] ? spec.permissions[0] : '');
+    if (auth && auth.canHandle(action)) return auth.dispatch(request, principal);
+    if (identity && identity.canHandle(action)) return identity.dispatch(request);
+    if (masters && masters.canHandle(action)) return masters.dispatch(request);
+    if (products && products.canHandle(action)) return products.dispatch(request);
+    if (parties && parties.canHandle(action)) return parties.dispatch(request);
+    if (inventory && inventory.canHandle(action)) return inventory.dispatch(request);
+    if (warehouse && warehouse.canHandle(action)) return warehouse.dispatch(request);
+    if (boms && boms.canHandle(action)) return boms.dispatch(request);
+    if (openingBalances && openingBalances.canHandle(action)) return openingBalances.dispatch(request);
+    if (purchases && purchases.canHandle(action)) return purchases.dispatch(request);
+    if (receivings && receivings.canHandle(action)) return receivings.dispatch(request);
+    if (manufacturing && manufacturing.canHandle(action)) return manufacturing.dispatch(request);
+    if (sales && sales.canHandle(action)) return sales.dispatch(request);
+    if (salesReturns && salesReturns.canHandle(action)) return salesReturns.dispatch(request);
+    if (salesImport && salesImport.canHandle(action)) return salesImport.dispatch(request);
+    if (dispatchMod && dispatchMod.canHandle(action)) return dispatchMod.dispatch(request);
+    if (ops && ops.canHandle(action)) return ops.dispatch(request);
+    if (reporting && reporting.canHandle(action)) return reporting.dispatch(request);
     return errorEnvelope('UNKNOWN_ACTION', 'The action is not available.', { requestId: requestId });
+  }
+
+  function serviceCanHandle(action) {
+    if (auth && auth.canHandle(action)) return true;
+    if (identity && identity.canHandle(action)) return true;
+    if (masters && masters.canHandle(action)) return true;
+    if (products && products.canHandle(action)) return true;
+    if (parties && parties.canHandle(action)) return true;
+    if (inventory && inventory.canHandle(action)) return true;
+    if (warehouse && warehouse.canHandle(action)) return true;
+    if (boms && boms.canHandle(action)) return true;
+    if (openingBalances && openingBalances.canHandle(action)) return true;
+    if (purchases && purchases.canHandle(action)) return true;
+    if (receivings && receivings.canHandle(action)) return true;
+    if (manufacturing && manufacturing.canHandle(action)) return true;
+    if (sales && sales.canHandle(action)) return true;
+    if (salesReturns && salesReturns.canHandle(action)) return true;
+    if (salesImport && salesImport.canHandle(action)) return true;
+    if (dispatchMod && dispatchMod.canHandle(action)) return true;
+    if (ops && ops.canHandle(action)) return true;
+    if (reporting && reporting.canHandle(action)) return true;
+    return false;
   }
 
   return { dispatch: dispatch };

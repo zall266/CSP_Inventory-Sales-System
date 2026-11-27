@@ -8,6 +8,8 @@ import {
   createFakeSpreadsheet,
   devProperties,
   loadBackend,
+  attachAuthServices,
+  seedIdentity,
 } from './harness.js'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
@@ -37,7 +39,7 @@ function app(lock) {
     getRoot: () => drive.getFolderById('drive-id'),
     getFileById: (id) => drive.getFileById(id),
   })
-  return {
+  return attachAuthServices({
     sheets,
     spreadsheet,
     context,
@@ -47,15 +49,22 @@ function app(lock) {
     identity: context.createIdentityService({ sheetRepository: sheets, driveStorage }),
     masters: context.createMasterService({ sheetRepository: sheets }),
     products: context.createProductService({ sheetRepository: sheets }),
-  }
+  })
 }
 
 function request(action, payload, extra = {}) {
-  return { v: 1, requestId: extra.requestId || action, action, payload, idempotencyKey: extra.idempotencyKey }
+  return { v: 1, requestId: extra.requestId || action, action, payload, idempotencyKey: extra.idempotencyKey, sessionToken: extra.sessionToken }
 }
 
-function call(backend, action, payload, extra) {
-  return backend.context.handleRequest(request(action, payload, extra), backend)
+function call(backend, action, payload, extra = {}) {
+  const next = { ...extra }
+  if (next.anonymous) {
+    if (next.sessionToken === undefined) next.sessionToken = ''
+  } else if (next.sessionToken === undefined) {
+    const actor = next.asUser || (payload && payload.actorUserId) || backend.defaultActorId || 'u-aina'
+    next.sessionToken = backend.sessionFor ? backend.sessionFor(actor) : ''
+  }
+  return backend.context.handleRequest(request(action, payload, next), backend)
 }
 
 function identityPayload() {
@@ -101,7 +110,7 @@ function masterPayload() {
 function ready() {
   const backend = app()
   backend.foundation.initialize()
-  assert.equal(call(backend, 'identity.bootstrap', identityPayload()).ok, true)
+  seedIdentity(backend, identityPayload())
   assert.equal(call(backend, 'masters.bootstrap', masterPayload()).ok, true)
   return backend
 }
@@ -146,11 +155,10 @@ test('product sheets stay unread until the module is called and Sheet1 stays res
 
 test('product create stores the catalogue, conversion cost, category, and zero company balances', () => {
   const backend = ready()
-  const denied = call(backend, 'products.create', productInput({ actorUserId: '' }))
-  assert.equal(denied.error.code, 'FORBIDDEN')
-  assert.equal(denied.error.message, 'You cannot add products.')
+  const denied = call(backend, 'products.create', productInput({ actorUserId: '' }), { anonymous: true })
+  assert.equal(denied.error.code, 'UNAUTHORIZED')
   const inactive = call(backend, 'products.create', productInput({ actorUserId: 'u-off' }))
-  assert.equal(inactive.error.code, 'FORBIDDEN')
+  assert.equal(inactive.error.code, 'UNAUTHORIZED')
   assert.equal(auditActions(backend).includes('products.create'), false)
 
   const created = call(backend, 'products.create', productInput())
@@ -294,7 +302,7 @@ test('agent prices require agent.manage and do not change the owner', () => {
     rows: [{ productId: 'prd-price', agentPrice: 5, sellingPrice: 18 }],
   })
   assert.equal(staff.error.code, 'FORBIDDEN')
-  assert.equal(staff.error.message, 'You cannot change product prices.')
+  assert.equal(staff.error.message, 'You do not have permission.')
   assert.equal(auditActions(backend).includes('products.saveAgentPrices'), false)
   const negative = call(backend, 'products.saveAgentPrices', {
     actorUserId: 'u-aina',
@@ -369,6 +377,7 @@ test('a product write that cannot get the lock does not add a row', () => {
   blocked.sheets = blocked.context.createSheetRepository({ openSpreadsheet: () => backend.spreadsheet })
   blocked.products = blocked.context.createProductService({ sheetRepository: blocked.sheets })
   blocked.idempotency = blocked.context.createIdempotencyService(blocked.sheets)
+  attachAuthServices(blocked)
   const created = call(blocked, 'products.create', productInput({ id: 'prd-lock', sku: 'LOCK-1' }))
   assert.equal(created.ok, true)
   const denied = call(blocked, 'products.create', productInput({ id: 'prd-lock-2', sku: 'LOCK-2' }))

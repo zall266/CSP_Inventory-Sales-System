@@ -17,6 +17,7 @@ const files = [
   'utils/log.js',
   'config/config.js',
   'auth/boundary.js',
+  'auth/actionPermissions.js',
   'auth/crypto.js',
   'repositories/sheetRepository.js',
   'repositories/authRepository.js',
@@ -357,5 +358,87 @@ export function createFakeDrive(rootId) {
       if (files.has(id)) return files.get(id)
       throw new Error('File not found')
     },
+  }
+}
+
+export function attachAuthServices(backend, options = {}) {
+  const context = backend.context
+  const sheets = backend.sheets
+  let driveStorage = backend.driveStorage
+  if (!driveStorage && backend.drive && typeof context.createDriveStorage === 'function') {
+    driveStorage = context.createDriveStorage({
+      getRoot: () => backend.drive.getFolderById('drive-id'),
+      getFileById: (id) => backend.drive.getFileById(id),
+    })
+    backend.driveStorage = driveStorage
+  }
+  const authStore = context.createAuthStore({
+    sheetRepository: sheets,
+    now: options.now || backend.nowFn || (() => new Date()),
+    skipLock: options.skipLock !== false,
+  })
+  backend.authStore = authStore
+  backend.auth = context.createAuthService({
+    sheetRepository: sheets,
+    driveStorage,
+    authStore,
+  })
+  backend.defaultActorId = options.defaultActorId || backend.defaultActorId || 'u-aina'
+  backend._sessions = Object.create(null)
+  backend.sessionFor = (userId) => {
+    const id = String(userId || backend.defaultActorId || '')
+    if (!id) return ''
+    if (!backend._sessions[id]) {
+      backend._sessions[id] = authStore.issueSession({ userId: id }).token
+    }
+    return backend._sessions[id]
+  }
+  const originalHandle = context.handleRequest
+  if (typeof originalHandle === 'function' && !context._authHandleWrapped) {
+    context._authHandleWrapped = true
+    context.handleRequest = (req, backendArg) => {
+      const host = backendArg || backend
+      if (!req || typeof req !== 'object' || req.sessionToken !== undefined) {
+        return originalHandle(req, host)
+      }
+      const action = req.action
+      const publicAction = typeof context.isPublicAction === 'function' && context.isPublicAction(action)
+      if (publicAction) return originalHandle(req, host)
+      const actor = (req.payload && req.payload.actorUserId) || host.defaultActorId
+      const next = { ...req, sessionToken: host.sessionFor ? host.sessionFor(actor) : '' }
+      return originalHandle(next, host)
+    }
+  }
+  return backend
+}
+
+export function seedIdentity(backend, payload) {
+  const next = JSON.parse(JSON.stringify(payload || {}))
+  const result = backend.identity.dispatch({
+    v: 1,
+    requestId: 'identity.bootstrap',
+    action: 'identity.bootstrap',
+    payload: next,
+  })
+  if (!result || !result.ok) {
+    const message = result && result.error && result.error.message ? result.error.message : 'identity bootstrap failed'
+    throw new Error(message)
+  }
+  return result
+}
+
+export function authedEnvelope(backend, action, payload = {}, extra = {}) {
+  const sessionToken = extra.sessionToken !== undefined
+    ? extra.sessionToken
+    : extra.anonymous
+      ? ''
+      : backend.sessionFor(extra.asUser || (payload && payload.actorUserId) || backend.defaultActorId)
+  return {
+    v: 1,
+    requestId: extra.requestId || action,
+    action,
+    payload,
+    idempotencyKey: extra.idempotencyKey,
+    sessionToken,
   }
 }

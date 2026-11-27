@@ -2,6 +2,12 @@ function createAuthStore(dependencies) {
   var sheets = dependencies.sheetRepository;
   var repo = createAuthRepository(sheets);
   var clock = dependencies.now || function () { return new Date(); };
+  var skipLock = Boolean(dependencies && dependencies.skipLock);
+
+  function guarded(fn) {
+    if (skipLock) return fn();
+    return withScriptLock(fn);
+  }
 
   function stamp() {
     return nowIso(clock());
@@ -82,7 +88,7 @@ function createAuthStore(dependencies) {
   }
 
   function issueCredential(input) {
-    return withScriptLock(function () {
+    return guarded(function () {
       var spreadsheet = open();
       var userId = String(input && input.userId || '').trim();
       var username = String(input && input.username || '').trim().toLowerCase();
@@ -142,7 +148,7 @@ function createAuthStore(dependencies) {
   }
 
   function rotateCredential(input) {
-    return withScriptLock(function () {
+    return guarded(function () {
       var spreadsheet = open();
       var userId = String(input && input.userId || '').trim();
       if (!userId) throw appError('VALIDATION_ERROR', 'User is not valid.');
@@ -181,7 +187,7 @@ function createAuthStore(dependencies) {
   }
 
   function verifyCredential(username, plaintext) {
-    return withScriptLock(function () {
+    return guarded(function () {
       authReadPepper();
       var spreadsheet = open();
       var records = repo.readCredentials(spreadsheet);
@@ -193,7 +199,7 @@ function createAuthStore(dependencies) {
   }
 
   function issueSession(input) {
-    return withScriptLock(function () {
+    return guarded(function () {
       var spreadsheet = open();
       var userId = String(input && input.userId || '').trim();
       if (!userId) throw appError('VALIDATION_ERROR', 'User is not valid.');
@@ -228,7 +234,7 @@ function createAuthStore(dependencies) {
   }
 
   function validateSession(token) {
-    return withScriptLock(function () {
+    return guarded(function () {
       var spreadsheet = open();
       var hash = authHashToken(String(token || ''));
       var sessions = repo.readSessions(spreadsheet);
@@ -266,7 +272,7 @@ function createAuthStore(dependencies) {
   }
 
   function revokeUserSessions(userId, reason) {
-    return withScriptLock(function () {
+    return guarded(function () {
       revokeUserSessionsUnlocked(open(), String(userId || ''), reason);
       return { ok: true };
     });
@@ -277,7 +283,7 @@ function createAuthStore(dependencies) {
   function revokeCurrentSession(token, reason) {
     var raw = token === undefined || token === null ? '' : String(token);
     if (!raw) return { ok: true, revoked: false };
-    return withScriptLock(function () {
+    return guarded(function () {
       var spreadsheet = open();
       var hash = authHashToken(raw);
       var sessions = repo.readSessions(spreadsheet);
@@ -297,8 +303,125 @@ function createAuthStore(dependencies) {
     });
   }
 
+  var AUTH_LOGIN_WINDOW_MS = 15 * 60 * 1000;
+  var AUTH_LOGIN_MAX_ATTEMPTS = 5;
+  var AUTH_LOGIN_BASE_COOLDOWN_MS = 60 * 1000;
+  var AUTH_LOGIN_MAX_COOLDOWN_MS = 15 * 60 * 1000;
+  var AUTH_LOGIN_ATTEMPT_MAX_ROWS = 200;
+  var AUTH_LOGIN_ATTEMPT_TTL_MS = 24 * 60 * 60 * 1000;
+
+  function emailAttemptHash(email) {
+    return authHashToken(String(email || '').trim().toLowerCase());
+  }
+
+  function parseMillis(value) {
+    var ms = Date.parse(String(value || ''));
+    return isFinite(ms) ? ms : 0;
+  }
+
+  function pruneLoginAttempts(records, nowMs) {
+    var kept = records.filter(function (item) {
+      var last = parseMillis(item.lastAttemptAt) || parseMillis(item.updatedAt);
+      return last && (nowMs - last) <= AUTH_LOGIN_ATTEMPT_TTL_MS;
+    });
+    if (kept.length <= AUTH_LOGIN_ATTEMPT_MAX_ROWS) return kept;
+    kept.sort(function (a, b) {
+      return parseMillis(b.lastAttemptAt) - parseMillis(a.lastAttemptAt);
+    });
+    return kept.slice(0, AUTH_LOGIN_ATTEMPT_MAX_ROWS);
+  }
+
+  function loginCooldownMs(failedCount) {
+    var extra = failedCount - AUTH_LOGIN_MAX_ATTEMPTS;
+    if (extra < 0) return 0;
+    var shift = extra;
+    if (shift > 4) shift = 4;
+    var wait = AUTH_LOGIN_BASE_COOLDOWN_MS * Math.pow(2, shift);
+    if (wait > AUTH_LOGIN_MAX_COOLDOWN_MS) wait = AUTH_LOGIN_MAX_COOLDOWN_MS;
+    return wait;
+  }
+
+  function findAttempt(records, emailHash) {
+    var i;
+    for (i = 0; i < records.length; i += 1) {
+      if (records[i].emailHash === emailHash) return records[i];
+    }
+    return null;
+  }
+
+  function isLoginThrottled(email) {
+    return guarded(function () {
+      var spreadsheet = open();
+      repo.ensure(spreadsheet);
+      var needle = String(email || '').trim().toLowerCase();
+      if (!needle) return false;
+      var hash = emailAttemptHash(needle);
+      var nowMs = clock().getTime();
+      var records = pruneLoginAttempts(repo.readLoginAttempts(spreadsheet), nowMs);
+      var row = findAttempt(records, hash);
+      if (!row) return false;
+      var until = parseMillis(row.cooldownUntil);
+      return Boolean(until && nowMs < until);
+    });
+  }
+
+  function recordLoginFailure(email) {
+    return guarded(function () {
+      var spreadsheet = open();
+      repo.ensure(spreadsheet);
+      var needle = String(email || '').trim().toLowerCase();
+      if (!needle) return { throttled: false };
+      var hash = emailAttemptHash(needle);
+      var nowMs = clock().getTime();
+      var now = stamp();
+      var records = pruneLoginAttempts(repo.readLoginAttempts(spreadsheet), nowMs);
+      var row = findAttempt(records, hash);
+      var until = row ? parseMillis(row.cooldownUntil) : 0;
+      if (until && nowMs < until) {
+        return { throttled: true, failedCount: Number(row.failedCount || 0) };
+      }
+      var windowStart = row ? parseMillis(row.windowStartedAt) : 0;
+      var count = row ? Number(row.failedCount || 0) : 0;
+      if (!windowStart || (nowMs - windowStart) > AUTH_LOGIN_WINDOW_MS) {
+        windowStart = nowMs;
+        count = 0;
+      }
+      count += 1;
+      var cooldown = loginCooldownMs(count);
+      var next = {
+        id: row && row.id ? row.id : createId(),
+        emailHash: hash,
+        failedCount: count,
+        windowStartedAt: nowIso(new Date(windowStart)),
+        cooldownUntil: cooldown ? nowIso(new Date(nowMs + cooldown)) : '',
+        lastAttemptAt: now,
+        updatedAt: now
+      };
+      var written = records.filter(function (item) { return item.emailHash !== hash; });
+      written.push(next);
+      repo.writeLoginAttempts(spreadsheet, pruneLoginAttempts(written, nowMs));
+      return { throttled: Boolean(cooldown), failedCount: count };
+    });
+  }
+
+  function clearLoginFailures(email) {
+    return guarded(function () {
+      var spreadsheet = open();
+      repo.ensure(spreadsheet);
+      var needle = String(email || '').trim().toLowerCase();
+      if (!needle) return { ok: true };
+      var hash = emailAttemptHash(needle);
+      var nowMs = clock().getTime();
+      var records = pruneLoginAttempts(repo.readLoginAttempts(spreadsheet), nowMs).filter(function (item) {
+        return item.emailHash !== hash;
+      });
+      repo.writeLoginAttempts(spreadsheet, records);
+      return { ok: true };
+    });
+  }
+
   function ensureSheets() {
-    return withScriptLock(function () {
+    return guarded(function () {
       repo.ensure(open());
       return { ok: true };
     });
@@ -321,6 +444,9 @@ function createAuthStore(dependencies) {
     validateSession: validateSession,
     revokeCurrentSession: revokeCurrentSession,
     revokeUserSessions: revokeUserSessions,
+    isLoginThrottled: isLoginThrottled,
+    recordLoginFailure: recordLoginFailure,
+    clearLoginFailures: clearLoginFailures,
     readEvents: readEvents,
     readCredentials: readCredentials
   };

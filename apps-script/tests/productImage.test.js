@@ -8,6 +8,8 @@ import {
   createFakeSpreadsheet,
   devProperties,
   loadBackend,
+  attachAuthServices,
+  seedIdentity,
 } from './harness.js'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
@@ -39,7 +41,7 @@ function app() {
     getRoot: () => drive.getFolderById('drive-id'),
     getFileById: (id) => drive.getFileById(id),
   })
-  return {
+  return attachAuthServices({
     sheets,
     spreadsheet,
     context,
@@ -51,15 +53,22 @@ function app() {
     identity: context.createIdentityService({ sheetRepository: sheets, driveStorage }),
     masters: context.createMasterService({ sheetRepository: sheets }),
     products: context.createProductService({ sheetRepository: sheets, driveStorage }),
-  }
+  })
 }
 
 function request(action, payload, extra = {}) {
-  return { v: 1, requestId: extra.requestId || action, action, payload, idempotencyKey: extra.idempotencyKey }
+  return { v: 1, requestId: extra.requestId || action, action, payload, idempotencyKey: extra.idempotencyKey, sessionToken: extra.sessionToken }
 }
 
-function call(backend, action, payload, extra) {
-  return backend.context.handleRequest(request(action, payload, extra), backend)
+function call(backend, action, payload, extra = {}) {
+  const next = { ...extra }
+  if (next.anonymous) {
+    if (next.sessionToken === undefined) next.sessionToken = ''
+  } else if (next.sessionToken === undefined) {
+    const actor = next.asUser || (payload && payload.actorUserId) || backend.defaultActorId || 'u-aina'
+    next.sessionToken = backend.sessionFor ? backend.sessionFor(actor) : ''
+  }
+  return backend.context.handleRequest(request(action, payload, next), backend)
 }
 
 function identityPayload() {
@@ -101,7 +110,7 @@ function identityPayload() {
 function ready() {
   const backend = app()
   backend.foundation.initialize()
-  assert.equal(call(backend, 'identity.bootstrap', identityPayload()).ok, true)
+  seedIdentity(backend, identityPayload())
   assert.equal(call(backend, 'masters.bootstrap', {
     warehouses: [
       { id: 'wh-main', name: 'Main Warehouse', code: 'MAIN', kind: 'company' },
@@ -424,7 +433,7 @@ test('company POS cashier and linked-agent can get images but cannot mutate them
     actorUserId: 'u-siti', productId: 'prd-sugar', dataUrl: JPEG_DATA_URL, fileName: 'nope.jpg',
   })
   assert.equal(cashierUpload.error.code, 'FORBIDDEN')
-  assert.equal(cashierUpload.error.message, 'You cannot change product images.')
+  assert.equal(cashierUpload.error.message, 'You do not have permission.')
   const agentReplace = call(backend, 'products.replaceImage', {
     actorUserId: 'u-agent', productId: 'prd-sugar', dataUrl: JPEG_DATA_URL, fileName: 'nope.jpg',
   })
@@ -442,15 +451,15 @@ test('warehouse without POS or products.edit cannot get or mutate images', () =>
   }).ok, true)
   const deniedGet = call(backend, 'products.getImage', { actorUserId: 'u-wh', productId: 'prd-sugar' })
   assert.equal(deniedGet.error.code, 'FORBIDDEN')
-  assert.equal(deniedGet.error.message, 'You cannot view this product image.')
+  assert.equal(deniedGet.error.message, 'You do not have permission.')
   const deniedUpload = call(backend, 'products.uploadImage', {
     actorUserId: 'u-wh', productId: 'prd-sugar', dataUrl: JPEG_DATA_URL,
   })
   assert.equal(deniedUpload.error.code, 'FORBIDDEN')
-  const noActor = call(backend, 'products.getImage', { productId: 'prd-sugar' })
-  assert.equal(noActor.error.code, 'FORBIDDEN')
+  const noActor = call(backend, 'products.getImage', { productId: 'prd-sugar' }, { anonymous: true })
+  assert.equal(noActor.error.code, 'UNAUTHORIZED')
   const inactive = call(backend, 'products.getImage', { actorUserId: 'u-off', productId: 'prd-sugar' })
-  assert.equal(inactive.error.code, 'FORBIDDEN')
+  assert.equal(inactive.error.code, 'UNAUTHORIZED')
 })
 
 test('replace and remove stay inside ProductImages and update persists through product edits', () => {

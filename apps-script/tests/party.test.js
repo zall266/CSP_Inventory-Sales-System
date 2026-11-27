@@ -8,6 +8,8 @@ import {
   createFakeSpreadsheet,
   devProperties,
   loadBackend,
+  attachAuthServices,
+  seedIdentity,
 } from './harness.js'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
@@ -37,7 +39,7 @@ function app(lock) {
     getRoot: () => drive.getFolderById('drive-id'),
     getFileById: (id) => drive.getFileById(id),
   })
-  return {
+  return attachAuthServices({
     sheets,
     spreadsheet,
     context,
@@ -48,15 +50,22 @@ function app(lock) {
     masters: context.createMasterService({ sheetRepository: sheets }),
     products: context.createProductService({ sheetRepository: sheets }),
     parties: context.createPartyService({ sheetRepository: sheets }),
-  }
+  })
 }
 
 function request(action, payload, extra = {}) {
-  return { v: 1, requestId: extra.requestId || action, action, payload, idempotencyKey: extra.idempotencyKey }
+  return { v: 1, requestId: extra.requestId || action, action, payload, idempotencyKey: extra.idempotencyKey, sessionToken: extra.sessionToken }
 }
 
-function call(backend, action, payload, extra) {
-  return backend.context.handleRequest(request(action, payload, extra), backend)
+function call(backend, action, payload, extra = {}) {
+  const next = { ...extra }
+  if (next.anonymous) {
+    if (next.sessionToken === undefined) next.sessionToken = ''
+  } else if (next.sessionToken === undefined) {
+    const actor = next.asUser || (payload && payload.actorUserId) || backend.defaultActorId || 'u-aina'
+    next.sessionToken = backend.sessionFor ? backend.sessionFor(actor) : ''
+  }
+  return backend.context.handleRequest(request(action, payload, next), backend)
 }
 
 function identityPayload() {
@@ -96,7 +105,7 @@ function masterPayload() {
 function ready() {
   const backend = app()
   backend.foundation.initialize()
-  assert.equal(call(backend, 'identity.bootstrap', identityPayload()).ok, true)
+  seedIdentity(backend, identityPayload())
   assert.equal(call(backend, 'masters.bootstrap', masterPayload()).ok, true)
   return backend
 }
@@ -148,12 +157,10 @@ test('party sheets stay unread until the module is called and Sheet1 stays reser
 
 test('customer and supplier create, list, and get persist the locked fields', () => {
   const backend = ready()
-  const denied = call(backend, 'customers.create', customerInput({ actorUserId: '' }))
-  assert.equal(denied.error.code, 'FORBIDDEN')
-  assert.equal(denied.error.message, 'You cannot add customers.')
+  const denied = call(backend, 'customers.create', customerInput({ actorUserId: '' }), { anonymous: true })
+  assert.equal(denied.error.code, 'UNAUTHORIZED')
   const inactive = call(backend, 'suppliers.create', supplierInput({ actorUserId: 'u-off' }))
-  assert.equal(inactive.error.code, 'FORBIDDEN')
-  assert.equal(inactive.error.message, 'You cannot add suppliers.')
+  assert.equal(inactive.error.code, 'UNAUTHORIZED')
   assert.equal(auditActions(backend).includes('customers.create'), false)
   assert.equal(auditActions(backend).includes('suppliers.create'), false)
 
@@ -244,7 +251,7 @@ test('agent create links a warehouse, update keeps the warehouse id, and status 
     actorUserId: 'u-mei', id: 'agt-uat', name: 'UAT Agent Module 4', code: 'ag-jb',
   })
   assert.equal(staff.error.code, 'FORBIDDEN')
-  assert.equal(staff.error.message, 'You cannot manage agents.')
+  assert.equal(staff.error.message, 'You do not have permission.')
   assert.equal(auditActions(backend).includes('agents.create'), false)
 
   const missingName = call(backend, 'agents.create', { actorUserId: 'u-aina', name: ' ', code: 'AG-1' })
@@ -323,7 +330,7 @@ test('agent create links a warehouse, update keeps the warehouse id, and status 
   assert.equal(bad.error.message, 'Agent status is not valid.')
   const missing = call(backend, 'agents.update', { actorUserId: 'u-aina', id: 'agt-missing', name: 'Nope', code: 'NOPE' })
   assert.equal(missing.error.code, 'NOT_FOUND')
-  assert.equal(call(backend, 'agents.get', { id: 'agt-uat' }).error.code, 'NOT_FOUND')
+  assert.equal(call(backend, 'agents.get', { id: 'agt-uat' }, { anonymous: true }).error.code, 'UNAUTHORIZED')
   assert.equal(call(backend, 'warehouses.list', {}).data.warehouses.some((row) => row.id === 'wh-main'), true)
   assert.equal(call(backend, 'users.list', {}).data.users.find((user) => user.id === 'u-aina').name, 'Aina Rahman')
 })
@@ -349,7 +356,7 @@ test('custom wholesale prices require customer.pricing.manage and do not replace
     actorUserId: 'u-mei', customerId: 'cus-uat', productId: 'prd-price', price: 12,
   })
   assert.equal(staff.error.code, 'FORBIDDEN')
-  assert.equal(staff.error.message, 'You cannot manage customer pricing.')
+  assert.equal(staff.error.message, 'You do not have permission.')
   assert.equal(auditActions(backend).includes('customers.saveWholesalePrice'), false)
   const negative = call(backend, 'customers.saveWholesalePrice', {
     actorUserId: 'u-aina', customerId: 'cus-uat', productId: 'prd-price', price: -1,
@@ -397,6 +404,7 @@ test('a rejected party write does not audit, and a replay does not duplicate the
   blocked.sheets = blocked.context.createSheetRepository({ openSpreadsheet: () => backend.spreadsheet })
   blocked.parties = blocked.context.createPartyService({ sheetRepository: blocked.sheets })
   blocked.idempotency = blocked.context.createIdempotencyService(blocked.sheets)
+  attachAuthServices(blocked)
   const denied = call(blocked, 'customers.create', customerInput({ id: 'cus-lock' }))
   assert.equal(denied.error.code, 'CONFLICT')
   assert.equal(backend.spreadsheet.store.Customers.filter((row) => row[0] === 'cus-lock').length, 0)
