@@ -91,7 +91,7 @@ function createAuthService(deps) {
   function resolvePrincipal(request) {
     var token = readEnvelopeSessionToken(request);
     if (!token) {
-      return authenticate();
+      throw appError('UNAUTHORIZED', AUTH_GENERIC_SESSION_MESSAGE);
     }
     if (!authStore || typeof authStore.validateSession !== 'function') {
       throw appError('UNAUTHORIZED', AUTH_GENERIC_SESSION_MESSAGE);
@@ -117,7 +117,9 @@ function createAuthService(deps) {
       authenticated: true,
       name: user.name,
       email: user.email,
-      roleId: user.roleId
+      roleId: user.roleId,
+      user: user,
+      snapshot: snapshot
     };
   }
 
@@ -129,9 +131,16 @@ function createAuthService(deps) {
     var spreadsheet = open();
     authStore.ensureSheets();
     var snapshot = identityRepo.load(spreadsheet);
-    if (!email || !password) loginFailed(spreadsheet, requestId, '');
+    if (!email || !password) {
+      if (email) authStore.recordLoginFailure(email);
+      loginFailed(spreadsheet, requestId, '');
+    }
+    if (authStore.isLoginThrottled(email)) {
+      loginFailed(spreadsheet, requestId, '');
+    }
     var user = findUserByEmail(snapshot, email);
     if (!user || text(user.status).trim() !== 'active') {
+      authStore.recordLoginFailure(email);
       loginFailed(spreadsheet, requestId, user ? user.id : '');
     }
     var verified;
@@ -139,11 +148,14 @@ function createAuthService(deps) {
       verified = authStore.verifyCredential(email, password);
     } catch (error) {
       if (error && error.expose && (error.code === 'CONFLICT' || error.code === 'INTERNAL_ERROR')) throw error;
+      authStore.recordLoginFailure(email);
       loginFailed(spreadsheet, requestId, user.id);
     }
     if (!verified || !verified.ok || verified.userId !== user.id) {
+      authStore.recordLoginFailure(email);
       loginFailed(spreadsheet, requestId, user.id);
     }
+    authStore.clearLoginFailures(email);
     var issued = authStore.issueSession({ userId: user.id });
     recordEvent(spreadsheet, 'login_ok', user.id, user.id, requestId);
     return okEnvelope({

@@ -5,6 +5,8 @@ import {
   createFakeSpreadsheet,
   devProperties,
   loadBackend,
+  attachAuthServices,
+  seedIdentity,
 } from './harness.js'
 
 function app() {
@@ -32,7 +34,7 @@ function app() {
     getRoot: () => drive.getFolderById('drive-id'),
     getFileById: (id) => drive.getFileById(id),
   })
-  return {
+  return attachAuthServices({
     sheets,
     spreadsheet,
     context,
@@ -47,15 +49,22 @@ function app() {
     sales: context.createSalesService({ sheetRepository: sheets }),
     salesImport: context.createSalesImportService({ sheetRepository: sheets }),
     dispatch: context.createDispatchService({ sheetRepository: sheets }),
-  }
+  })
 }
 
 function request(action, payload, extra = {}) {
-  return { v: 1, requestId: extra.requestId || action, action, payload, idempotencyKey: extra.idempotencyKey }
+  return { v: 1, requestId: extra.requestId || action, action, payload, idempotencyKey: extra.idempotencyKey, sessionToken: extra.sessionToken }
 }
 
-function call(backend, action, payload, extra) {
-  return backend.context.handleRequest(request(action, payload, extra), backend)
+function call(backend, action, payload, extra = {}) {
+  const next = { ...extra }
+  if (next.anonymous) {
+    if (next.sessionToken === undefined) next.sessionToken = ''
+  } else if (next.sessionToken === undefined) {
+    const actor = next.asUser || (payload && payload.actorUserId) || backend.defaultActorId || 'u-aina'
+    next.sessionToken = backend.sessionFor ? backend.sessionFor(actor) : ''
+  }
+  return backend.context.handleRequest(request(action, payload, next), backend)
 }
 
 let keySeq = 0
@@ -95,7 +104,7 @@ function identityPayload() {
 function ready() {
   const backend = app()
   backend.foundation.initialize()
-  assert.equal(call(backend, 'identity.bootstrap', identityPayload()).ok, true)
+  seedIdentity(backend, identityPayload())
   assert.equal(call(backend, 'masters.bootstrap', {
     warehouses: [
       { id: 'wh-main', name: 'Main Warehouse', code: 'MAIN', kind: 'company' },
@@ -147,13 +156,13 @@ test('staff cannot maintain vehicles or create a dispatch', () => {
     plateNumber: 'WWW 1234',
   })
   assert.equal(vehicle.error.code, 'FORBIDDEN')
-  assert.equal(vehicle.error.message, 'You cannot maintain vehicles.')
+  assert.equal(vehicle.error.message, 'You do not have permission.')
   const created = call(backend, 'dispatch.create', {
     actorUserId: 'u-mei',
     dispatchDate: '2026-11-12',
   })
   assert.equal(created.error.code, 'FORBIDDEN')
-  assert.equal(created.error.message, 'You cannot create a dispatch.')
+  assert.equal(created.error.message, 'You do not have permission.')
 })
 
 test('confirm snapshots the vehicle, posts no stock, and rejects a second claim on the shipment', () => {

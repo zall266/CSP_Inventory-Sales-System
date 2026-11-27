@@ -10,6 +10,7 @@ import {
   createNonReentrantScriptLock,
   loadBackend,
   memoryProperties,
+  seedIdentity,
 } from './harness.js'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
@@ -126,8 +127,7 @@ function call(backend, action, payload, extra) {
 function ready() {
   const backend = app()
   backend.foundation.initialize()
-  const boot = call(backend, 'identity.bootstrap', identityPayload())
-  assert.equal(boot.ok, true)
+  seedIdentity(backend, identityPayload())
   const ownerSecret = backend.authStore.issueCredential({
     userId: 'u-owner',
     username: 'owner@coolslurppy.my',
@@ -270,8 +270,9 @@ test('a presented invalid session token fails closed on non-login actions', () =
   const missing = call(backend, 'auth.logout', {})
   assert.equal(missing.ok, false)
   assert.equal(missing.error.code, 'UNAUTHORIZED')
-  const stillOpen = call(backend, 'identity.get', {})
-  assert.equal(stillOpen.ok, true)
+  const missingToken = call(backend, 'identity.get', {})
+  assert.equal(missingToken.ok, false)
+  assert.equal(missingToken.error.code, 'UNAUTHORIZED')
 })
 
 test('authenticated requests overwrite client actorUserId from the session', () => {
@@ -310,8 +311,7 @@ test('auth.login fails closed when the pepper is missing', () => {
     }),
   })
   backend.foundation.initialize()
-  const boot = call(backend, 'identity.bootstrap', identityPayload())
-  assert.equal(boot.ok, true)
+  seedIdentity(backend, identityPayload())
   const result = call(backend, 'auth.login', {
     email: 'owner@coolslurppy.my',
     password: 'ab'.repeat(32),

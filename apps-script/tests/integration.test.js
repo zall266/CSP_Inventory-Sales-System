@@ -5,6 +5,8 @@ import {
   createFakeSpreadsheet,
   devProperties,
   loadBackend,
+  attachAuthServices,
+  seedIdentity,
 } from './harness.js'
 
 const SKIP_BALANCE_TYPES = new Set([
@@ -40,7 +42,7 @@ function app() {
     getRoot: () => drive.getFolderById('drive-id'),
     getFileById: (id) => drive.getFileById(id),
   })
-  return {
+  return attachAuthServices({
     sheets,
     spreadsheet,
     context,
@@ -58,15 +60,22 @@ function app() {
     salesReturns: context.createSalesReturnService({ sheetRepository: sheets }),
     ops: context.createOpsService({ sheetRepository: sheets, driveStorage }),
     reporting: context.createReportingService({ sheetRepository: sheets }),
-  }
+  })
 }
 
 function request(action, payload, extra = {}) {
-  return { v: 1, requestId: extra.requestId || action, action, payload, idempotencyKey: extra.idempotencyKey }
+  return { v: 1, requestId: extra.requestId || action, action, payload, idempotencyKey: extra.idempotencyKey, sessionToken: extra.sessionToken }
 }
 
-function call(backend, action, payload, extra) {
-  return backend.context.handleRequest(request(action, payload, extra), backend)
+function call(backend, action, payload, extra = {}) {
+  const next = { ...extra }
+  if (next.anonymous) {
+    if (next.sessionToken === undefined) next.sessionToken = ''
+  } else if (next.sessionToken === undefined) {
+    const actor = next.asUser || (payload && payload.actorUserId) || backend.defaultActorId || 'u-aina'
+    next.sessionToken = backend.sessionFor ? backend.sessionFor(actor) : ''
+  }
+  return backend.context.handleRequest(request(action, payload, next), backend)
 }
 
 let keySeq = 0
@@ -122,7 +131,7 @@ function identityPayload() {
 function ready() {
   const backend = app()
   backend.foundation.initialize()
-  assert.equal(call(backend, 'identity.bootstrap', identityPayload()).ok, true)
+  seedIdentity(backend, identityPayload())
   assert.equal(call(backend, 'masters.bootstrap', {
     warehouses: [{ id: 'wh-main', name: 'Main Warehouse', code: 'MAIN', kind: 'company' }],
     categories: [
@@ -202,7 +211,7 @@ test('procurement to sales return to dashboard reconciles and denies cashier wri
     actorUserId: 'u-siti', category: 'Rent', description: 'INT rent', amount: 10, paymentMethod: 'cash',
   })
   assert.equal(cashierExpense.error.code, 'FORBIDDEN')
-  assert.equal(cashierExpense.error.message, 'You cannot manage expenses.')
+  assert.equal(cashierExpense.error.message, 'You do not have permission.')
 
   const draft = call(backend, 'purchases.create', {
     actorUserId: 'u-aina',

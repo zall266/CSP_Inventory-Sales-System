@@ -1,10 +1,8 @@
-// AUTH-1 session boundary. Business services still take a principal and a
-// permission key. They do not read passwords, HR, or Script Properties.
-// authorize().enforced stays false until AUTH-2 protects every business action.
-// A presented session token is always validated (fail closed). Missing token
-// still yields an unauthenticated principal so the prototype SPA keeps working
-// until AUTH-2. When a principal is authenticated, the router overwrites
-// payload.actorUserId from the session and ignores the client value.
+// AUTH-2 session and authorization boundary. Business services take a principal
+// and a permission key. They do not read passwords, HR, or Script Properties.
+// The router enforces ACTION_AUTHORIZATION before dispatch. Missing tokens on
+// non-public actions fail closed. When a principal is authenticated, the router
+// overwrites payload.actorUserId from the session.
 
 function readEnvelopeSessionToken(request) {
   if (!request) return '';
@@ -24,16 +22,10 @@ function authorize(principal, permissionKey) {
   return {
     principal: principal || authenticate(),
     permissionKey: permissionKey || '',
-    enforced: false
+    enforced: true
   };
 }
 
-var AUTH_UNAUTHENTICATED_ACTIONS = {
-  'system.health': true,
-  'system.ping': true,
-  'auth.login': true
-};
-
 function isUnauthenticatedAuthAction(action) {
-  return Boolean(AUTH_UNAUTHENTICATED_ACTIONS[action]);
+  return isPublicAction(action);
 }

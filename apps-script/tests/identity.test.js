@@ -4,10 +4,12 @@ import path from 'node:path'
 import test from 'node:test'
 import { fileURLToPath } from 'node:url'
 import {
+  attachAuthServices,
   createFakeDrive,
   createFakeSpreadsheet,
   devProperties,
   loadBackend,
+  seedIdentity,
 } from './harness.js'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
@@ -37,7 +39,7 @@ function app() {
     getRoot: () => drive.getFolderById('drive-id'),
     getFileById: (id) => drive.getFileById(id),
   })
-  const resolved = {
+  return attachAuthServices({
     sheets,
     drive,
     spreadsheet,
@@ -46,12 +48,22 @@ function app() {
     idempotency: context.createIdempotencyService(sheets),
     foundation: context.createFoundationService(sheets),
     identity: context.createIdentityService({ sheetRepository: sheets, driveStorage }),
-  }
-  return resolved
+  })
 }
 
 function request(action, payload, extra = {}) {
-  return { v: 1, requestId: extra.requestId || action, action, payload, idempotencyKey: extra.idempotencyKey }
+  return { v: 1, requestId: extra.requestId || action, action, payload, idempotencyKey: extra.idempotencyKey, sessionToken: extra.sessionToken }
+}
+
+function send(backend, action, payload, extra = {}) {
+  const next = { ...extra }
+  if (next.anonymous) {
+    if (next.sessionToken === undefined) next.sessionToken = ''
+  } else if (next.sessionToken === undefined) {
+    const actor = next.asUser || (payload && payload.actorUserId) || backend.defaultActorId || 'u-aina'
+    next.sessionToken = backend.sessionFor(actor)
+  }
+  return backend.context.handleRequest(request(action, payload, next), backend)
 }
 
 function settings() {
@@ -104,8 +116,7 @@ function bootstrapPayload() {
 function ready() {
   const backend = app()
   backend.foundation.initialize()
-  const boot = backend.context.handleRequest(request('identity.bootstrap', bootstrapPayload()), backend)
-  assert.equal(boot.ok, true)
+  seedIdentity(backend, bootstrapPayload())
   return backend
 }
 
@@ -120,12 +131,12 @@ test('permission keys match the locked frontend vocabulary', () => {
 
 test('identity reads do not run before the module is called and Sheet1 stays reserved', () => {
   const backend = app()
-  const health = backend.context.handleRequest(request('system.health', {}), backend)
+  const health = send(backend, 'system.health', {}, { anonymous: true })
   assert.equal(health.ok, true)
   assert.equal(backend.spreadsheet.store.Users, undefined)
   assert.deepEqual(backend.spreadsheet.store.Sheet1, [['']])
-  const unknown = backend.context.handleRequest(request('salesImport.confirm', {}), backend)
-  assert.equal(unknown.error.code, 'UNKNOWN_ACTION')
+  const unknown = send(backend, 'salesImport.confirm', {}, { anonymous: true })
+  assert.equal(unknown.error.code, 'UNAUTHORIZED')
 })
 
 test('bootstrap persists identity once and rejects a second copy', () => {
@@ -134,12 +145,12 @@ test('bootstrap persists identity once and rejects a second copy', () => {
   assert.equal(backend.spreadsheet.store.Roles[1][0], 'role-owner')
   assert.equal(backend.spreadsheet.store.Settings[1][0], 'settings')
   assert.deepEqual(backend.spreadsheet.store.Sheet1, [['']])
-  const again = backend.context.handleRequest(request('identity.bootstrap', bootstrapPayload(), { requestId: 'boot-2' }), backend)
+  const again = send(backend, 'identity.bootstrap', bootstrapPayload(), { requestId: 'boot-2' })
   assert.equal(again.ok, false)
   assert.equal(again.error.code, 'CONFLICT')
   assert.equal(again.error.message, 'Identity is already initialized.')
   assert.equal(backend.spreadsheet.store.Users.length, 3)
-  const loaded = backend.context.handleRequest(request('identity.get', {}), backend)
+  const loaded = send(backend, 'identity.get', {})
   assert.equal(loaded.data.empty, false)
   assert.equal(loaded.data.users[0].email, 'aina@coolslurppy.my')
   assert.equal(loaded.data.users[0].role, 'owner')
@@ -148,23 +159,23 @@ test('bootstrap persists identity once and rejects a second copy', () => {
 
 test('owner keeps full access and staff cannot create a user', () => {
   const backend = ready()
-  const denied = backend.context.handleRequest(request('users.create', {
+  const denied = send(backend, 'users.create', {
     actorUserId: 'u-mei',
     name: 'New Staff',
     email: 'new@coolslurppy.my',
     roleId: 'role-staff',
     departmentId: 'dept-sales',
-  }), backend)
+  })
   assert.equal(denied.error.code, 'FORBIDDEN')
-  assert.equal(denied.error.message, 'You cannot add users.')
-  const created = backend.context.handleRequest(request('users.create', {
+  assert.equal(denied.error.message, 'You do not have permission.')
+  const created = send(backend, 'users.create', {
     actorUserId: 'u-aina',
     id: 'u-new',
     name: 'New Staff',
     email: 'New@CoolSlurppy.my',
     roleId: 'role-staff',
     departmentId: 'dept-sales',
-  }), backend)
+  })
   assert.equal(created.ok, true)
   assert.equal(created.data.users[0].id, 'u-new')
   assert.equal(created.data.users[0].email, 'new@coolslurppy.my')
@@ -173,85 +184,85 @@ test('owner keeps full access and staff cannot create a user', () => {
   assert.equal(created.data.userAuditLogs[0].changedBy, 'Aina Rahman')
   const auditRows = backend.spreadsheet.store.AuditLogs.map((row) => row[3])
   assert.ok(auditRows.includes('users.create'))
-  const duplicate = backend.context.handleRequest(request('users.create', {
+  const duplicate = send(backend, 'users.create', {
     actorUserId: 'u-aina',
     name: 'Other',
     email: 'new@coolslurppy.my',
     roleId: 'role-staff',
     departmentId: 'dept-sales',
-  }, { requestId: 'dup-email' }), backend)
+  }, { requestId: 'dup-email' })
   assert.equal(duplicate.error.code, 'VALIDATION_ERROR')
   assert.equal(duplicate.error.message, 'Email already in use')
 })
 
 test('user validation, not found, self deactivation, and last owner are enforced', () => {
   const backend = ready()
-  const missingName = backend.context.handleRequest(request('users.create', {
+  const missingName = send(backend, 'users.create', {
     actorUserId: 'u-aina', name: ' ', email: '', roleId: 'role-staff', departmentId: 'dept-sales',
-  }), backend)
+  })
   assert.equal(missingName.error.message, 'Name and email are required')
-  const missingDepartment = backend.context.handleRequest(request('users.create', {
+  const missingDepartment = send(backend, 'users.create', {
     actorUserId: 'u-aina', name: 'Nur', email: 'nur@coolslurppy.my', roleId: 'role-staff', departmentId: 'missing',
-  }), backend)
+  })
   assert.equal(missingDepartment.error.message, 'Department is required')
-  const missingUser = backend.context.handleRequest(request('users.update', {
+  const missingUser = send(backend, 'users.update', {
     actorUserId: 'u-aina', id: 'missing', patch: { name: 'Nope' },
-  }), backend)
+  })
   assert.equal(missingUser.error.code, 'NOT_FOUND')
-  const self = backend.context.handleRequest(request('users.update', {
+  const self = send(backend, 'users.update', {
     actorUserId: 'u-aina', id: 'u-aina', patch: { status: 'inactive' },
-  }), backend)
+  })
   assert.equal(self.error.code, 'FORBIDDEN')
   assert.equal(self.error.message, 'You cannot deactivate this user.')
-  const roleChange = backend.context.handleRequest(request('users.update', {
+  const roleChange = send(backend, 'users.update', {
     actorUserId: 'u-aina', id: 'u-aina', patch: { roleId: 'role-staff' },
-  }), backend)
+  })
   assert.equal(roleChange.error.message, 'You cannot change that user\'s role.')
-  const renamed = backend.context.handleRequest(request('users.update', {
+  const renamed = send(backend, 'users.update', {
     actorUserId: 'u-aina', id: 'u-mei', patch: { name: 'Mei Tan' },
-  }), backend)
+  })
   assert.equal(renamed.ok, true)
   assert.equal(renamed.data.users.find((user) => user.id === 'u-mei').name, 'Mei Tan')
   assert.equal(renamed.data.userAuditLogs[0].field, 'name')
-  const noop = backend.context.handleRequest(request('users.update', {
+  const noop = send(backend, 'users.update', {
     actorUserId: 'u-aina', id: 'u-mei', patch: { name: 'Mei Tan' },
-  }, { requestId: 'noop' }), backend)
+  }, { requestId: 'noop' })
   assert.equal(noop.ok, true)
   assert.equal(noop.data.userAuditLogs.length, renamed.data.userAuditLogs.length)
 })
 
 test('roles, owner protection, and permission rows persist', () => {
   const backend = ready()
-  const denied = backend.context.handleRequest(request('roles.create', {
+  const denied = send(backend, 'roles.create', {
     actorUserId: 'u-mei', name: 'Picker', description: 'Picks orders',
-  }), backend)
-  assert.equal(denied.error.message, 'You cannot create roles.')
-  const created = backend.context.handleRequest(request('roles.create', {
+  })
+  assert.equal(denied.error.message, 'You do not have permission.')
+  const created = send(backend, 'roles.create', {
     actorUserId: 'u-aina', id: 'role-picker', name: 'Picker', description: 'Picks orders',
-  }), backend)
+  })
   assert.equal(created.ok, true)
   assert.equal(created.data.roles.at(-1).legacyRole, 'staff')
   assert.equal(created.data.roles.at(-1).protected, false)
   assert.equal(created.data.settings.roleMatrix['role-picker']['dashboard.view'], false)
-  const duplicate = backend.context.handleRequest(request('roles.create', {
+  const duplicate = send(backend, 'roles.create', {
     actorUserId: 'u-aina', name: 'picker', description: '',
-  }, { requestId: 'dup-role' }), backend)
+  }, { requestId: 'dup-role' })
   assert.equal(duplicate.error.message, 'Role name already exists')
-  const renameOwner = backend.context.handleRequest(request('roles.update', {
+  const renameOwner = send(backend, 'roles.update', {
     actorUserId: 'u-aina', id: 'role-owner', patch: { name: 'Super Owner' },
-  }), backend)
+  })
   assert.equal(renameOwner.error.message, 'The Owner role cannot be renamed.')
-  const deactivateOwner = backend.context.handleRequest(request('roles.setStatus', {
+  const deactivateOwner = send(backend, 'roles.setStatus', {
     actorUserId: 'u-aina', id: 'role-owner', status: 'inactive',
-  }), backend)
+  })
   assert.equal(deactivateOwner.error.message, 'You cannot deactivate this role.')
-  const reduceOwner = backend.context.handleRequest(request('roles.savePermissions', {
+  const reduceOwner = send(backend, 'roles.savePermissions', {
     actorUserId: 'u-aina', roleId: 'role-owner', permissions: { 'dashboard.view': true },
-  }), backend)
+  })
   assert.equal(reduceOwner.error.message, 'Owner always has full access. Permissions cannot be reduced.')
-  const saved = backend.context.handleRequest(request('roles.savePermissions', {
+  const saved = send(backend, 'roles.savePermissions', {
     actorUserId: 'u-aina', roleId: 'role-picker', permissions: { 'dashboard.view': true, 'users.create': false },
-  }), backend)
+  })
   assert.equal(saved.ok, true)
   assert.equal(saved.data.settings.roleMatrix['role-picker']['dashboard.view'], true)
   assert.equal(saved.data.settings.roleMatrix['role-picker']['users.create'], false)
@@ -259,39 +270,44 @@ test('roles, owner protection, and permission rows persist', () => {
   assert.equal(saved.data.userAuditLogs[0].newValue, 'ON')
   const row = backend.spreadsheet.store.RolePermissions.find((item) => item[0] === 'role-picker' && item[1] === 'dashboard.view')
   assert.equal(row[2], true)
-  const missingRole = backend.context.handleRequest(request('roles.update', {
+  const missingRole = send(backend, 'roles.update', {
     actorUserId: 'u-aina', id: 'missing', patch: { name: 'Nope' },
-  }), backend)
+  })
   assert.equal(missingRole.error.code, 'NOT_FOUND')
-  const deactivated = backend.context.handleRequest(request('roles.setStatus', {
+  const deactivated = send(backend, 'roles.setStatus', {
     actorUserId: 'u-aina', id: 'role-picker', status: 'inactive',
-  }), backend)
+  })
   assert.equal(deactivated.data.roles.find((role) => role.id === 'role-picker').status, 'inactive')
-  const ownerStill = backend.context.handleRequest(request('users.create', {
+  const ownerStill = send(backend, 'users.create', {
     actorUserId: 'u-aina', name: 'After Matrix', email: 'after@coolslurppy.my', roleId: 'role-staff', departmentId: 'dept-sales',
-  }, { requestId: 'after-matrix' }), backend)
+  }, { requestId: 'after-matrix' })
   assert.equal(ownerStill.ok, true)
 })
 
-test('settings update does not require settings.edit and keeps the permission matrix', () => {
+test('settings.update requires settings.edit and keeps the permission matrix', () => {
   const backend = ready()
-  const before = backend.spreadsheet.store.RolePermissions.length
-  const updated = backend.context.handleRequest(request('settings.update', {
+  const denied = send(backend, 'settings.update', {
     actorUserId: 'u-mei',
+    patch: { businessName: 'Cool Slurppy Updated' },
+  })
+  assert.equal(denied.error.code, 'FORBIDDEN')
+  const before = backend.spreadsheet.store.RolePermissions.length
+  const updated = send(backend, 'settings.update', {
+    actorUserId: 'u-aina',
     patch: { businessName: 'Cool Slurppy Updated', costingMethod: 'fifo', allowDiscount: false },
-  }), backend)
+  })
   assert.equal(updated.ok, true)
   assert.equal(updated.data.settings.businessName, 'Cool Slurppy Updated')
   assert.equal(updated.data.settings.costingMethod, 'fifo')
   assert.equal(updated.data.settings.allowDiscount, false)
   assert.equal(updated.data.settings.currency, 'MYR')
   assert.equal(backend.spreadsheet.store.RolePermissions.length, before)
-  const bad = backend.context.handleRequest(request('settings.update', {
-    actorUserId: 'u-mei', patch: { costingMethod: 'lifo' },
-  }, { requestId: 'bad-cost' }), backend)
+  const bad = send(backend, 'settings.update', {
+    actorUserId: 'u-aina', patch: { costingMethod: 'lifo' },
+  }, { requestId: 'bad-cost' })
   assert.equal(bad.error.code, 'VALIDATION_ERROR')
   assert.equal(bad.error.message, 'Costing method is not valid.')
-  const reread = backend.context.handleRequest(request('settings.get', {}), backend)
+  const reread = send(backend, 'settings.get', {})
   assert.equal(reread.data.settings.businessName, 'Cool Slurppy Updated')
   assert.equal(reread.data.settings.costingMethod, 'fifo')
 })
@@ -299,22 +315,22 @@ test('settings update does not require settings.edit and keeps the permission ma
 test('company logo is stored under the existing Drive root and read back as a data URL', () => {
   const backend = ready()
   const logo = `data:image/png;base64,${Buffer.from([1, 2, 3, 4]).toString('base64')}`
-  const updated = backend.context.handleRequest(request('settings.update', {
+  const updated = send(backend, 'settings.update', {
     actorUserId: 'u-aina', patch: { logoUrl: logo },
-  }), backend)
+  })
   assert.equal(updated.ok, true)
   assert.equal(updated.data.settings.logoUrl, logo)
   assert.equal(backend.spreadsheet.store.Settings[1][3], '')
   assert.ok(backend.spreadsheet.store.Settings[1][4])
   assert.deepEqual(backend.drive.created, ['CompanyLogo'])
-  const bad = backend.context.handleRequest(request('settings.update', {
+  const bad = send(backend, 'settings.update', {
     actorUserId: 'u-aina', patch: { logoUrl: 'data:text/plain;base64,QQ==' },
-  }, { requestId: 'bad-logo' }), backend)
+  }, { requestId: 'bad-logo' })
   assert.equal(bad.error.message, 'Use a PNG, JPG, WebP or SVG image.')
   const oversized = `data:image/png;base64,${Buffer.alloc(5 * 1024 * 1024 + 1).toString('base64')}`
-  const tooBig = backend.context.handleRequest(request('settings.update', {
+  const tooBig = send(backend, 'settings.update', {
     actorUserId: 'u-aina', patch: { logoUrl: oversized },
-  }, { requestId: 'big-logo' }), backend)
+  }, { requestId: 'big-logo' })
   assert.equal(tooBig.error.message, 'Logo must be 5 MB or smaller.')
 })
 
@@ -322,7 +338,7 @@ test('the same idempotency key replays a user create and does not duplicate the 
   const backend = ready()
   const body = request('users.create', {
     actorUserId: 'u-aina', id: 'u-once', name: 'Once', email: 'once@coolslurppy.my', roleId: 'role-staff', departmentId: 'dept-sales',
-  }, { idempotencyKey: 'user-once', requestId: 'once' })
+  }, { idempotencyKey: 'user-once', requestId: 'once', sessionToken: backend.sessionFor('u-aina') })
   const first = backend.context.handleRequest(body, backend)
   const second = backend.context.handleRequest(body, backend)
   assert.equal(first.ok, true)
@@ -335,7 +351,7 @@ test('the same idempotency key replays a user create and does not duplicate the 
 test('a mismatched identity header is a conflict and does not overwrite Sheet1', () => {
   const backend = app()
   backend.spreadsheet.store.Users = [['not-id']]
-  const loaded = backend.context.handleRequest(request('identity.get', {}), backend)
+  const loaded = send(backend, 'identity.get', {})
   assert.equal(loaded.error.code, 'CONFLICT')
   assert.deepEqual(backend.spreadsheet.store.Sheet1, [['']])
   assert.deepEqual(backend.spreadsheet.store.Users, [['not-id']])

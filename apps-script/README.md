@@ -20,7 +20,7 @@ system service
   -> private Drive folder id
 ```
 
-`auth/boundary.js` plus `auth.login` / `auth.logout` / `auth.session` are the AUTH-1 session boundary. `authorize().enforced` remains false until AUTH-2. A presented `sessionToken` is validated fail-closed. Missing token still allows the prototype SPA. See `auth/README.md`.
+`auth/boundary.js` plus `auth/actionPermissions.js` are the AUTH-2 server-side gate. Public actions are only `system.health`, `system.ping`, and `auth.login`. Every other dispatched action requires a valid session, an active Users-sheet principal, and an explicit ACTION_AUTHORIZATION classification. Unmapped and unknown actions fail closed. See `auth/README.md`. Do not clasp-push AUTH-2 until AUTH-4 ships a login UI.
 
 ## DEV resources
 

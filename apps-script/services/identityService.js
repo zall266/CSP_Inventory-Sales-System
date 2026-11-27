@@ -1,7 +1,7 @@
-// Module 1 identity writes. AUTH-1 still allows unauthenticated identity
-// calls when no sessionToken is sent (prototype SPA). When a session is
-// present, the router overwrites payload.actorUserId from the session.
-// AUTH-2 will require a session on every identity and business action.
+// Module 1 identity writes. AUTH-2 requires a session on every identity
+// action except the public allowlist (auth.login, system.health, system.ping).
+// The router overwrites payload.actorUserId from the session and checks
+// ACTION_AUTHORIZATION before this service runs.
 
 var IDENTITY_ACTIONS = {
   'identity.get': true,

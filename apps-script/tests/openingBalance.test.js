@@ -5,6 +5,8 @@ import {
   createFakeSpreadsheet,
   devProperties,
   loadBackend,
+  attachAuthServices,
+  seedIdentity,
 } from './harness.js'
 
 function app(lock) {
@@ -32,7 +34,7 @@ function app(lock) {
     getRoot: () => drive.getFolderById('drive-id'),
     getFileById: (id) => drive.getFileById(id),
   })
-  return {
+  return attachAuthServices({
     sheets,
     spreadsheet,
     context,
@@ -46,15 +48,22 @@ function app(lock) {
     warehouse: context.createWarehouseService({ sheetRepository: sheets }),
     boms: context.createBomService({ sheetRepository: sheets }),
     openingBalances: context.createOpeningBalanceService({ sheetRepository: sheets }),
-  }
+  })
 }
 
 function request(action, payload, extra = {}) {
-  return { v: 1, requestId: extra.requestId || action, action, payload, idempotencyKey: extra.idempotencyKey }
+  return { v: 1, requestId: extra.requestId || action, action, payload, idempotencyKey: extra.idempotencyKey, sessionToken: extra.sessionToken }
 }
 
-function call(backend, action, payload, extra) {
-  return backend.context.handleRequest(request(action, payload, extra), backend)
+function call(backend, action, payload, extra = {}) {
+  const next = { ...extra }
+  if (next.anonymous) {
+    if (next.sessionToken === undefined) next.sessionToken = ''
+  } else if (next.sessionToken === undefined) {
+    const actor = next.asUser || (payload && payload.actorUserId) || backend.defaultActorId || 'u-aina'
+    next.sessionToken = backend.sessionFor ? backend.sessionFor(actor) : ''
+  }
+  return backend.context.handleRequest(request(action, payload, next), backend)
 }
 
 let keySeq = 0
@@ -102,7 +111,7 @@ function masterPayload() {
 function ready() {
   const backend = app()
   backend.foundation.initialize()
-  assert.equal(call(backend, 'identity.bootstrap', identityPayload()).ok, true)
+  seedIdentity(backend, identityPayload())
   assert.equal(call(backend, 'masters.bootstrap', masterPayload()).ok, true)
   assert.equal(call(backend, 'products.create', {
     actorUserId: 'u-aina', id: 'prd-sugar', name: 'UAT Sugar', categoryId: 'cat-ing', unit: 'KG',

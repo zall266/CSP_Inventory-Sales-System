@@ -8,6 +8,8 @@ import {
   createFakeSpreadsheet,
   devProperties,
   loadBackend,
+  attachAuthServices,
+  seedIdentity,
 } from './harness.js'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
@@ -37,7 +39,7 @@ function app(lock) {
     getRoot: () => drive.getFolderById('drive-id'),
     getFileById: (id) => drive.getFileById(id),
   })
-  return {
+  return attachAuthServices({
     sheets,
     spreadsheet,
     context,
@@ -48,15 +50,22 @@ function app(lock) {
     masters: context.createMasterService({ sheetRepository: sheets }),
     products: context.createProductService({ sheetRepository: sheets }),
     inventory: context.createInventoryService({ sheetRepository: sheets }),
-  }
+  })
 }
 
 function request(action, payload, extra = {}) {
-  return { v: 1, requestId: extra.requestId || action, action, payload, idempotencyKey: extra.idempotencyKey }
+  return { v: 1, requestId: extra.requestId || action, action, payload, idempotencyKey: extra.idempotencyKey, sessionToken: extra.sessionToken }
 }
 
-function call(backend, action, payload, extra) {
-  return backend.context.handleRequest(request(action, payload, extra), backend)
+function call(backend, action, payload, extra = {}) {
+  const next = { ...extra }
+  if (next.anonymous) {
+    if (next.sessionToken === undefined) next.sessionToken = ''
+  } else if (next.sessionToken === undefined) {
+    const actor = next.asUser || (payload && payload.actorUserId) || backend.defaultActorId || 'u-aina'
+    next.sessionToken = backend.sessionFor ? backend.sessionFor(actor) : ''
+  }
+  return backend.context.handleRequest(request(action, payload, next), backend)
 }
 
 let keySeq = 0
@@ -104,7 +113,7 @@ function masterPayload() {
 function ready() {
   const backend = app()
   backend.foundation.initialize()
-  assert.equal(call(backend, 'identity.bootstrap', identityPayload()).ok, true)
+  seedIdentity(backend, identityPayload())
   assert.equal(call(backend, 'masters.bootstrap', masterPayload()).ok, true)
   assert.equal(call(backend, 'products.create', {
     actorUserId: 'u-mei', id: 'prd-sugar', name: 'UAT Sugar', categoryId: 'cat-ing', unit: 'KG',
@@ -150,11 +159,11 @@ test('reads, adjustment, shortage, permissions, audit, and balance stay consiste
     actorUserId: 'u-mei', warehouseId: 'wh-main', productId: 'prd-sugar', type: 'increase', qty: 5, reason: 'Found stock',
   })
   assert.equal(denied.error.code, 'FORBIDDEN')
-  assert.equal(denied.error.message, 'You cannot adjust stock.')
+  assert.equal(denied.error.message, 'You do not have permission.')
   const inactive = post(backend, 'inventory.adjust', {
     actorUserId: 'u-off', warehouseId: 'wh-main', productId: 'prd-sugar', type: 'increase', qty: 5, reason: 'Found stock',
   })
-  assert.equal(inactive.error.code, 'FORBIDDEN')
+  assert.equal(inactive.error.code, 'UNAUTHORIZED')
   const missingKey = call(backend, 'inventory.adjust', {
     actorUserId: 'u-aina', warehouseId: 'wh-main', productId: 'prd-sugar', type: 'increase', qty: 5, reason: 'Found stock',
   })
@@ -246,7 +255,7 @@ test('the same idempotency key posts one adjustment and a lock refusal writes no
     return true
   })
   locked.foundation.initialize()
-  assert.equal(call(locked, 'identity.bootstrap', identityPayload()).ok, true)
+  seedIdentity(locked, identityPayload())
   assert.equal(call(locked, 'masters.bootstrap', masterPayload()).ok, true)
   assert.equal(call(locked, 'products.create', {
     actorUserId: 'u-aina', id: 'prd-sugar', name: 'UAT Sugar', categoryId: 'cat-ing', unit: 'KG',
@@ -273,7 +282,7 @@ test('transfer is one atomic pair and sequential outs cannot both spend the same
   const denied = post(backend, 'inventory.transfer', {
     actorUserId: 'u-mei', fromWarehouseId: 'wh-main', toWarehouseId: 'wh-outlet', productId: 'prd-sugar', qty: 20,
   })
-  assert.equal(denied.error.message, 'You cannot transfer stock.')
+  assert.equal(denied.error.message, 'You do not have permission.')
   const badDest = post(backend, 'inventory.transfer', {
     actorUserId: 'u-aina', fromWarehouseId: 'wh-main', toWarehouseId: 'wh-missing', productId: 'prd-sugar', qty: 20,
   })
@@ -328,7 +337,7 @@ test('negative stock follows the inventory setting and usage posts stock out', (
   const staffUsage = post(backend, 'inventory.usage', {
     actorUserId: 'u-mei', warehouseId: 'wh-main', productId: 'prd-sugar', qty: 1, reason: 'Sample',
   })
-  assert.equal(staffUsage.error.message, 'You cannot record stock usage.')
+  assert.equal(staffUsage.error.message, 'You do not have permission.')
   assert.equal(call(backend, 'products.setStatus', { actorUserId: 'u-aina', id: 'prd-sugar', status: 'inactive' }).ok, true)
   const inactiveProduct = post(backend, 'inventory.usage', {
     actorUserId: 'u-aina', warehouseId: 'wh-main', productId: 'prd-sugar', qty: 1, reason: 'Sample', date: '2026-10-04',
@@ -361,7 +370,7 @@ test('stock count posts the difference once and a rejected count does not audit'
   const denied = post(backend, 'inventory.count', {
     actorUserId: 'u-mei', warehouseId: 'wh-main', counts: [{ productId: 'prd-sugar', countedQty: 7 }],
   })
-  assert.equal(denied.error.message, 'You cannot complete a stock count.')
+  assert.equal(denied.error.message, 'You do not have permission.')
   const broken = post(backend, 'inventory.count', {
     actorUserId: 'u-aina', warehouseId: 'wh-main', counts: [
       { productId: 'prd-sugar', countedQty: 7 },

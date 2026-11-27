@@ -5,6 +5,8 @@ import {
   createFakeSpreadsheet,
   devProperties,
   loadBackend,
+  attachAuthServices,
+  seedIdentity,
 } from './harness.js'
 
 function app(lock) {
@@ -32,7 +34,7 @@ function app(lock) {
     getRoot: () => drive.getFolderById('drive-id'),
     getFileById: (id) => drive.getFileById(id),
   })
-  return {
+  return attachAuthServices({
     sheets,
     spreadsheet,
     context,
@@ -44,15 +46,22 @@ function app(lock) {
     products: context.createProductService({ sheetRepository: sheets }),
     inventory: context.createInventoryService({ sheetRepository: sheets }),
     boms: context.createBomService({ sheetRepository: sheets }),
-  }
+  })
 }
 
 function request(action, payload, extra = {}) {
-  return { v: 1, requestId: extra.requestId || action, action, payload, idempotencyKey: extra.idempotencyKey }
+  return { v: 1, requestId: extra.requestId || action, action, payload, idempotencyKey: extra.idempotencyKey, sessionToken: extra.sessionToken }
 }
 
-function call(backend, action, payload, extra) {
-  return backend.context.handleRequest(request(action, payload, extra), backend)
+function call(backend, action, payload, extra = {}) {
+  const next = { ...extra }
+  if (next.anonymous) {
+    if (next.sessionToken === undefined) next.sessionToken = ''
+  } else if (next.sessionToken === undefined) {
+    const actor = next.asUser || (payload && payload.actorUserId) || backend.defaultActorId || 'u-aina'
+    next.sessionToken = backend.sessionFor ? backend.sessionFor(actor) : ''
+  }
+  return backend.context.handleRequest(request(action, payload, next), backend)
 }
 
 let keySeq = 0
@@ -67,7 +76,7 @@ function post(backend, action, payload, extra = {}) {
 function ready() {
   const backend = app()
   backend.foundation.initialize()
-  assert.equal(call(backend, 'identity.bootstrap', {
+  seedIdentity(backend, {
     departments: [{ id: 'dept-sales', name: 'Sales', status: 'active' }],
     roles: [
       { id: 'role-owner', name: 'Owner', description: 'Full system access. Protected account.', status: 'active', protected: true, legacyRole: 'owner' },
@@ -87,7 +96,7 @@ function ready() {
       allowReturns: true, enabledPaymentMethods: ['cash'], roleMatrix: {},
     },
     userAuditLogs: [],
-  }).ok, true)
+  })
   assert.equal(call(backend, 'masters.bootstrap', {
     warehouses: [{ id: 'wh-main', name: 'Main Warehouse', code: 'MAIN', kind: 'company' }],
     categories: [{ id: 'cat-ing', name: 'Ingredients' }],
@@ -135,9 +144,14 @@ test('health does not create BOM sheets and Sheet1 stays reserved', () => {
 
 test('BOM list is permissioned and bootstrap is idempotent', () => {
   const backend = ready()
-  const denied = call(backend, 'boms.list', { actorUserId: 'u-mei' })
+  const listed = call(backend, 'boms.list', { actorUserId: 'u-mei' })
+  assert.equal(listed.ok, false)
+  assert.equal(listed.error.code, 'FORBIDDEN')
+  const allowed = call(backend, 'boms.list', { actorUserId: 'u-aina' })
+  assert.equal(allowed.ok, true)
+  const denied = call(backend, 'boms.list', { actorUserId: 'u-mei' }, { anonymous: true })
   assert.equal(denied.ok, false)
-  assert.equal(denied.error.code, 'FORBIDDEN')
+  assert.equal(denied.error.code, 'UNAUTHORIZED')
   const inactive = call(backend, 'boms.list', { actorUserId: 'u-off' })
   assert.equal(inactive.ok, false)
   const first = call(backend, 'boms.bootstrap', { actorUserId: 'u-aina' })

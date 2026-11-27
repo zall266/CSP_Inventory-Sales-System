@@ -8,6 +8,8 @@ import {
   createFakeSpreadsheet,
   devProperties,
   loadBackend,
+  attachAuthServices,
+  seedIdentity,
 } from './harness.js'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
@@ -37,7 +39,7 @@ function app() {
     getRoot: () => drive.getFolderById('drive-id'),
     getFileById: (id) => drive.getFileById(id),
   })
-  return {
+  return attachAuthServices({
     sheets,
     spreadsheet,
     context,
@@ -46,15 +48,22 @@ function app() {
     foundation: context.createFoundationService(sheets),
     identity: context.createIdentityService({ sheetRepository: sheets, driveStorage }),
     masters: context.createMasterService({ sheetRepository: sheets }),
-  }
+  })
 }
 
 function request(action, payload, extra = {}) {
-  return { v: 1, requestId: extra.requestId || action, action, payload, idempotencyKey: extra.idempotencyKey }
+  return { v: 1, requestId: extra.requestId || action, action, payload, idempotencyKey: extra.idempotencyKey, sessionToken: extra.sessionToken }
 }
 
-function call(backend, action, payload, extra) {
-  return backend.context.handleRequest(request(action, payload, extra), backend)
+function call(backend, action, payload, extra = {}) {
+  const next = { ...extra }
+  if (next.anonymous) {
+    if (next.sessionToken === undefined) next.sessionToken = ''
+  } else if (next.sessionToken === undefined) {
+    const actor = next.asUser || (payload && payload.actorUserId) || backend.defaultActorId || 'u-aina'
+    next.sessionToken = backend.sessionFor ? backend.sessionFor(actor) : ''
+  }
+  return backend.context.handleRequest(request(action, payload, next), backend)
 }
 
 function identityPayload() {
@@ -98,7 +107,7 @@ function masterPayload() {
 function ready() {
   const backend = app()
   backend.foundation.initialize()
-  assert.equal(call(backend, 'identity.bootstrap', identityPayload()).ok, true)
+  seedIdentity(backend, identityPayload())
   assert.equal(call(backend, 'masters.bootstrap', masterPayload()).ok, true)
   return backend
 }
@@ -152,10 +161,10 @@ function listedUsers(backend) {
 
 test('category create, duplicate, and rename persist one audit each', () => {
   const backend = ready()
-  const denied = call(backend, 'categories.create', { name: 'Syrup' })
-  assert.equal(denied.error.code, 'FORBIDDEN')
+  const denied = call(backend, 'categories.create', { name: 'Syrup' }, { anonymous: true })
+  assert.equal(denied.error.code, 'UNAUTHORIZED')
   const inactive = call(backend, 'categories.create', { actorUserId: 'u-off', id: 'cat-syrup', name: 'Syrup' })
-  assert.equal(inactive.error.code, 'FORBIDDEN')
+  assert.equal(inactive.error.code, 'UNAUTHORIZED')
   const created = call(backend, 'categories.create', { actorUserId: 'u-mei', id: 'cat-syrup', name: 'Syrup' })
   assert.equal(created.ok, true)
   assert.equal(created.data.categories.some((item) => item.name === 'Syrup'), true)
@@ -186,7 +195,7 @@ test('category create, duplicate, and rename persist one audit each', () => {
 test('invalid warehouse bootstrap does not create a row', () => {
   const backend = app()
   backend.foundation.initialize()
-  assert.equal(call(backend, 'identity.bootstrap', identityPayload()).ok, true)
+  seedIdentity(backend, identityPayload())
   const bad = call(backend, 'masters.bootstrap', {
     warehouses: [{ id: 'wh-main', name: 'Main Warehouse', code: 'MAIN', kind: 'store' }],
     categories: [{ id: 'cat-air', name: 'Air Balang' }],

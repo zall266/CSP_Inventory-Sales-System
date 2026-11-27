@@ -16,7 +16,7 @@ Envelope field `sessionToken` (not `payload`). Actions:
 
 `issueCredential`, `rotateCredential`, `readCredentials`, and sheet hashes are **not** HTTP actions.
 
-A missing `sessionToken` still yields an unauthenticated principal so the prototype SPA keeps working. AUTH-2 will require a session on every business action, including reads, exports, images, and Drive files. A **presented** invalid, expired, idle, or revoked token fails closed on every action except `auth.login`, `system.health`, and `system.ping`.
+AUTH-2 requires a session on every non-public action, including reads, exports, images, and Drive files. Missing, invalid, expired, idle, or revoked tokens fail closed except on the public allowlist: `auth.login`, `system.health`, and `system.ping`. `auth.logout` and `auth.session` require a valid session. Future `auth.register` / `auth.forgotPassword` / `auth.bootstrapOwner` actions are not public.
 
 When a session is valid, the router overwrites `payload.actorUserId` from the session. Client role, department, and permissions are never read for authentication.
 
@@ -126,6 +126,28 @@ A wipe of **both** Script Properties **and** the AuthCredentials / AuthSessions 
 4. Existing credential hashes become unverifiable (HMAC key changed). Re-issue every staff credential.
 5. Session token hashes are SHA-256 of the opaque token and are not peppered. Revoke sessions after rotation.
 6. Old plaintext secrets must be treated as compromised if the old pepper leaked.
+
+## AUTH-2 authorization gate
+
+The router classifies every dispatched action in `auth/actionPermissions.js`. Unlisted actions are rejected. Public access is never inferred from an action-name prefix.
+
+| Classification | Meaning |
+| --- | --- |
+| public | `system.health`, `system.ping`, `auth.login` only |
+| authenticated | Valid session, active user. Used where the existing service only required a known actor (product/category/customer/supplier writes, master reads). |
+| permission | At least one existing catalog key from `permissionCatalog.js` |
+| owner | Bootstrap/seed only: `identity.bootstrap`, `masters.bootstrap`, `products.bootstrap`, `parties.bootstrap`, `warehouse.bootstrap`, `boms.bootstrap` |
+| disabled | None in AUTH-2 |
+
+The session is the only identity source. The router overwrites `payload.actorUserId` and ignores client `role`, `roleId` (as actor role), `departmentId`, `permissions`, and `isOwner`. Target `roleId` on `users.create` is still a field of the new user and is authorized with `users.create` plus `canAssignRole`.
+
+Inactive, pending, rejected, or missing users cannot keep using a previously issued session.
+
+Initialization: anonymous bootstrap is rejected. Owner-only bootstrap remains available so tests and a signed-in Owner can seed empty DEV sheets. It cannot run twice on already-initialized data. Owner bootstrap UI and first-user HTTP registration belong to AUTH-3. Seed names such as Aina Rahman do not become authenticated users until AUTH-3 issues credentials.
+
+## Login abuse protection
+
+`AuthLoginAttempts` stores SHA-256 of the normalized email, a failed-count window (15 minutes), and a cooldown (1–15 minutes, doubling after the 5th failure). Rows are pruned to 200 / 24 hours. Messages stay generic (`Email or password is incorrect.`). Plaintext email and password are not stored. Apps Script does not provide a trustworthy client IP, so throttling is per email hash only. Concurrent updates use the existing script lock. This is not an account lockout: a successful login after cooldown clears the row.
 
 ## Residual Apps Script limits
 
