@@ -23,6 +23,9 @@ function identityPayload() {
       { id: 'role-staff', name: 'Staff', description: 'Staff', status: 'active', protected: false, legacyRole: 'staff' },
       { id: 'role-cashier', name: 'Cashier', description: 'Cashier', status: 'active', protected: false, legacyRole: 'cashier' },
       { id: 'role-warehouse', name: 'Warehouse', description: 'Warehouse', status: 'active', protected: false, legacyRole: 'warehouse' },
+      { id: 'role-settings-only', name: 'Settings Only', description: 'settings.view only', status: 'active', protected: false, legacyRole: 'staff' },
+      { id: 'role-users-only', name: 'Users Only', description: 'users.view only', status: 'active', protected: false, legacyRole: 'staff' },
+      { id: 'role-roles-only', name: 'Roles Only', description: 'roles.view only', status: 'active', protected: false, legacyRole: 'staff' },
     ],
     users: [
       { id: 'u-owner', name: 'Owner', email: 'owner@coolslurppy.my', roleId: 'role-owner', departmentId: 'dept-management', status: 'active' },
@@ -32,11 +35,14 @@ function identityPayload() {
       { id: 'u-cashier', name: 'Cashier', email: 'cashier@coolslurppy.my', roleId: 'role-cashier', departmentId: 'dept-sales', status: 'active' },
       { id: 'u-warehouse', name: 'Warehouse', email: 'wh@coolslurppy.my', roleId: 'role-warehouse', departmentId: 'dept-sales', status: 'active' },
       { id: 'u-inactive', name: 'Inactive', email: 'inactive@coolslurppy.my', roleId: 'role-staff', departmentId: 'dept-sales', status: 'inactive' },
+      { id: 'u-settings-only', name: 'Settings Only', email: 'settings-only@coolslurppy.my', roleId: 'role-settings-only', departmentId: 'dept-management', status: 'active' },
+      { id: 'u-users-only', name: 'Users Only', email: 'users-only@coolslurppy.my', roleId: 'role-users-only', departmentId: 'dept-management', status: 'active' },
+      { id: 'u-roles-only', name: 'Roles Only', email: 'roles-only@coolslurppy.my', roleId: 'role-roles-only', departmentId: 'dept-management', status: 'active' },
     ],
     settings: {
       businessName: 'Cool Slurppy', legalName: 'Cool Slurppy Sdn Bhd', logoUrl: '', phone: '03',
-      email: 'hello@coolslurppy.my', address: 'KL', website: '', registrationNo: '', bankName: '',
-      bankAccount: '', paymentTerms: 'Net 7 days', documentTerms: 'Terms', currency: 'MYR',
+      email: 'hello@coolslurppy.my', address: 'KL', website: '', registrationNo: '123456-A', bankName: 'Maybank',
+      bankAccount: '1234567890', paymentTerms: 'Net 7 days', documentTerms: 'Terms', currency: 'MYR',
       defaultWarehouseId: 'wh-main', allowNegativeStock: false, costingMethod: 'average',
       batchTracking: true, expiryTracking: true, defaultCustomerId: 'c-walkin', allowDiscount: true,
       allowReturns: true, enabledPaymentMethods: ['cash'], roleMatrix: {},
@@ -49,9 +55,10 @@ function app(options = {}) {
   let current = options.nowMs ?? Date.parse('2026-04-01T00:00:00.000Z')
   const spreadsheet = createFakeSpreadsheet()
   const drive = createFakeDrive('drive-id')
+  const lockEvents = options.lockEvents || []
   const context = loadBackend({
     PropertiesService: { getScriptProperties: () => options.properties || authDevProperties() },
-    LockService: createNonReentrantScriptLock({ events: [], state: { held: false } }),
+    LockService: createNonReentrantScriptLock({ events: lockEvents, state: options.lockState || { held: false } }),
     SpreadsheetApp: { openById: () => spreadsheet },
     DriveApp: drive,
     ContentService: {
@@ -110,8 +117,19 @@ function call(backend, action, payload, extra = {}) {
   return backend.context.handleRequest(request(action, payload, next), backend)
 }
 
-function ready() {
-  const backend = app()
+function grantOnly(backend, roleId, keys) {
+  const allowed = new Set(keys)
+  const header = backend.spreadsheet.store.RolePermissions[0]
+  const kept = backend.spreadsheet.store.RolePermissions.filter((row, index) => index === 0 || row[0] !== roleId)
+  backend.context.PERMISSION_KEYS.forEach((key) => {
+    kept.push([roleId, key, allowed.has(key)])
+  })
+  kept[0] = header
+  backend.spreadsheet.store.RolePermissions = kept
+}
+
+function ready(options = {}) {
+  const backend = app(options)
   backend.foundation.initialize()
   const payload = identityPayload()
   const matrix = {}
@@ -120,6 +138,9 @@ function ready() {
   }
   payload.settings.roleMatrix = matrix
   seedIdentity(backend, payload)
+  grantOnly(backend, 'role-settings-only', ['settings.view'])
+  grantOnly(backend, 'role-users-only', ['users.view'])
+  grantOnly(backend, 'role-roles-only', ['roles.view'])
   return backend
 }
 
@@ -308,4 +329,106 @@ test('public future auth actions are not inferred from the auth. prefix', () => 
   assert.equal(register.error.code, 'UNAUTHORIZED')
   const owner = call(backend, 'auth.register', { email: 'x@y.z' }, { asUser: 'u-owner' })
   assert.equal(owner.error.code, 'UNKNOWN_ACTION')
+})
+
+test('identity.get redacts users, roles, and bank details by permission', () => {
+  const backend = ready()
+  const owner = call(backend, 'identity.get', {}, { asUser: 'u-owner' })
+  assert.equal(owner.ok, true, owner.error && owner.error.message)
+  assert.ok(owner.data.users.some((user) => user.id === 'u-staff'))
+  assert.ok(owner.data.roles.some((role) => role.id === 'role-cashier'))
+  assert.equal(owner.data.settings.bankName, 'Maybank')
+  assert.equal(owner.data.settings.bankAccount, '1234567890')
+  assert.ok(owner.data.settings.roleMatrix['role-staff'])
+
+  const settingsOnly = call(backend, 'identity.get', {}, { asUser: 'u-settings-only' })
+  assert.equal(settingsOnly.ok, true, settingsOnly.error && settingsOnly.error.message)
+  assert.deepEqual(settingsOnly.data.users.map((user) => user.id), ['u-settings-only'])
+  assert.deepEqual(settingsOnly.data.roles.map((role) => role.id), ['role-settings-only'])
+  assert.equal(settingsOnly.data.settings.bankName, 'Maybank')
+  assert.equal(settingsOnly.data.settings.bankAccount, '1234567890')
+  assert.equal(settingsOnly.data.settings.roleMatrix['role-staff'], undefined)
+  assert.equal(settingsOnly.data.settings.roleMatrix['role-owner'], undefined)
+  assert.ok(settingsOnly.data.settings.roleMatrix['role-settings-only'])
+  assert.equal(settingsOnly.data.userAuditLogs.length, 0)
+  assert.equal(call(backend, 'users.list', {}, { asUser: 'u-settings-only' }).error.code, 'FORBIDDEN')
+
+  const usersOnly = call(backend, 'identity.get', {}, { asUser: 'u-users-only' })
+  assert.equal(usersOnly.ok, true, usersOnly.error && usersOnly.error.message)
+  assert.ok(usersOnly.data.users.some((user) => user.id === 'u-owner'))
+  assert.ok(usersOnly.data.users.some((user) => user.id === 'u-staff'))
+  assert.equal(usersOnly.data.settings.bankName, '')
+  assert.equal(usersOnly.data.settings.bankAccount, '')
+  assert.equal(usersOnly.data.settings.businessName, 'Cool Slurppy')
+  assert.equal(usersOnly.data.settings.roleMatrix['role-staff'], undefined)
+  assert.ok(usersOnly.data.settings.roleMatrix['role-users-only'])
+  assert.ok(usersOnly.data.roles.some((role) => role.id === 'role-owner'))
+
+  const rolesOnly = call(backend, 'identity.get', {}, { asUser: 'u-roles-only' })
+  assert.equal(rolesOnly.ok, true, rolesOnly.error && rolesOnly.error.message)
+  assert.deepEqual(rolesOnly.data.users.map((user) => user.id), ['u-roles-only'])
+  assert.ok(rolesOnly.data.roles.some((role) => role.id === 'role-owner'))
+  assert.ok(rolesOnly.data.settings.roleMatrix['role-staff'])
+  assert.equal(rolesOnly.data.settings.bankName, '')
+  assert.equal(rolesOnly.data.settings.bankAccount, '')
+  assert.equal(call(backend, 'settings.get', {}, { asUser: 'u-roles-only' }).error.code, 'FORBIDDEN')
+})
+
+test('active users may perform existing session-only product, category, and party writes', () => {
+  const backend = ready()
+  assert.equal(call(backend, 'masters.bootstrap', {
+    warehouses: [{ id: 'wh-main', name: 'Main Warehouse', code: 'MAIN', kind: 'company' }],
+    categories: [{ id: 'cat-seed', name: 'Seed' }],
+  }, { asUser: 'u-owner' }).ok, true)
+  const category = call(backend, 'categories.create', {
+    id: 'cat-ing', name: 'Ingredients',
+  }, { asUser: 'u-cashier' })
+  assert.equal(category.ok, true, category.error && category.error.message)
+  const renamed = call(backend, 'categories.rename', {
+    id: 'cat-ing', name: 'Raw Ingredients',
+  }, { asUser: 'u-warehouse' })
+  assert.equal(renamed.ok, true, renamed.error && renamed.error.message)
+
+  const cashierProduct = call(backend, 'products.create', {
+    id: 'prd-cashier', name: 'Cashier Mix', sku: 'CASH-1', categoryId: 'cat-ing',
+    unit: 'KG', purchaseUnit: 'KG', purchaseConversionQty: 1, purchaseCost: 1, sellingPrice: 2,
+  }, { asUser: 'u-cashier' })
+  assert.equal(cashierProduct.ok, true, cashierProduct.error && cashierProduct.error.message)
+  const warehouseEdit = call(backend, 'products.update', {
+    id: 'prd-cashier', name: 'Warehouse Mix',
+  }, { asUser: 'u-warehouse' })
+  assert.equal(warehouseEdit.ok, true, warehouseEdit.error && warehouseEdit.error.message)
+  const staffStatus = call(backend, 'products.setStatus', {
+    id: 'prd-cashier', status: 'inactive',
+  }, { asUser: 'u-staff' })
+  assert.equal(staffStatus.ok, true, staffStatus.error && staffStatus.error.message)
+
+  const customer = call(backend, 'customers.create', {
+    id: 'cus-staff', name: 'Walk-in Extra',
+  }, { asUser: 'u-staff' })
+  assert.equal(customer.ok, true, customer.error && customer.error.message)
+  const supplier = call(backend, 'suppliers.create', {
+    id: 'sup-cashier', name: 'Cashier Supplier',
+  }, { asUser: 'u-cashier' })
+  assert.equal(supplier.ok, true, supplier.error && supplier.error.message)
+  assert.equal(call(backend, 'users.create', {
+    name: 'Nope', email: 'nope2@coolslurppy.my', roleId: 'role-staff', departmentId: 'dept-sales',
+  }, { asUser: 'u-cashier' }).error.code, 'FORBIDDEN')
+})
+
+test('login holds one script lock across throttle check and failure recording', () => {
+  const lockEvents = []
+  const backend = ready({ lockEvents })
+  backend.authStore.issueCredential({
+    userId: 'u-owner',
+    username: 'owner@coolslurppy.my',
+    createdBy: 'setup',
+  })
+  lockEvents.length = 0
+  const fail = call(backend, 'auth.login', {
+    email: 'owner@coolslurppy.my', password: 'ffff'.repeat(16),
+  }, { anonymous: true })
+  assert.equal(fail.error.code, 'UNAUTHORIZED')
+  assert.equal(lockEvents.filter((event) => event === 'acquired').length, 1)
+  assert.equal(lockEvents.includes('nested-rejected'), false)
 })

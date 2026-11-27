@@ -76,8 +76,8 @@ function settings() {
     address: 'KL',
     website: '',
     registrationNo: '',
-    bankName: '',
-    bankAccount: '',
+    bankName: 'Maybank',
+    bankAccount: '1234567890',
     paymentTerms: 'Net 7 days',
     documentTerms: 'Terms',
     currency: 'MYR',
@@ -155,6 +155,12 @@ test('bootstrap persists identity once and rejects a second copy', () => {
   assert.equal(loaded.data.users[0].email, 'aina@coolslurppy.my')
   assert.equal(loaded.data.users[0].role, 'owner')
   assert.equal(loaded.data.departments.length, 2)
+  assert.equal(loaded.data.settings.bankAccount, '1234567890')
+  const staff = send(backend, 'identity.get', { actorUserId: 'u-mei' }, { asUser: 'u-mei' })
+  assert.equal(staff.ok, true)
+  assert.deepEqual(staff.data.users.map((user) => user.id), ['u-mei'])
+  assert.equal(staff.data.settings.bankAccount, '')
+  assert.equal(staff.data.settings.bankName, '')
 })
 
 test('owner keeps full access and staff cannot create a user', () => {

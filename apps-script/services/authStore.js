@@ -376,6 +376,10 @@ function createAuthStore(dependencies) {
       var now = stamp();
       var records = pruneLoginAttempts(repo.readLoginAttempts(spreadsheet), nowMs);
       var row = findAttempt(records, hash);
+      var until = row ? parseMillis(row.cooldownUntil) : 0;
+      if (until && nowMs < until) {
+        return { throttled: true, failedCount: Number(row.failedCount || 0) };
+      }
       var windowStart = row ? parseMillis(row.windowStartedAt) : 0;
       var count = row ? Number(row.failedCount || 0) : 0;
       if (!windowStart || (nowMs - windowStart) > AUTH_LOGIN_WINDOW_MS) {

@@ -124,47 +124,49 @@ function createAuthService(deps) {
   }
 
   function login(request) {
-    var payload = request && request.payload ? request.payload : {};
-    var requestId = request && request.requestId ? String(request.requestId) : '';
-    var email = text(payload.email || payload.username).trim().toLowerCase();
-    var password = payload.password === undefined || payload.password === null ? '' : String(payload.password);
-    var spreadsheet = open();
-    authStore.ensureSheets();
-    var snapshot = identityRepo.load(spreadsheet);
-    if (!email || !password) {
-      if (email) authStore.recordLoginFailure(email);
-      loginFailed(spreadsheet, requestId, '');
-    }
-    if (authStore.isLoginThrottled(email)) {
-      loginFailed(spreadsheet, requestId, '');
-    }
-    var user = findUserByEmail(snapshot, email);
-    if (!user || text(user.status).trim() !== 'active') {
-      authStore.recordLoginFailure(email);
-      loginFailed(spreadsheet, requestId, user ? user.id : '');
-    }
-    var verified;
-    try {
-      verified = authStore.verifyCredential(email, password);
-    } catch (error) {
-      if (error && error.expose && (error.code === 'CONFLICT' || error.code === 'INTERNAL_ERROR')) throw error;
-      authStore.recordLoginFailure(email);
-      loginFailed(spreadsheet, requestId, user.id);
-    }
-    if (!verified || !verified.ok || verified.userId !== user.id) {
-      authStore.recordLoginFailure(email);
-      loginFailed(spreadsheet, requestId, user.id);
-    }
-    authStore.clearLoginFailures(email);
-    var issued = authStore.issueSession({ userId: user.id });
-    recordEvent(spreadsheet, 'login_ok', user.id, user.id, requestId);
-    return okEnvelope({
-      token: issued.token,
-      sessionId: issued.record.id,
-      expiresAt: issued.record.expiresAt,
-      idleExpiresAt: issued.record.idleExpiresAt,
-      user: publicUser(user)
-    }, { requestId: requestId });
+    return withScriptLock(function () {
+      var payload = request && request.payload ? request.payload : {};
+      var requestId = request && request.requestId ? String(request.requestId) : '';
+      var email = text(payload.email || payload.username).trim().toLowerCase();
+      var password = payload.password === undefined || payload.password === null ? '' : String(payload.password);
+      var spreadsheet = open();
+      authStore.ensureSheets();
+      var snapshot = identityRepo.load(spreadsheet);
+      if (!email || !password) {
+        if (email) authStore.recordLoginFailure(email);
+        loginFailed(spreadsheet, requestId, '');
+      }
+      if (authStore.isLoginThrottled(email)) {
+        loginFailed(spreadsheet, requestId, '');
+      }
+      var user = findUserByEmail(snapshot, email);
+      if (!user || text(user.status).trim() !== 'active') {
+        authStore.recordLoginFailure(email);
+        loginFailed(spreadsheet, requestId, user ? user.id : '');
+      }
+      var verified;
+      try {
+        verified = authStore.verifyCredential(email, password);
+      } catch (error) {
+        if (error && error.expose && (error.code === 'CONFLICT' || error.code === 'INTERNAL_ERROR')) throw error;
+        authStore.recordLoginFailure(email);
+        loginFailed(spreadsheet, requestId, user.id);
+      }
+      if (!verified || !verified.ok || verified.userId !== user.id) {
+        authStore.recordLoginFailure(email);
+        loginFailed(spreadsheet, requestId, user.id);
+      }
+      authStore.clearLoginFailures(email);
+      var issued = authStore.issueSession({ userId: user.id });
+      recordEvent(spreadsheet, 'login_ok', user.id, user.id, requestId);
+      return okEnvelope({
+        token: issued.token,
+        sessionId: issued.record.id,
+        expiresAt: issued.record.expiresAt,
+        idleExpiresAt: issued.record.idleExpiresAt,
+        user: publicUser(user)
+      }, { requestId: requestId });
+    });
   }
 
   function logout(request, principal) {

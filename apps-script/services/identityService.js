@@ -1,5 +1,7 @@
 // Module 1 identity writes. AUTH-2 requires a session on every identity
 // action except the public allowlist (auth.login, system.health, system.ping).
+// identity.get is filtered: users.view, roles.view, and settings.view each
+// unlock only their slice. Bank details stay behind settings.view.
 // The router overwrites payload.actorUserId from the session and checks
 // ACTION_AUTHORIZATION before this service runs.
 
@@ -586,6 +588,55 @@ function createIdentityService(deps) {
     return load(spreadsheet);
   }
 
+  function actorMay(snapshot, actor, key) {
+    return hasPermission(snapshot, key, actor);
+  }
+
+  function presentSettings(snapshot, actor) {
+    var source = snapshot.settings;
+    if (!source) return null;
+    var settings = JSON.parse(JSON.stringify(source));
+    var seeSettings = isOwnerUser(snapshot, actor) || actorMay(snapshot, actor, 'settings.view');
+    var seeRoleAdmin = isOwnerUser(snapshot, actor)
+      || actorMay(snapshot, actor, 'roles.view')
+      || actorMay(snapshot, actor, 'roles.permissions.manage');
+    if (!seeSettings) {
+      settings.bankName = '';
+      settings.bankAccount = '';
+    }
+    if (!seeRoleAdmin) {
+      var own = {};
+      if (actor.roleId && settings.roleMatrix && settings.roleMatrix[actor.roleId]) {
+        own[actor.roleId] = settings.roleMatrix[actor.roleId];
+      }
+      settings.roleMatrix = own;
+    }
+    return settings;
+  }
+
+  function presentIdentity(snapshot, actor) {
+    var seeUsers = isOwnerUser(snapshot, actor) || actorMay(snapshot, actor, 'users.view');
+    var seeRoles = isOwnerUser(snapshot, actor) || actorMay(snapshot, actor, 'roles.view');
+    var users = seeUsers
+      ? snapshot.users.slice()
+      : snapshot.users.filter(function (user) { return user.id === actor.id; });
+    var roles = seeRoles || seeUsers
+      ? snapshot.roles.slice()
+      : snapshot.roles.filter(function (role) { return role.id === actor.roleId; });
+    var departments = seeUsers
+      ? snapshot.departments.slice()
+      : snapshot.departments.filter(function (dept) { return dept.id === actor.departmentId; });
+    var logs = (seeUsers || seeRoles) ? (snapshot.userAuditLogs || []).slice() : [];
+    return {
+      empty: snapshot.empty,
+      users: users,
+      roles: roles,
+      departments: departments,
+      settings: presentSettings(snapshot, actor),
+      userAuditLogs: logs
+    };
+  }
+
   function updateSettings(spreadsheet, payload, requestId) {
     var snapshot = requireReady(load(spreadsheet));
     var actor = knownUser(snapshot, payload.actorUserId, 'You cannot edit settings.');
@@ -609,8 +660,17 @@ function createIdentityService(deps) {
     var payload = request.payload;
     var requestId = request.requestId ? String(request.requestId) : '';
     return locked(function (spreadsheet) {
-      if (action === 'identity.get') return okEnvelope(load(spreadsheet));
-      if (action === 'settings.get') return okEnvelope({ settings: load(spreadsheet).settings });
+      if (action === 'identity.get') {
+        var identitySnapshot = load(spreadsheet);
+        if (identitySnapshot.empty) return okEnvelope(identitySnapshot);
+        var identityActor = requireActor(identitySnapshot, payload.actorUserId, 'You cannot view identity.');
+        return okEnvelope(presentIdentity(identitySnapshot, identityActor));
+      }
+      if (action === 'settings.get') {
+        var settingsSnapshot = requireReady(load(spreadsheet));
+        var settingsActor = requireActor(settingsSnapshot, payload.actorUserId, 'You cannot view settings.');
+        return okEnvelope({ settings: presentSettings(settingsSnapshot, settingsActor) });
+      }
       if (action === 'users.list') return okEnvelope({ users: load(spreadsheet).users });
       var result;
       if (action === 'identity.bootstrap') result = bootstrap(spreadsheet, payload, requestId);

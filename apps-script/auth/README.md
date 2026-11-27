@@ -141,13 +141,36 @@ The router classifies every dispatched action in `auth/actionPermissions.js`. Un
 
 The session is the only identity source. The router overwrites `payload.actorUserId` and ignores client `role`, `roleId` (as actor role), `departmentId`, `permissions`, and `isOwner`. Target `roleId` on `users.create` is still a field of the new user and is authorized with `users.create` plus `canAssignRole`.
 
+`identity.get` is session-only. The response is filtered from the existing permission keys; AUTH-2 does not grant extra catalog permissions so that staff can hydrate:
+
+| Permission | Users | Roles catalog | `roleMatrix` | Bank name/account | Other settings | User audit logs |
+| --- | --- | --- | --- | --- | --- | --- |
+| none of the three | self only | own role | own role only | omitted | operational fields | omitted |
+| `users.view` | all users | all roles (names; needed to label users) | own role only | omitted | operational fields | included |
+| `roles.view` | self only | all roles | full matrix | omitted | operational fields | included |
+| `settings.view` | self only | own role | own role only | included | full settings | omitted |
+| Owner / Admin | full snapshot | full | full | included | full | included |
+
+`settings.get` still requires `settings.view` and redacts `roleMatrix` unless the caller also has `roles.view` or `roles.permissions.manage`. `users.list` still requires `users.view`.
+
+## Session-only writes (existing business design)
+
+These actions stay **session-only** because the existing services only required a known active actor. AUTH-2 did not add catalog keys or change the role matrix. Any **active** authenticated user (Owner, Admin, Supervisor, Staff, Cashier, Warehouse) may:
+
+- create, update, and set status on products (`products.create` / `update` / `setStatus`)
+- create and rename categories (`categories.create` / `categories.rename`)
+- create customers and suppliers (`customers.create` / `suppliers.create`)
+- list/get those records, plus `masters.get`, warehouse/category reads, `parties.get`, and `agents.list` / `agents.get` (agent get still hides unlinked agents in the service)
+
+Image mutation, agent prices, and agent writes still use their existing permission keys. Cashier still cannot administer users, roles, or settings.
+
 Inactive, pending, rejected, or missing users cannot keep using a previously issued session.
 
 Initialization: anonymous bootstrap is rejected. Owner-only bootstrap remains available so tests and a signed-in Owner can seed empty DEV sheets. It cannot run twice on already-initialized data. Owner bootstrap UI and first-user HTTP registration belong to AUTH-3. Seed names such as Aina Rahman do not become authenticated users until AUTH-3 issues credentials.
 
 ## Login abuse protection
 
-`AuthLoginAttempts` stores SHA-256 of the normalized email, a failed-count window (15 minutes), and a cooldown (1–15 minutes, doubling after the 5th failure). Rows are pruned to 200 / 24 hours. Messages stay generic (`Email or password is incorrect.`). Plaintext email and password are not stored. Apps Script does not provide a trustworthy client IP, so throttling is per email hash only. Concurrent updates use the existing script lock. This is not an account lockout: a successful login after cooldown clears the row.
+`AuthLoginAttempts` stores SHA-256 of the normalized email, a failed-count window (15 minutes), and a cooldown (1–15 minutes, doubling after the 5th failure). Rows are pruned to 200 / 24 hours. Messages stay generic (`Email or password is incorrect.`). Plaintext email and password are not stored. Apps Script does not provide a trustworthy client IP, so throttling is per email hash only. `auth.login` holds `LockService.getScriptLock()` for the whole attempt so throttle check, credential verify, failure increment, and cooldown cannot interleave across executions. Nested auth-store writes reuse that lock (`scriptLockDepth`). A failure recorded while a cooldown is already active does not reset the counter. This is not an account lockout: a successful login after cooldown clears the row.
 
 ## Residual Apps Script limits
 

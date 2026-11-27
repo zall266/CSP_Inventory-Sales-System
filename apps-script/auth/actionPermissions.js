@@ -29,7 +29,6 @@ var TASK_READ = ['task.view', 'task.create', 'task.edit', 'task.complete', 'task
 var EXPENSE_READ = ['expenses.manage', 'finance.view'];
 var PRODUCT_IMAGE_GET = ['sales.create', 'agent.sale.create', 'products.edit'];
 var RECIPE_PHOTO_GET = ['manufacturing.view', 'manufacturing.history.view'];
-var IDENTITY_GET = ['users.view', 'roles.view', 'settings.view'];
 
 var ACTION_AUTHORIZATION = {
   'system.health': authPublic(),
@@ -38,7 +37,7 @@ var ACTION_AUTHORIZATION = {
   'auth.logout': authSessionOnly(),
   'auth.session': authSessionOnly(),
 
-  'identity.get': authPermission(IDENTITY_GET),
+  'identity.get': authSessionOnly(),
   'identity.bootstrap': authOwnerOnly(),
   'settings.get': authPermission('settings.view'),
   'settings.update': authPermission('settings.edit'),
