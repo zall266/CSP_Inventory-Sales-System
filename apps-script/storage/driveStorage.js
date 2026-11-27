@@ -21,6 +21,27 @@ function createDriveStorage(options) {
     }
   }
 
+  function fileBelongsToChildFolder(fileId, folderName) {
+    var folder = getChildFolder(folderName);
+    if (!folder || !folder.getId) return false;
+    var expectedId = folder.getId();
+    var file;
+    try {
+      file = settings.getFileById ? settings.getFileById(fileId) : DriveApp.getFileById(fileId);
+    } catch (error) {
+      return false;
+    }
+    if (!file || !file.getParents) return false;
+    var parents = file.getParents();
+    var seen = 0;
+    while (parents && parents.hasNext && parents.hasNext() && seen < 20) {
+      seen += 1;
+      var parent = parents.next();
+      if (parent && parent.getId && parent.getId() === expectedId) return true;
+    }
+    return false;
+  }
+
   function createChildFolder(name) {
     var existing = getChildFolder(name);
     if (existing) return { id: existing.getId(), name: existing.getName(), created: false };
@@ -79,6 +100,7 @@ function createDriveStorage(options) {
     getRoot: getRoot,
     getChildFolder: getChildFolder,
     verifyFileExists: verifyFileExists,
+    fileBelongsToChildFolder: fileBelongsToChildFolder,
     createChildFolder: createChildFolder,
     readFileBytes: readFileBytes,
     readFileMetadata: readFileMetadata,

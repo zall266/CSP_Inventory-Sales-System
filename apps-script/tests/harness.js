@@ -1,11 +1,15 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import vm from 'node:vm'
+import nodeCrypto from 'node:crypto'
 import { fileURLToPath } from 'node:url'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const files = [
   'utils/errors.js',
+  'utils/receivingPurchaseLink.js',
+  'utils/packingMath.js',
+  'utils/sessionMath.js',
   'utils/time.js',
   'utils/ids.js',
   'utils/locks.js',
@@ -13,22 +17,124 @@ const files = [
   'utils/log.js',
   'config/config.js',
   'auth/boundary.js',
+  'auth/crypto.js',
   'repositories/sheetRepository.js',
+  'repositories/authRepository.js',
   'repositories/auditRepository.js',
   'repositories/idempotencyRepository.js',
   'repositories/counterRepository.js',
   'storage/driveStorage.js',
   'identity/permissionCatalog.js',
   'repositories/identityRepository.js',
+  'repositories/masterRepository.js',
+  'repositories/productRepository.js',
+  'repositories/partyRepository.js',
+  'repositories/inventoryRepository.js',
+  'repositories/warehouseRepository.js',
+  'repositories/bomRepository.js',
+  'repositories/openingBalanceRepository.js',
+  'repositories/purchaseRepository.js',
+  'repositories/receivingRepository.js',
+  'repositories/manufacturingRepository.js',
+  'repositories/salesRepository.js',
+  'repositories/salesReturnRepository.js',
+  'repositories/salesImportRepository.js',
+  'repositories/dispatchRepository.js',
+  'repositories/opsRepository.js',
+  'utils/parsePickingList.js',
+  'utils/parseAwb.js',
+  'utils/salesImportMath.js',
+  'utils/dispatchMath.js',
+  'utils/halalMath.js',
+  'utils/taskMath.js',
+  'utils/reportMath.js',
+  'utils/pjkmMath.js',
+  'utils/bmrMath.js',
   'services/auditService.js',
   'services/idempotencyService.js',
   'services/counterService.js',
   'services/systemService.js',
   'services/foundationService.js',
+  'services/authStore.js',
+  'services/authService.js',
   'services/identityService.js',
+  'services/masterService.js',
+  'services/productService.js',
+  'services/partyService.js',
+  'services/inventoryService.js',
+  'services/warehouseService.js',
+  'services/bomService.js',
+  'services/openingBalanceService.js',
+  'services/purchaseService.js',
+  'services/receivingService.js',
+  'services/manufacturingService.js',
+  'services/salesService.js',
+  'services/salesReturnService.js',
+  'services/salesImportService.js',
+  'services/dispatchService.js',
+  'services/opsService.js',
+  'services/reportingService.js',
   'app/router.js',
   'app/main.js',
 ]
+
+export function createNonReentrantScriptLock(options = {}) {
+  const events = options.events || []
+  const state = options.state || { held: false }
+  return {
+    events,
+    state,
+    getScriptLock() {
+      events.push('get')
+      return {
+        tryLock(_timeoutMs) {
+          events.push('try')
+          if (options.lockFails) {
+            events.push('failed')
+            return false
+          }
+          if (state.held) {
+            events.push('nested-rejected')
+            return false
+          }
+          state.held = true
+          events.push('acquired')
+          return true
+        },
+        releaseLock() {
+          state.held = false
+          events.push('released')
+        },
+      }
+    },
+  }
+}
+
+export function gasUtilities() {
+  return {
+    getUuid() {
+      return nodeCrypto.randomUUID()
+    },
+    computeHmacSha256Signature(value, key) {
+      const hmac = nodeCrypto.createHmac('sha256', Buffer.from(valueToBytes(key)))
+      hmac.update(Buffer.from(valueToBytes(value)))
+      return Array.from(hmac.digest())
+    },
+    DigestAlgorithm: { SHA_256: 'SHA_256' },
+    computeDigest(algorithm, value) {
+      if (algorithm !== 'SHA_256') throw new Error('unsupported digest')
+      return Array.from(nodeCrypto.createHash('sha256').update(Buffer.from(valueToBytes(value))).digest())
+    },
+  }
+}
+
+function valueToBytes(value) {
+  if (typeof value === 'string') return Buffer.from(value, 'utf8')
+  if (value instanceof Uint8Array) return value
+  if (Buffer.isBuffer(value)) return value
+  if (Array.isArray(value)) return Uint8Array.from(value.map((item) => item & 255))
+  return Buffer.from(String(value || ''), 'utf8')
+}
 
 export function loadBackend(globals = {}) {
   const context = {
@@ -44,8 +150,23 @@ export function loadBackend(globals = {}) {
     crypto,
     Buffer,
     Uint8Array,
+    Map,
+    Set,
+    Infinity,
+    Boolean,
+    RegExp,
+    Error,
+    parseInt,
+    parseFloat,
+    isNaN,
+    isFinite,
+    encodeURIComponent,
+    decodeURIComponent,
+    unescape,
+    Utilities: gasUtilities(),
     ...globals,
   }
+  context.globalThis = context
   vm.createContext(context)
   for (const file of files) {
     vm.runInContext(fs.readFileSync(path.join(root, file), 'utf8'), context, { filename: file })
@@ -57,10 +178,14 @@ export function memoryProperties(initial) {
   const store = { ...initial }
   return {
     getProperty(key) {
-      return store[key] || null
+      if (!Object.prototype.hasOwnProperty.call(store, key)) return null
+      return store[key]
     },
     setProperty(key, value) {
       store[key] = String(value)
+    },
+    deleteProperty(key) {
+      delete store[key]
     },
   }
 }
@@ -74,7 +199,17 @@ export function devProperties() {
   })
 }
 
-export function createFakeSpreadsheet(seed = {}) {
+export function authDevProperties() {
+  return memoryProperties({
+    ENVIRONMENT: 'DEV',
+    SPREADSHEET_ID: 'sheet-id',
+    DRIVE_ROOT_ID: 'drive-id',
+    TIMEZONE: 'Asia/Kuala_Lumpur',
+    AUTH_CREDENTIAL_PEPPER: '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef',
+  })
+}
+
+export function createFakeSpreadsheet(seed = {}, hooks = {}) {
   const store = { Sheet1: [['']], ...seed }
   function makeSheet(name) {
     return {
@@ -103,6 +238,7 @@ export function createFakeSpreadsheet(seed = {}) {
             return values
           },
           setValues(values) {
+            if (typeof hooks.beforeSetValues === 'function') hooks.beforeSetValues(name, row, values)
             for (let r = 0; r < values.length; r += 1) {
               if (!store[name][row - 1 + r]) store[name][row - 1 + r] = []
               for (let c = 0; c < values[r].length; c += 1) {
@@ -111,6 +247,7 @@ export function createFakeSpreadsheet(seed = {}) {
             }
           },
           clearContent() {
+            if (typeof hooks.beforeClearContent === 'function') hooks.beforeClearContent(name, row)
             for (let r = 0; r < numRows; r += 1) {
               const source = store[name][row - 1 + r]
               if (!source) continue
@@ -120,6 +257,7 @@ export function createFakeSpreadsheet(seed = {}) {
         }
       },
       appendRow(row) {
+        if (typeof hooks.beforeAppendRow === 'function') hooks.beforeAppendRow(name, row)
         store[name].push(row.slice())
       },
     }
@@ -156,7 +294,16 @@ export function createFakeDrive(rootId) {
         getContentType: () => mime,
         getBytes: () => bytes,
       }),
-      getParents: () => ({ hasNext: () => true, next: () => parent }),
+      getParents: () => {
+        let remaining = 1
+        return {
+          hasNext: () => remaining > 0,
+          next: () => {
+            remaining -= 1
+            return parent
+          },
+        }
+      },
       setName(next) {
         fileName = next
       },

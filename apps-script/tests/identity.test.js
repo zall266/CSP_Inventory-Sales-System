@@ -124,7 +124,7 @@ test('identity reads do not run before the module is called and Sheet1 stays res
   assert.equal(health.ok, true)
   assert.equal(backend.spreadsheet.store.Users, undefined)
   assert.deepEqual(backend.spreadsheet.store.Sheet1, [['']])
-  const unknown = backend.context.handleRequest(request('sales.create', {}), backend)
+  const unknown = backend.context.handleRequest(request('salesImport.confirm', {}), backend)
   assert.equal(unknown.error.code, 'UNKNOWN_ACTION')
 })
 

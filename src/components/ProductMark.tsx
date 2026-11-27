@@ -2,7 +2,7 @@ import { initials } from '@/utils/format'
 import type { Product } from '@/types'
 import { cn } from '@/utils/format'
 
-export function ProductMark({ product, size = 'md' }: { product: Product; size?: 'sm' | 'md' | 'lg' }) {
+export function ProductMark({ product, size = 'md' }: { product: Product; size?: 'sm' | 'md' | 'lg' | 'xl' }) {
   return (
     <div
       className={cn(
@@ -10,6 +10,7 @@ export function ProductMark({ product, size = 'md' }: { product: Product; size?:
         size === 'sm' && 'h-9 w-9 text-[10px]',
         size === 'md' && 'h-11 w-11 text-xs',
         size === 'lg' && 'h-16 w-16 text-sm',
+        size === 'xl' && 'h-[4.75rem] w-full rounded-2xl text-lg tracking-wide',
       )}
       style={{ background: `linear-gradient(145deg, ${product.accent}, #0f172a)` }}
     >

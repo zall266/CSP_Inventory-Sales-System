@@ -293,7 +293,7 @@ export function hydrateProducts(products: Product[], boms: Bom[]) {
 }
 
 export function productIsUsed(
-  state: Pick<AppState, 'sales' | 'purchases' | 'receivings' | 'openingBalances' | 'stockMovements' | 'productionOrders' | 'packingAssemblies' | 'agentSales' | 'quotations' | 'deliveryOrders' | 'boms' | 'inventory'>,
+  state: Pick<AppState, 'sales' | 'purchases' | 'receivings' | 'openingBalances' | 'stockMovements' | 'productionOrders' | 'packingAssemblies' | 'agentSales' | 'quotations' | 'deliveryOrders' | 'boms' | 'salesReturns' | 'inventory'>,
   productId: string,
 ) {
   if ((state.sales ?? []).some((sale) => sale.items.some((line) => line.productId === productId))) return true
@@ -307,6 +307,7 @@ export function productIsUsed(
   if ((state.quotations ?? []).some((row) => row.items.some((line) => line.productId === productId))) return true
   if ((state.deliveryOrders ?? []).some((row) => row.items.some((line) => line.productId === productId))) return true
   if ((state.boms ?? []).some((bom) => bom.productId === productId || bom.items.some((item) => item.productId === productId))) return true
+  if ((state.salesReturns ?? []).some((row) => row.items.some((line) => line.productId === productId))) return true
   if ((state.inventory ?? []).some((row) => row.productId === productId && row.qty !== 0)) return true
   return false
 }

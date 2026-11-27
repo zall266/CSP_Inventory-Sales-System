@@ -2,7 +2,7 @@ import { useMemo, useState, type ReactNode } from 'react'
 import { Link } from 'react-router-dom'
 import { Button, Card, Field, Input, Modal, PageHeader, Select, StatusBadge } from '@/components/ui'
 import { useApi, useLookups, useStore } from '@/store/hooks'
-import { formatQty } from '@/utils/format'
+import { calendarDatesEqual, formatQty } from '@/utils/format'
 import { formatUnit, qtyToBaseUnit } from '@/features/products/masterData'
 import type { PickingLine } from '@/types'
 import {
@@ -30,7 +30,7 @@ export function PickingListPage() {
   const { product } = useLookups()
   const user = currentUser(state)
   const session = todayOperationalSession(state.productionSessions)
-    ?? (state.productionSessions.find((item) => item.status === 'in_progress' && item.productionDate === systemProductionDate()))
+    ?? (state.productionSessions.find((item) => item.status === 'in_progress' && calendarDatesEqual(item.productionDate, systemProductionDate())))
 
   const [addOpen, setAddOpen] = useState(false)
   const [addMode, setAddMode] = useState<'purchase' | 'loose'>('purchase')

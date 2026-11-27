@@ -41,6 +41,7 @@ var PERMISSION_KEYS = [
   'inventory.transfer',
   'inventory.count',
   'inventory.usage',
+  'products.edit',
   'warehouse_map.view',
   'warehouse_map.putaway',
   'warehouse_map.move',
@@ -140,13 +141,13 @@ function defaultPermissionsForLegacy(role) {
   if (role === 'manager') {
     return withPermissionKeys([].concat(
       ['dashboard.view'], SALES_CORE, ['sales.void'], DOCUMENT_KEYS, PURCHASES_ALL, RECEIVING_ALL, INVENTORY_ALL,
-      AGENT_STOCK_OPS, WAREHOUSE_MAP_ALL, MFG_RUN, ['reports.view'], FINANCE_VIEW, ['settings.view'], TASK_OPERATIONS
+      AGENT_STOCK_OPS, WAREHOUSE_MAP_ALL, MFG_RUN, ['products.edit'], ['reports.view'], FINANCE_VIEW, ['settings.view'], TASK_OPERATIONS
     ));
   }
   if (role === 'staff') {
     return withPermissionKeys([].concat(
       ['dashboard.view'], SALES_CORE, DOCUMENT_KEYS, RECEIVING_STAFF, ['inventory.view', 'inventory.usage'],
-      WAREHOUSE_MAP_STAFF, MFG_RUN, ['reports.view'], TASK_STAFF
+      ['products.edit'], WAREHOUSE_MAP_STAFF, MFG_RUN, ['reports.view'], TASK_STAFF
     ));
   }
   if (role === 'cashier') {
@@ -157,7 +158,7 @@ function defaultPermissionsForLegacy(role) {
     ));
   }
   return withPermissionKeys([].concat(
-    ['dashboard.view'], PURCHASES_ALL, RECEIVING_STAFF, INVENTORY_ALL, AGENT_STOCK_OPS, WAREHOUSE_MAP_ALL, MFG_RUN,
+    ['dashboard.view'], PURCHASES_ALL, RECEIVING_STAFF, INVENTORY_ALL, ['products.edit'], AGENT_STOCK_OPS, WAREHOUSE_MAP_ALL, MFG_RUN,
     ['sales.delivery.view', 'sales.delivery.create', 'sales.delivery.edit', 'sales.delivery.issue', 'sales.delivery.print'],
     TASK_STAFF
   ));

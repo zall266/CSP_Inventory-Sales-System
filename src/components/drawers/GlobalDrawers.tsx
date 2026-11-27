@@ -1,12 +1,13 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Drawer, StatusBadge, Tabs, Button, Badge, Field, Input } from '@/components/ui'
-import { ProductMark, movementLabel, paymentLabel } from '@/components/ProductMark'
+import { movementLabel, paymentLabel } from '@/components/ProductMark'
 import { useApi, useLookups, useStore, customerOutstanding, customerSalesTotal, supplierOutstanding, supplierPurchaseTotal } from '@/store/hooks'
 import { formatDate, formatMoney, formatQty } from '@/utils/format'
 import { BomDetail } from '@/features/manufacturing/BomPages'
 import { ProductionOrderDetail } from '@/features/manufacturing/ProductionOrdersPage'
 import { ProductForm } from '@/features/products/ProductForm'
+import { ProductImageHeader } from '@/features/products/ProductImagePanel'
 import { formatUnit, productHasBom } from '@/features/products/masterData'
 import { isCompanyWarehouseId, saleIsAgentSale } from '@/features/agent/agentModel'
 import { hasPermission } from '@/features/settings/permissions'
@@ -53,20 +54,20 @@ function ProductDrawer({ id, onClose }: { id: string; onClose: () => void }) {
   return (
     <Drawer open onClose={onClose} width="max-w-2xl" title={item.name} subtitle={`${item.sku} · ${item.barcode}`}>
       <div className="space-y-5 p-6">
-        <div className="flex items-start gap-4">
-          <ProductMark product={item} size="lg" />
-          <div className="flex-1">
-            <div className="text-sm text-slate-500">{categoryName(item.categoryId)}</div>
-            <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-4">
-              <Mini label="Current stock" value={`${formatQty(qty)} ${formatUnit(item.unit)}`} />
-              <Mini label="Inventory value" value={formatMoney(value)} />
-              <Mini label="Cost price" value={`${formatMoney(item.costPrice)} / ${formatUnit(item.unit)}`} />
-              <Mini label="Selling price" value={`${formatMoney(item.sellingPrice)} / ${formatUnit(item.unit)}`} />
-              <Mini label="Agent price" value={item.agentPrice === undefined || item.agentPrice === null ? 'Not configured' : `${formatMoney(item.agentPrice)} / ${formatUnit(item.unit)}`} />
-              <Mini label="Cost source" value={fromBom ? 'BOM' : 'Manual'} />
-            </div>
+        <ProductImageHeader
+          product={item}
+          categoryLabel={categoryName(item.categoryId)}
+          canEdit={hasPermission(state, 'products.edit')}
+        >
+          <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-4">
+            <Mini label="Current stock" value={`${formatQty(qty)} ${formatUnit(item.unit)}`} />
+            <Mini label="Inventory value" value={formatMoney(value)} />
+            <Mini label="Cost price" value={`${formatMoney(item.costPrice)} / ${formatUnit(item.unit)}`} />
+            <Mini label="Selling price" value={`${formatMoney(item.sellingPrice)} / ${formatUnit(item.unit)}`} />
+            <Mini label="Agent price" value={item.agentPrice === undefined || item.agentPrice === null ? 'Not configured' : `${formatMoney(item.agentPrice)} / ${formatUnit(item.unit)}`} />
+            <Mini label="Cost source" value={fromBom ? 'BOM' : 'Manual'} />
           </div>
-        </div>
+        </ProductImageHeader>
         <Tabs
           value={tab}
           onChange={setTab}

@@ -1,13 +1,36 @@
 function defaultBackend() {
   var sheets = createSheetRepository();
   var drive = createDriveStorage();
+  var authStore = createAuthStore({ sheetRepository: sheets });
   return {
     sheets: sheets,
     drive: drive,
     system: createSystemService({ sheetRepository: sheets, driveStorage: drive }),
     idempotency: createIdempotencyService(sheets),
     foundation: createFoundationService(sheets),
-    identity: createIdentityService({ sheetRepository: sheets, driveStorage: drive })
+    authStore: authStore,
+    auth: createAuthService({
+      sheetRepository: sheets,
+      driveStorage: drive,
+      authStore: authStore
+    }),
+    identity: createIdentityService({ sheetRepository: sheets, driveStorage: drive }),
+    masters: createMasterService({ sheetRepository: sheets }),
+    products: createProductService({ sheetRepository: sheets, driveStorage: drive }),
+    parties: createPartyService({ sheetRepository: sheets }),
+    inventory: createInventoryService({ sheetRepository: sheets }),
+    warehouse: createWarehouseService({ sheetRepository: sheets }),
+    boms: createBomService({ sheetRepository: sheets }),
+    openingBalances: createOpeningBalanceService({ sheetRepository: sheets }),
+    purchases: createPurchaseService({ sheetRepository: sheets }),
+    receivings: createReceivingService({ sheetRepository: sheets, driveStorage: drive }),
+    manufacturing: createManufacturingService({ sheetRepository: sheets, driveStorage: drive }),
+    sales: createSalesService({ sheetRepository: sheets }),
+    salesReturns: createSalesReturnService({ sheetRepository: sheets }),
+    salesImport: createSalesImportService({ sheetRepository: sheets }),
+    dispatch: createDispatchService({ sheetRepository: sheets }),
+    ops: createOpsService({ sheetRepository: sheets, driveStorage: drive }),
+    reporting: createReportingService({ sheetRepository: sheets })
   };
 }
 
@@ -23,7 +46,9 @@ function handleRequest(request, backend) {
   try {
     var router = createRouter(resolved);
     var key = request && request.idempotencyKey ? String(request.idempotencyKey).trim() : '';
-    var response = key
+    // Never persist auth.login responses: they contain the raw session token.
+    var authAction = action.indexOf('auth.') === 0;
+    var response = key && !authAction
       ? resolved.idempotency.execute(key, request, function () { return router.dispatch(request); })
       : router.dispatch(request);
     logRequest({
